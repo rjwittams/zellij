@@ -4093,20 +4093,18 @@ dependencies = [
 
 [[package]]
 name = "vte"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1aae21c12ad2ec2d168c236f369c38ff332bc1134f7246350dca641437365045"
-dependencies = [
- "utf8parse",
- "vte_generate_state_changes",
-]
-
-[[package]]
-name = "vte"
 version = "0.14.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "231fdcd7ef3037e8330d8e17e61011a2c244126acc0a982f4040ac3f9f0bc077"
 dependencies = [
+ "memchr",
+]
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+dependencies = [
+ "arrayvec 0.7.6",
  "memchr",
 ]
 
@@ -4807,7 +4805,7 @@ dependencies = [
  "ssh2",
  "suggest",
  "thiserror 1.0.61",
- "vte 0.11.0",
+ "vte 0.15.0",
  "zellij-client",
  "zellij-server",
  "zellij-utils",
@@ -4904,7 +4902,7 @@ dependencies = [
  "unicode-width 0.1.10",
  "url",
  "uuid",
- "vte 0.11.0",
+ "vte 0.15.0",
  "wasmi",
  "wasmi_wasi",
  "windows-sys 0.59.0",

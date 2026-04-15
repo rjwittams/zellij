@@ -653,6 +653,8 @@ pub struct Grid {
     /// later routed back to this pane's pty.
     pub pending_forwarded_queries: Vec<crate::host_query::HostQuery>,
     ui_component_bytes: Option<Vec<u8>>,
+    apc_bytes: Option<Vec<u8>>,
+    pending_kitty_graphics_apc_sequences: Vec<Vec<u8>>,
     style: Style,
     debug: bool,
     arrow_fonts: bool,
@@ -972,6 +974,8 @@ impl Grid {
             pending_desktop_notifications: Vec::new(),
             pending_forwarded_queries: Vec::new(),
             ui_component_bytes: None,
+            apc_bytes: None,
+            pending_kitty_graphics_apc_sequences: Vec::new(),
             style,
             debug,
             arrow_fonts,
@@ -1562,7 +1566,7 @@ impl Grid {
         if self.lock_renders {
             return Ok(None);
         }
-        let raw_vte_output = String::new();
+        let mut raw_vte_output = String::new();
 
         let (mut character_chunks, sixel_image_chunks) = self.read_changes(content_x, content_y);
 
@@ -1654,6 +1658,19 @@ impl Grid {
                 }
             }
         }
+        if !self.pending_kitty_graphics_apc_sequences.is_empty() {
+            let cursor_x = content_x + self.cursor.x + 1;
+            let cursor_y = content_y + self.cursor.y + 1;
+            raw_vte_output.push_str("\u{1b}[s");
+            raw_vte_output.push_str(&format!("\u{1b}[{};{}H", cursor_y, cursor_x));
+            for apc_sequence in self.pending_kitty_graphics_apc_sequences.drain(..) {
+                raw_vte_output.push_str("\u{1b}_");
+                raw_vte_output.push_str(&String::from_utf8_lossy(&apc_sequence));
+                raw_vte_output.push_str("\u{1b}\\");
+            }
+            raw_vte_output.push_str("\u{1b}[u");
+        }
+
         return Ok(Some((
             character_chunks,
             Some(raw_vte_output),
@@ -3423,6 +3440,29 @@ impl Grid {
 }
 
 impl Perform for Grid {
+    fn apc_start(&mut self) {
+        self.apc_bytes = Some(vec![]);
+    }
+
+    fn apc_put(&mut self, byte: u8) {
+        if let Some(apc_bytes) = self.apc_bytes.as_mut() {
+            apc_bytes.push(byte);
+        }
+    }
+
+    fn apc_end(&mut self, interrupted: bool) {
+        if interrupted {
+            self.apc_bytes = None;
+            return;
+        }
+        if let Some(apc_bytes) = self.apc_bytes.take() {
+            if apc_bytes.first() == Some(&b'G') {
+                self.pending_kitty_graphics_apc_sequences.push(apc_bytes);
+                self.mark_for_rerender();
+            }
+        }
+    }
+
     fn print(&mut self, c: char) {
         let c = self.cursor.charsets[self.active_charset].map(c);
 
