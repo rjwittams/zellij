@@ -57,7 +57,7 @@ Scope for now:
 - [ ] Page-margin / scroll-region clipping semantics
 
 ### 5. Query / response behavior
-- [x] Enough query behavior for some real-world detection to work (`chafa` appears happy)
+- [x] Enough query behavior for real-world autodetection to work (`chafa`, `ratatui-image` / `flotilla` happy in the current proof branch)
 - [ ] Explicitly verify kitty graphics query handling matches docs:
   - [ ] `a=q`
   - [ ] `i=` echoed in response
@@ -70,7 +70,7 @@ Scope for now:
 ### 6. Delete semantics
 - [x] `a=d` delete command support for current real-app needs
 - [x] Delete all visible placements (`a=d,d=A`)
-- [ ] Delete by image id / placement id
+- [x] Delete by image id / placement id for the current proof-branch capability tier
 - [ ] Delete by cell / row / column / z-index
 - [ ] Upper/lower case storage-freeing semantics
 - [ ] Abort partial upload on delete during chunked transfer
@@ -116,13 +116,16 @@ Deferred for now.
 ### Must stabilize now
 - [x] direct kitty query response used by real autodetection
 - [x] delete-all-visible lifecycle (`a=d,d=A`) for current real apps
+- [x] targeted delete by image id / placement id for the current proof tier
 - [x] placeholder-backed image disappears when app explicitly deletes visible images
-- [ ] placeholder cleanup on erase/line clear/region clear beyond direct overwrite
-- [ ] resize/reflow sanity for both explicit and placeholder paths
-- [ ] tab/pane switch sanity across image and non-image states
+- [x] placeholder cleanup on erase/line clear cases needed by the current smoke harness (`EL 0`, `EL 1`, `EL 2`) beyond direct overwrite
+- [x] resize/reflow sanity for both explicit and placeholder paths improved materially via kitty damage-redraw support
+- [x] tab/pane switch sanity across image and non-image states
 - [x] Stage 4 placeholder smoke behavior now looks correct in Zellij-in-Kitty and Zellij-in-Ghostty
 - [x] Stage 5 explicit sizing smoke behavior now looks correct in Zellij-in-Kitty and Zellij-in-Ghostty
+- [x] later smoke stages for multi-placement / targeted delete, erase interactions, resize/reflow, and delete-all-visible now exist
 - [x] document current fidelity status clearly: Kitty/Ghostty smoke path now good, WezTerm still diverges similarly direct vs interposed
+- [ ] keep refining the damage-redraw policy boundary and resize/reflow edge behavior
 
 ### Defer until after stabilization
 - [ ] `f=24`
@@ -148,6 +151,9 @@ Deferred for now.
   - [x] explicit RGBA chunked
   - [x] Unicode placeholders
   - [x] query
+  - [x] multi-placement / targeted delete
+  - [x] erase interactions
+  - [x] resize / reflow comparative probe
   - [x] delete-all-visible
   - [ ] later: mixed sixel + kitty
   - [ ] capture/record cross-terminal behavior matrix more formally
