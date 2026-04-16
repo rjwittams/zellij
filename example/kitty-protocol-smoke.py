@@ -1,0 +1,586 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# ///
+
+import argparse
+import base64
+import os
+import re
+import select
+import shutil
+import sys
+import termios
+import time
+import tty
+from dataclasses import dataclass
+from pathlib import Path
+
+ESC = "\x1b"
+CSI = f"{ESC}["
+OSC = f"{ESC}]"
+APC_END = f"{ESC}\\"
+PLACEHOLDER = "\U0010EEEE"
+DEFAULT_PNG = Path(__file__).resolve().parent.parent / "assets" / "logo.png"
+
+DIACRITICS = [
+    '\u0305', '\u030D', '\u030E', '\u0310', '\u0312', '\u033D', '\u033E', '\u033F',
+    '\u0346', '\u034A', '\u034B', '\u034C', '\u0350', '\u0351', '\u0352', '\u0357',
+    '\u035B', '\u0363', '\u0364', '\u0365', '\u0366', '\u0367', '\u0368', '\u0369',
+    '\u036A', '\u036B', '\u036C', '\u036D', '\u036E', '\u036F', '\u0483', '\u0484',
+    '\u0485', '\u0486', '\u0487', '\u0592', '\u0593', '\u0594', '\u0595', '\u0597',
+    '\u0598', '\u0599', '\u059C', '\u059D', '\u059E', '\u059F', '\u05A0', '\u05A1',
+    '\u05A8', '\u05A9', '\u05AB', '\u05AC', '\u05AF', '\u05C4', '\u0610', '\u0611',
+    '\u0612', '\u0613', '\u0614', '\u0615', '\u0616', '\u0617', '\u0657', '\u0658',
+    '\u0659', '\u065A', '\u065B', '\u065D', '\u065E', '\u06D6', '\u06D7', '\u06D8',
+    '\u06D9', '\u06DA', '\u06DB', '\u06DC', '\u06DF', '\u06E0', '\u06E1', '\u06E2',
+    '\u06E4', '\u06E7', '\u06E8', '\u06EB', '\u06EC', '\u0730', '\u0732', '\u0733',
+    '\u0735', '\u0736', '\u073A', '\u073D', '\u073F', '\u0740', '\u0741', '\u0743',
+    '\u0745', '\u0747', '\u0749', '\u074A', '\u07EB', '\u07EC', '\u07ED', '\u07EE',
+    '\u07EF', '\u07F0', '\u07F1', '\u07F3', '\u0816', '\u0817', '\u0818', '\u0819',
+    '\u081B', '\u081C', '\u081D', '\u081E', '\u081F', '\u0820', '\u0821', '\u0822',
+    '\u0823', '\u0825', '\u0826', '\u0827', '\u0829', '\u082A', '\u082B', '\u082C',
+    '\u082D', '\u0951', '\u0953', '\u0954', '\u0F82', '\u0F83', '\u0F86', '\u0F87',
+    '\u135D', '\u135E', '\u135F', '\u17DD', '\u193A', '\u1A17', '\u1A75', '\u1A76',
+    '\u1A77', '\u1A78', '\u1A79', '\u1A7A', '\u1A7B', '\u1A7C', '\u1B6B', '\u1B6D',
+    '\u1B6E', '\u1B6F', '\u1B70', '\u1B71', '\u1B72', '\u1B73', '\u1CD0', '\u1CD1',
+    '\u1CD2', '\u1CDA', '\u1CDB', '\u1CE0', '\u1DC0', '\u1DC1', '\u1DC3', '\u1DC4',
+    '\u1DC5', '\u1DC6', '\u1DC7', '\u1DC8', '\u1DC9', '\u1DCB', '\u1DCC', '\u1DD1',
+    '\u1DD2', '\u1DD3', '\u1DD4', '\u1DD5', '\u1DD6', '\u1DD7', '\u1DD8', '\u1DD9',
+    '\u1DDA', '\u1DDB', '\u1DDC', '\u1DDD', '\u1DDE', '\u1DDF', '\u1DE0', '\u1DE1',
+    '\u1DE2', '\u1DE3', '\u1DE4', '\u1DE5', '\u1DE6', '\u1DFE', '\u20D0', '\u20D1',
+    '\u20D4', '\u20D5', '\u20D6', '\u20D7', '\u20DB', '\u20DC', '\u20E1', '\u20E7',
+    '\u20E9', '\u20F0', '\u2CEF', '\u2CF0', '\u2CF1', '\u2DE0', '\u2DE1', '\u2DE2',
+    '\u2DE3', '\u2DE4', '\u2DE5', '\u2DE6', '\u2DE7', '\u2DE8', '\u2DE9', '\u2DEA',
+    '\u2DEB', '\u2DEC', '\u2DED', '\u2DEE', '\u2DEF', '\u2DF0', '\u2DF1', '\u2DF2',
+    '\u2DF3', '\u2DF4', '\u2DF5', '\u2DF6', '\u2DF7', '\u2DF8', '\u2DF9', '\u2DFA',
+    '\u2DFB', '\u2DFC', '\u2DFD', '\u2DFE', '\u2DFF', '\uA66F', '\uA67C', '\uA67D',
+    '\uA6F0', '\uA6F1', '\uA8E0', '\uA8E1', '\uA8E2', '\uA8E3', '\uA8E4', '\uA8E5',
+    '\uA8E6', '\uA8E7', '\uA8E8', '\uA8E9', '\uA8EA', '\uA8EB', '\uA8EC', '\uA8ED',
+    '\uA8EE', '\uA8EF', '\uA8F0', '\uA8F1', '\uAAB0', '\uAAB2', '\uAAB3', '\uAAB7',
+    '\uAAB8', '\uAABE', '\uAABF', '\uAAC1', '\uFE20', '\uFE21', '\uFE22', '\uFE23',
+    '\uFE24', '\uFE25', '\uFE26', '\U00010A0F', '\U00010A38', '\U0001D185', '\U0001D186',
+    '\U0001D187', '\U0001D188', '\U0001D189', '\U0001D1AA', '\U0001D1AB', '\U0001D1AC',
+    '\U0001D1AD', '\U0001D242', '\U0001D243', '\U0001D244',
+]
+
+
+@dataclass
+class Caps:
+    kitty_basic_query: bool = False
+    sixel: bool = False
+    cell_size: tuple[int, int] | None = None
+    primary_da: str | None = None
+    secondary_da: str | None = None
+    xtversion: str | None = None
+    dsr_ok: bool = False
+    query_raw: str = ""
+
+
+def out(s: str):
+    sys.stdout.write(s)
+
+
+def flush():
+    sys.stdout.flush()
+
+
+def apc(control: str, payload=b""):
+    if isinstance(payload, bytes):
+        payload = base64.b64encode(payload).decode()
+    out(f"{ESC}_G{control};{payload}{APC_END}")
+
+
+def chunked_apc(prefix: str, payload: bytes, chunk=3072):
+    b64 = base64.b64encode(payload).decode()
+    parts = [b64[i:i + chunk] for i in range(0, len(b64), chunk)] or [""]
+    for i, part in enumerate(parts):
+        more = 1 if i < len(parts) - 1 else 0
+        control = f"{prefix},m={more}" if i == 0 else f"m={more}"
+        out(f"{ESC}_G{control};{part}{APC_END}")
+
+
+def goto(x: int, y: int):
+    out(f"{CSI}{y};{x}H")
+
+
+def clear_screen():
+    out(f"{CSI}2J{CSI}H")
+
+
+def reset_attrs():
+    out(f"{CSI}0m")
+
+
+def delete_all():
+    out(f"{ESC}_Gq=2,a=d,d=A{APC_END}")
+    flush()
+
+
+def png_data(path: Path) -> bytes:
+    return path.read_bytes()
+
+
+def rgba_gradient(w: int, h: int) -> bytes:
+    b = bytearray()
+    for y in range(h):
+        for x in range(w):
+            b.extend((x * 255 // max(1, w - 1), y * 255 // max(1, h - 1), 180, 255))
+    return bytes(b)
+
+
+def read_replies(timeout: float = 0.3) -> str:
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    chunks = []
+    try:
+        tty.setcbreak(fd)
+        end = time.time() + timeout
+        while time.time() < end:
+            remain = max(0.0, end - time.time())
+            r, _, _ = select.select([fd], [], [], remain)
+            if not r:
+                break
+            data = os_read(fd, 4096)
+            if not data:
+                break
+            chunks.append(data.decode(errors="replace"))
+            end = time.time() + 0.05
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return "".join(chunks)
+
+
+def os_read(fd: int, n: int) -> bytes:
+    import os
+    return os.read(fd, n)
+
+
+def probe_caps() -> Caps:
+    caps = Caps()
+    # kitty basic graphics query
+    out(f"{ESC}_Gi=31,s=1,v=1,a=q,t=d,f=24;AAAA{APC_END}")
+    # primary DA (includes sixel for many terminals)
+    out(f"{CSI}0c")
+    # secondary DA
+    out(f"{CSI}>0c")
+    # XT version string query (supported by some terminals / by zellij)
+    out(f"{CSI}>q")
+    # cell size in pixels
+    out(f"{CSI}16t")
+    # DSR end marker
+    out(f"{CSI}5n")
+    flush()
+    raw = read_replies(0.8)
+    caps.query_raw = raw
+    caps.kitty_basic_query = "_Gi=31;OK" in raw
+    caps.sixel = any(s in raw for s in ("?4;", "?4c", ";4;", ";4c"))
+    caps.dsr_ok = "\x1b[0n" in raw
+    m = re.search(r"\x1b\[6;(\d+);(\d+)t", raw)
+    if m:
+        caps.cell_size = (int(m.group(2)), int(m.group(1)))
+    m = re.search(r"\x1b\[\?([^c]+)c", raw)
+    if m:
+        caps.primary_da = m.group(1)
+    m = re.search(r"\x1b\[>([^c]+)c", raw)
+    if m:
+        caps.secondary_da = m.group(1)
+    m = re.search(r"\x1bP>\|([^\x1b]+)\x1b\\", raw)
+    if m:
+        caps.xtversion = m.group(1)
+    return caps
+
+
+def draw_box(x: int, y: int, w: int, h: int, title: str):
+    title_text = f"[{title}]"
+    top = "+" + "-" * w + "+"
+    if len(title_text) + 4 <= len(top):
+        top = top[:2] + title_text + top[2 + len(title_text):]
+    goto(x, y)
+    out(top)
+    for row in range(1, h + 1):
+        goto(x, y + row)
+        out("|" + " " * w + "|")
+    goto(x, y + h + 1)
+    out("+" + "-" * w + "+")
+    flush()
+
+
+def label(text: str, x: int, y: int):
+    goto(x, y)
+    reset_attrs()
+    out(text)
+    flush()
+
+
+def transmit_png(path: Path, image_id: int):
+    chunked_apc(f"q=2,a=t,f=100,i={image_id}", png_data(path))
+    flush()
+
+
+def display_png(
+    image_id: int,
+    cols=14,
+    rows=7,
+    x=3,
+    y=5,
+    placement_id: int | None = None,
+    include_cols: bool = True,
+    include_rows: bool = True,
+):
+    goto(x, y)
+    control = f"q=2,a=p,C=1,i={image_id}"
+    if placement_id is not None:
+        control += f",p={placement_id}"
+    if include_cols:
+        control += f",c={cols}"
+    if include_rows:
+        control += f",r={rows}"
+    apc(control, b"")
+    flush()
+
+
+def explicit_png(
+    path: Path,
+    image_id=100,
+    cols=14,
+    rows=7,
+    x=3,
+    y=5,
+    include_cols: bool = True,
+    include_rows: bool = True,
+):
+    goto(x, y)
+    control = f"q=2,a=T,C=1,f=100,i={image_id}"
+    if include_cols:
+        control += f",c={cols}"
+    if include_rows:
+        control += f",r={rows}"
+    chunked_apc(control, png_data(path))
+    flush()
+
+
+def explicit_rgba(image_id=101, w=56, h=28, cols=14, rows=7, x=27, y=5):
+    goto(x, y)
+    chunked_apc(f"q=2,a=T,C=1,f=32,s={w},v={h},i={image_id},c={cols},r={rows}", rgba_gradient(w, h))
+    flush()
+
+
+def placeholder_rgba(image_id=102, w=56, h=56, cols=14, rows=7, x=3, y=16):
+    chunked_apc(f"q=2,a=T,C=1,U=1,f=32,s={w},v={h},i={image_id},c={cols},r={rows}", rgba_gradient(w, h))
+    low = image_id & 0xFFFFFF
+    r = (low >> 16) & 0xFF
+    g = (low >> 8) & 0xFF
+    b = low & 0xFF
+    high = (image_id >> 24) & 0xFF
+    hi = DIACRITICS[high] if high else ""
+    for row in range(rows):
+        goto(x, y + row)
+        out(f"{CSI}38;2;{r};{g};{b}m")
+        for col in range(cols):
+            out(f"{PLACEHOLDER}{DIACRITICS[row]}{DIACRITICS[col]}{hi}")
+        out(f"{CSI}39m")
+    flush()
+
+
+def divider(title: str):
+    clear_screen()
+    reset_attrs()
+    goto(1, 1)
+    out(title)
+    flush()
+
+
+def wait_for_enter(prompt: str = "Press Enter for next stage..."):
+    goto(1, 29)
+    reset_attrs()
+    out(prompt)
+    flush()
+    try:
+        input()
+    except EOFError:
+        time.sleep(1.0)
+
+
+def prompt_line(message: str):
+    out(f"{CSI}38;5;45m[prompt]{CSI}39m {message}\n")
+    flush()
+
+
+def terminal_size() -> tuple[int, int]:
+    size = shutil.get_terminal_size(fallback=(80, 24))
+    return size.columns, size.lines
+
+
+def wait_for_resize(description: str, predicate) -> tuple[int, int] | None:
+    prompt_line(f"{description} Type s + Enter to skip.")
+    while True:
+        cols, rows = terminal_size()
+        if predicate(cols, rows):
+            prompt_line(f"Reached checkpoint at {cols}x{rows}.")
+            return cols, rows
+        r, _, _ = select.select([sys.stdin], [], [], 0.2)
+        if r:
+            try:
+                line = sys.stdin.readline().strip().lower()
+            except EOFError:
+                line = ""
+            if line == "s":
+                prompt_line("Resize checkpoint skipped.")
+                return None
+
+
+def stage_detect() -> Caps:
+    divider("Stage 1/9: capability and environment probe")
+    label("Expect: a capability summary only. Later stages use this to set expectations and skips.", 1, 3)
+    caps = probe_caps()
+    env_rows = [
+        ("TERM", os.environ.get("TERM")),
+        ("TERM_PROGRAM", os.environ.get("TERM_PROGRAM")),
+        ("ZELLIJ_SESSION_NAME", os.environ.get("ZELLIJ_SESSION_NAME")),
+        ("TMUX", os.environ.get("TMUX")),
+    ]
+    y = 5
+    label("Environment:", 1, y)
+    y += 1
+    for key, value in env_rows:
+        label(f"  {key:<18} {value!r}", 1, y)
+        y += 1
+    y += 1
+    label("Replies / coarse capabilities:", 1, y)
+    y += 1
+    label(f"  kitty basic query   {'yes' if caps.kitty_basic_query else 'no'}", 1, y)
+    y += 1
+    label(f"  sixel via DA        {'yes' if caps.sixel else 'no'}", 1, y)
+    y += 1
+    label(f"  cell size           {caps.cell_size!r}", 1, y)
+    y += 1
+    label(f"  primary DA          {caps.primary_da!r}", 1, y)
+    y += 1
+    label(f"  secondary DA        {caps.secondary_da!r}", 1, y)
+    y += 1
+    label(f"  XT version          {caps.xtversion!r}", 1, y)
+    y += 1
+    label(f"  DSR status ok       {'yes' if caps.dsr_ok else 'no'}", 1, y)
+    y += 2
+    label("Notes:", 1, y)
+    y += 1
+    label("  - kitty basic query is only coarse protocol detection, not the full feature matrix.", 1, y)
+    y += 1
+    label("  - later stages explicitly test: PNG, chunked RGBA, placeholders, aspect rules, multi-placement delete, erase interactions, and delete-all-visible.", 1, y)
+    return caps
+
+
+def stage_explicit_png(path: Path, caps: Caps):
+    divider("Stage 2/9: explicit PNG placement")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+    label("Expect: the Zellij logo fills most of the boxed area below.", 1, 3)
+    draw_box(2, 4, 14, 7, "png")
+    explicit_png(path)
+
+
+def stage_explicit_rgba(caps: Caps):
+    divider("Stage 3/9: explicit RGBA chunked placement")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+    label("Expect: a full gradient block fills most of the boxed area below.", 1, 3)
+    draw_box(26, 4, 14, 7, "rgba")
+    explicit_rgba()
+
+
+def stage_placeholder(caps: Caps):
+    divider("Stage 4/9: Unicode placeholder placement")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+    label("Expect: a roughly square gradient filling most of the boxed area below; raw placeholders should not remain visible.", 1, 3)
+    draw_box(2, 15, 14, 7, "placeholder")
+    placeholder_rgba()
+
+
+def stage_aspect(path: Path, caps: Caps):
+    divider("Stage 5/9: aspect comparison for explicit placement")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+    label("Spec note: if both c and r are given, the image is scaled to fit that rectangle.", 1, 3)
+    label("If only one of c or r is given, the other is computed to preserve aspect ratio.", 1, 4)
+    label("Compare bounded fit (c+r) with c-only and r-only behavior.", 1, 5)
+    draw_box(2, 7, 14, 7, "png c+r")
+    draw_box(26, 7, 14, 7, "png c only")
+    draw_box(50, 7, 14, 7, "png r only")
+    explicit_png(path, image_id=110, cols=14, rows=7, x=3, y=8, include_cols=True, include_rows=True)
+    explicit_png(path, image_id=111, cols=14, rows=7, x=27, y=8, include_cols=True, include_rows=False)
+    explicit_png(path, image_id=112, cols=14, rows=7, x=51, y=8, include_cols=False, include_rows=True)
+
+
+def stage_multi_delete(path: Path, caps: Caps):
+    divider("Stage 6/9: multi-placement and targeted delete")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+    label("Expect first: the same logo appears in both boxes below from one transmitted asset.", 1, 3)
+    label("Then targeted delete removes only the right placement, leaving the left one visible.", 1, 4)
+    draw_box(2, 7, 14, 7, "keep")
+    draw_box(26, 7, 14, 7, "delete p=2")
+    transmit_png(path, image_id=120)
+    display_png(120, cols=14, rows=7, x=3, y=8, placement_id=1)
+    display_png(120, cols=14, rows=7, x=27, y=8, placement_id=2)
+    wait_for_enter("Press Enter to delete only the right placement...")
+    out(f"{ESC}_Gq=2,a=d,d=i,i=120,p=2{APC_END}")
+    flush()
+    label("Targeted delete sent. Expect only the right placement to disappear.", 1, 17)
+
+
+def stage_erase(caps: Caps):
+    divider("Stage 7/9: erase interactions for placeholder flow")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+    label("Expect first: four placeholder-backed squares appear below, one per test case.", 1, 3)
+    label("Then top is overwritten with visible text, then EL 2, EL 1, and EL 0 are applied on separate terminal lines.", 1, 4)
+    draw_box(2, 6, 8, 3, "overwrite")
+    draw_box(2, 11, 8, 3, "EL 2")
+    draw_box(2, 16, 8, 3, "EL 1")
+    draw_box(2, 21, 8, 3, "EL 0")
+    placeholder_rgba(image_id=130, w=32, h=24, cols=8, rows=3, x=3, y=7)
+    placeholder_rgba(image_id=131, w=32, h=24, cols=8, rows=3, x=3, y=12)
+    placeholder_rgba(image_id=132, w=32, h=24, cols=8, rows=3, x=3, y=17)
+    placeholder_rgba(image_id=133, w=32, h=24, cols=8, rows=3, x=3, y=22)
+    wait_for_enter("Press Enter to apply overwrite / erase-line operations...")
+    goto(3, 7)
+    out("OVERWRTE")
+    goto(5, 13)
+    out(f"{CSI}2K")
+    goto(7, 18)
+    out(f"{CSI}1K")
+    goto(5, 23)
+    out(f"{CSI}K")
+    flush()
+    label("Applied: overwrite on top row, EL 2 on second case, EL 1 on third case, EL 0 on bottom case.", 1, 26)
+
+
+def stage_resize_reflow(path: Path, caps: Caps):
+    divider("Stage 8/9: resize and reflow coherence")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+    cols, rows = terminal_size()
+    out("\n")
+    prompt_line("Goal A: placeholder image should stay between BEFORE and AFTER text as width changes.")
+    prompt_line("Goal B: explicit image clipping and post-resize scroll should remain coherent.")
+    prompt_line(f"Baseline detected size: {cols}x{rows}")
+    out("\n")
+
+    out("BEFORE before before before before before before before before\n")
+    out("BEFORE marker text above the placeholder image gap\n")
+    flush()
+    placeholder_rgba(image_id=140, w=40, h=40, cols=10, rows=4, x=1, y=9)
+    goto(1, 14)
+    out("AFTER after after after after after after after after\n")
+    out("AFTER marker text below the placeholder image gap\n\n")
+    out("EXPLICIT IMAGE BELOW\n")
+    flush()
+    explicit_png(path, image_id=141, cols=14, rows=6, x=1, y=18)
+    goto(1, 25)
+    for i in range(1, 7):
+        out(f"PRE-SCROLL {i:02d}\n")
+    out("\n")
+    flush()
+
+    narrow = wait_for_resize("Resize narrower until cols <= 60.", lambda c, r: c <= 60)
+    if narrow is not None:
+        prompt_line("Expect: placeholder image still separates BEFORE and AFTER; explicit image clips sanely.")
+    else:
+        prompt_line("Continuing without a narrow checkpoint.")
+
+    wide = wait_for_resize("Resize wider again until cols >= 90.", lambda c, r: c >= 90)
+    if wide is not None:
+        prompt_line("Expect: no stale remnants or logical jumps remain after re-expansion.")
+    else:
+        prompt_line("Continuing without a wide checkpoint.")
+
+    prompt_line("Emitting post-resize scroll markers.")
+    for i in range(7, 23):
+        out(f"POST-RESIZE SCROLL {i:02d}: image/text relationship should remain coherent after resize.\n")
+    flush()
+    prompt_line("Inspect post-resize scroll behavior, then press Enter for the final delete stage.")
+    try:
+        input()
+    except EOFError:
+        time.sleep(1.0)
+
+
+def stage_delete(caps: Caps):
+    divider("Stage 9/9: delete all visible kitty images")
+    label("Expect: all kitty images disappear after delete-all-visible.", 1, 3)
+    if caps.kitty_basic_query:
+        delete_all()
+    label("Delete command sent.", 1, 5)
+
+
+def all_stages(path: Path):
+    caps = stage_detect()
+    wait_for_enter()
+    stage_explicit_png(path, caps)
+    wait_for_enter()
+    stage_explicit_rgba(caps)
+    wait_for_enter()
+    stage_placeholder(caps)
+    wait_for_enter()
+    stage_aspect(path, caps)
+    wait_for_enter()
+    stage_multi_delete(path, caps)
+    wait_for_enter()
+    stage_erase(caps)
+    wait_for_enter()
+    stage_resize_reflow(path, caps)
+    wait_for_enter()
+    stage_delete(caps)
+    goto(1, 7)
+    out("Done.\n")
+    flush()
+
+
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("png", nargs="?", default=str(DEFAULT_PNG), help="png path (defaults to assets/logo.png)")
+    p.add_argument("--mode", choices=["all", "detect", "explicit-png", "explicit-rgba", "placeholder", "aspect", "multi-delete", "erase", "resize", "delete"], default="all")
+    args = p.parse_args()
+
+    path = Path(args.png)
+    if args.mode in {"all", "explicit-png"} and not path.exists():
+        raise SystemExit(f"png not found: {path}")
+
+    if args.mode == "all":
+        all_stages(path)
+        return
+
+    caps = stage_detect() if args.mode != "detect" else stage_detect()
+    if args.mode == "detect":
+        return
+    wait_for_enter()
+    if args.mode == "explicit-png":
+        stage_explicit_png(path, caps)
+    elif args.mode == "explicit-rgba":
+        stage_explicit_rgba(caps)
+    elif args.mode == "placeholder":
+        stage_placeholder(caps)
+    elif args.mode == "aspect":
+        stage_aspect(path, caps)
+    elif args.mode == "multi-delete":
+        stage_multi_delete(path, caps)
+    elif args.mode == "erase":
+        stage_erase(caps)
+    elif args.mode == "resize":
+        stage_resize_reflow(path, caps)
+    elif args.mode == "delete":
+        stage_delete(caps)
+    wait_for_enter("Press Enter to exit...")
+
+
+if __name__ == "__main__":
+    main()
