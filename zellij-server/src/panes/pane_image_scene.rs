@@ -326,7 +326,13 @@ impl PaneImageScene {
         character_cell_size: Option<SizeInPixels>,
     ) -> Option<ImageInsertionEffect> {
         self.kitty
-            .handle_apc(apc_bytes, anchor.clone(), cursor_x, scrollback_row, character_cell_size)
+            .handle_apc(
+                apc_bytes,
+                anchor.clone(),
+                cursor_x,
+                scrollback_row,
+                character_cell_size,
+            )
             .map(|insertion: KittyImageInsertion| {
                 let geometry = insertion.geometry;
                 let content_flow = if geometry.rows > 0 {
@@ -374,27 +380,28 @@ impl PaneImageScene {
                         })
                     },
                 };
-                if let Some(kitty_protocol_placement_key) = protocol_identity
-                    .as_ref()
-                    .and_then(|protocol_identity| match protocol_identity {
-                        ProtocolPlacementIdentity::Kitty {
-                            image_id: Some(image_id),
-                            placement_id,
-                        } => Some(KittyProtocolPlacementKey {
-                            image_id: *image_id,
-                            placement_id: *placement_id,
-                        }),
-                        _ => None,
-                    })
+                if let Some(kitty_protocol_placement_key) =
+                    protocol_identity
+                        .as_ref()
+                        .and_then(|protocol_identity| match protocol_identity {
+                            ProtocolPlacementIdentity::Kitty {
+                                image_id: Some(image_id),
+                                placement_id,
+                            } => Some(KittyProtocolPlacementKey {
+                                image_id: *image_id,
+                                placement_id: *placement_id,
+                            }),
+                            _ => None,
+                        })
                 {
                     if let Some(previous_logical_placement_id) = self
                         .kitty_logical_placement_ids
                         .insert(kitty_protocol_placement_key, logical_placement_id)
                     {
-                    self.placements.remove(&previous_logical_placement_id);
-                    self.kitty_placeholder_cells.retain(|placeholder_cell| {
-                        placeholder_cell.logical_placement_id != previous_logical_placement_id
-                    });
+                        self.placements.remove(&previous_logical_placement_id);
+                        self.kitty_placeholder_cells.retain(|placeholder_cell| {
+                            placeholder_cell.logical_placement_id != previous_logical_placement_id
+                        });
                     }
                 }
                 let placement = ImagePlacement {
@@ -445,6 +452,70 @@ impl PaneImageScene {
             .retain(|placeholder_cell| &placeholder_cell.anchor != anchor);
     }
 
+    pub fn kitty_placeholder_anchors_in_range<F>(
+        &self,
+        logical_row: usize,
+        start_column: usize,
+        end_column_exclusive: usize,
+        resolve_anchor: F,
+    ) -> Vec<FlowAnchor>
+    where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
+        self.kitty_placeholder_cells
+            .iter()
+            .filter_map(|placeholder_cell| {
+                let (cell_logical_row, cell_column) = resolve_anchor(&placeholder_cell.anchor)?;
+                if cell_logical_row == logical_row
+                    && cell_column >= start_column
+                    && cell_column < end_column_exclusive
+                {
+                    Some(placeholder_cell.anchor.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn delete_kitty_protocol_placement(
+        &mut self,
+        protocol_image_id: u32,
+        placement_id: Option<u32>,
+    ) {
+        let logical_placement_ids_to_remove: Vec<_> = self
+            .placements
+            .iter()
+            .filter_map(
+                |(logical_placement_id, placement)| match &placement.protocol_identity {
+                    Some(ProtocolPlacementIdentity::Kitty {
+                        image_id: Some(image_id),
+                        placement_id: existing_placement_id,
+                    }) if *image_id == protocol_image_id
+                        && (placement_id.is_none() || *existing_placement_id == placement_id) =>
+                    {
+                        Some(*logical_placement_id)
+                    },
+                    _ => None,
+                },
+            )
+            .collect();
+        self.placements.retain(|logical_placement_id, _| {
+            !logical_placement_ids_to_remove.contains(logical_placement_id)
+        });
+        self.kitty_placeholder_cells.retain(|placeholder_cell| {
+            !logical_placement_ids_to_remove.contains(&placeholder_cell.logical_placement_id)
+        });
+        self.kitty_logical_placement_ids
+            .retain(|key, logical_placement_id| {
+                !(key.image_id == protocol_image_id
+                    && (placement_id.is_none() || key.placement_id == placement_id)
+                    || logical_placement_ids_to_remove.contains(logical_placement_id))
+            });
+        self.kitty
+            .delete_protocol_placement(protocol_image_id, placement_id);
+    }
+
     pub fn visible_kitty_render_bundle<F>(
         &self,
         content_x: usize,
@@ -463,7 +534,8 @@ impl PaneImageScene {
             let Some(flavor) = placement.kitty_explicit_flavor() else {
                 continue;
             };
-            let Some((_protocol_image_id, placement_id)) = placement.kitty_protocol_identity() else {
+            let Some((_protocol_image_id, placement_id)) = placement.kitty_protocol_identity()
+            else {
                 continue;
             };
             let image_id = placement.kitty_internal_image_id();
@@ -542,7 +614,9 @@ impl PaneImageScene {
             let Some(logical_placement) = self.placement(logical_placement_id) else {
                 continue;
             };
-            let Some((_protocol_image_id, placement_id)) = logical_placement.kitty_protocol_identity() else {
+            let Some((_protocol_image_id, placement_id)) =
+                logical_placement.kitty_protocol_identity()
+            else {
                 continue;
             };
             let image_id = logical_placement.kitty_internal_image_id();
@@ -557,16 +631,22 @@ impl PaneImageScene {
             };
 
             let mut resolved_cells = vec![];
-            for cell in placeholder_cells {
+            let mut unresolved_anchor_count = 0;
+            let mut clipped_by_width_count = 0;
+            let mut clipped_by_height_count = 0;
+            for cell in &placeholder_cells {
                 let Some((logical_row, column)) = resolve_anchor(&cell.anchor) else {
+                    unresolved_anchor_count += 1;
                     continue;
                 };
                 if column >= viewport_width {
+                    clipped_by_width_count += 1;
                     continue;
                 }
                 if logical_row < scrollback_size_in_lines
                     || logical_row >= scrollback_size_in_lines + viewport_height
                 {
+                    clipped_by_height_count += 1;
                     continue;
                 }
                 resolved_cells.push((
@@ -577,6 +657,17 @@ impl PaneImageScene {
                 ));
             }
             if resolved_cells.is_empty() {
+                log::debug!(
+                    "kitty placeholder render empty: placement={:?} total_cells={} unresolved={} clipped_width={} clipped_height={} viewport={}x{} scrollback={}",
+                    logical_placement.kitty_protocol_identity(),
+                    placeholder_cells.len(),
+                    unresolved_anchor_count,
+                    clipped_by_width_count,
+                    clipped_by_height_count,
+                    viewport_width,
+                    viewport_height,
+                    scrollback_size_in_lines,
+                );
                 continue;
             }
 
@@ -627,11 +718,10 @@ impl PaneImageScene {
                 + ((base_source_height as u64 * min_placeholder_row as u64) / total_rows as u64)
                     as u32;
             let source_width =
-                ((base_source_width as u64 * visible_columns as u64) / total_columns as u64)
-                    as u32;
+                ((base_source_width as u64 * visible_columns as u64) / total_columns as u64) as u32;
             let source_height =
                 ((base_source_height as u64 * visible_rows as u64) / total_rows as u64) as u32;
-            let cells = resolved_cells
+            let cells: Vec<KittyPlaceholderCellRender> = resolved_cells
                 .into_iter()
                 .map(|(logical_row, column, placeholder_row, placeholder_col)| {
                     KittyPlaceholderCellRender {
@@ -642,6 +732,23 @@ impl PaneImageScene {
                     }
                 })
                 .collect();
+            log::debug!(
+                "kitty placeholder render: placement={:?} total_cells={} resolved_cells={} min_row={} max_row={} min_col={} max_col={} source=({},{} {}x{}) viewport={}x{} scrollback={}",
+                logical_placement.kitty_protocol_identity(),
+                placeholder_cells.len(),
+                cells.len(),
+                min_placeholder_row,
+                max_placeholder_row,
+                min_placeholder_col,
+                max_placeholder_col,
+                source_x,
+                source_y,
+                source_width,
+                source_height,
+                viewport_width,
+                viewport_height,
+                scrollback_size_in_lines,
+            );
             placeholder_renders.push(KittyPlaceholderRender {
                 image_id,
                 placement_id,
@@ -658,6 +765,62 @@ impl PaneImageScene {
             });
         }
 
+        KittyRenderBundle {
+            explicit_chunks,
+            placeholder_renders,
+        }
+    }
+
+    pub fn visible_kitty_render_bundle_for_changed_rects<F>(
+        &self,
+        changed_rects: HashMap<usize, usize>,
+        content_x: usize,
+        content_y: usize,
+        scrollback_size_in_lines: usize,
+        viewport_width: usize,
+        viewport_height: usize,
+        character_cell_size: Option<SizeInPixels>,
+        resolve_anchor: F,
+    ) -> KittyRenderBundle
+    where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
+        if changed_rects.is_empty() {
+            return KittyRenderBundle::default();
+        }
+        let visible_bundle = self.visible_kitty_render_bundle(
+            content_x,
+            content_y,
+            scrollback_size_in_lines,
+            viewport_width,
+            viewport_height,
+            character_cell_size,
+            resolve_anchor,
+        );
+        let intersects_changed_rect = |absolute_y: usize, row_count: usize| {
+            changed_rects.iter().any(|(start_row, line_count)| {
+                let changed_start = content_y + *start_row;
+                let changed_end = changed_start + *line_count;
+                let item_start = absolute_y;
+                let item_end = absolute_y + row_count.max(1);
+                item_start < changed_end && changed_start < item_end
+            })
+        };
+        let explicit_chunks = visible_bundle
+            .explicit_chunks
+            .into_iter()
+            .filter(|chunk| intersects_changed_rect(chunk.cell_y, chunk.rows))
+            .collect();
+        let placeholder_renders = visible_bundle
+            .placeholder_renders
+            .into_iter()
+            .filter(|render| {
+                render
+                    .cells
+                    .iter()
+                    .any(|cell| intersects_changed_rect(cell.cell_y, 1))
+            })
+            .collect();
         KittyRenderBundle {
             explicit_chunks,
             placeholder_renders,

@@ -274,16 +274,34 @@ pub trait Pane {
     fn render(
         &mut self,
         client_id: Option<ClientId>,
-    ) -> Result<Option<(
-        Vec<CharacterChunk>,
-        Option<String>,
-        Vec<crate::output::ImageChunk>,
-    )>>; // TODO: better
-    fn visible_kitty_image_chunks(
+    ) -> Result<Option<crate::output::PaneRenderOutput>>; // TODO: better
+    fn visible_image_render_bundle(
+        &self,
+        client_id: Option<ClientId>,
+    ) -> crate::output::ImageRenderBundle {
+        crate::output::ImageRenderBundle {
+            kitty_render_bundle: self.visible_kitty_render_bundle(client_id),
+            ..Default::default()
+        }
+    }
+    fn visible_kitty_render_bundle(
         &self,
         _client_id: Option<ClientId>,
+    ) -> crate::panes::pane_image_scene::KittyRenderBundle {
+        Default::default()
+    }
+    fn visible_kitty_image_chunks(
+        &self,
+        client_id: Option<ClientId>,
     ) -> Vec<crate::output::KittyImageChunk> {
-        vec![]
+        self.visible_kitty_render_bundle(client_id).explicit_chunks
+    }
+    fn visible_kitty_placeholder_renders(
+        &self,
+        client_id: Option<ClientId>,
+    ) -> Vec<crate::output::KittyPlaceholderRender> {
+        self.visible_kitty_render_bundle(client_id)
+            .placeholder_renders
     }
     fn render_frame(
         &mut self,

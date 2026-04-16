@@ -354,11 +354,7 @@ impl Pane for TerminalPane {
     fn render(
         &mut self,
         _client_id: Option<ClientId>,
-    ) -> Result<Option<(
-        Vec<CharacterChunk>,
-        Option<String>,
-        Vec<crate::output::ImageChunk>,
-    )>> {
+    ) -> Result<Option<crate::output::PaneRenderOutput>> {
         if self.should_render() {
             let content_x = self.get_content_x();
             let content_y = self.get_content_y();
@@ -378,12 +374,12 @@ impl Pane for TerminalPane {
             Ok(None)
         }
     }
-    fn visible_kitty_image_chunks(
+    fn visible_kitty_render_bundle(
         &self,
         _client_id: Option<ClientId>,
-    ) -> Vec<crate::output::KittyImageChunk> {
+    ) -> crate::panes::pane_image_scene::KittyRenderBundle {
         self.grid
-            .visible_kitty_image_chunks(self.get_content_x(), self.get_content_y())
+            .visible_kitty_render_bundle(self.get_content_x(), self.get_content_y())
     }
     fn render_frame(
         &mut self,

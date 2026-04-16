@@ -30,49 +30,303 @@ const TABSTOP_WIDTH: usize = 8; // TODO: is this always right?
 pub const MAX_TITLE_STACK_SIZE: usize = 1000;
 const KITTY_UNICODE_PLACEHOLDER_CHAR: char = '\u{10EEEE}';
 const KITTY_ROWCOL_DIACRITICS: [char; 297] = [
-    '\u{305}', '\u{30D}', '\u{30E}', '\u{310}', '\u{312}', '\u{33D}', '\u{33E}',
-    '\u{33F}', '\u{346}', '\u{34A}', '\u{34B}', '\u{34C}', '\u{350}', '\u{351}',
-    '\u{352}', '\u{357}', '\u{35B}', '\u{363}', '\u{364}', '\u{365}', '\u{366}',
-    '\u{367}', '\u{368}', '\u{369}', '\u{36A}', '\u{36B}', '\u{36C}', '\u{36D}',
-    '\u{36E}', '\u{36F}', '\u{483}', '\u{484}', '\u{485}', '\u{486}', '\u{487}',
-    '\u{592}', '\u{593}', '\u{594}', '\u{595}', '\u{597}', '\u{598}', '\u{599}',
-    '\u{59C}', '\u{59D}', '\u{59E}', '\u{59F}', '\u{5A0}', '\u{5A1}', '\u{5A8}',
-    '\u{5A9}', '\u{5AB}', '\u{5AC}', '\u{5AF}', '\u{5C4}', '\u{610}', '\u{611}',
-    '\u{612}', '\u{613}', '\u{614}', '\u{615}', '\u{616}', '\u{617}', '\u{657}',
-    '\u{658}', '\u{659}', '\u{65A}', '\u{65B}', '\u{65D}', '\u{65E}', '\u{6D6}',
-    '\u{6D7}', '\u{6D8}', '\u{6D9}', '\u{6DA}', '\u{6DB}', '\u{6DC}', '\u{6DF}',
-    '\u{6E0}', '\u{6E1}', '\u{6E2}', '\u{6E4}', '\u{6E7}', '\u{6E8}', '\u{6EB}',
-    '\u{6EC}', '\u{730}', '\u{732}', '\u{733}', '\u{735}', '\u{736}', '\u{73A}',
-    '\u{73D}', '\u{73F}', '\u{740}', '\u{741}', '\u{743}', '\u{745}', '\u{747}',
-    '\u{749}', '\u{74A}', '\u{7EB}', '\u{7EC}', '\u{7ED}', '\u{7EE}', '\u{7EF}',
-    '\u{7F0}', '\u{7F1}', '\u{7F3}', '\u{816}', '\u{817}', '\u{818}', '\u{819}',
-    '\u{81B}', '\u{81C}', '\u{81D}', '\u{81E}', '\u{81F}', '\u{820}', '\u{821}',
-    '\u{822}', '\u{823}', '\u{825}', '\u{826}', '\u{827}', '\u{829}', '\u{82A}',
-    '\u{82B}', '\u{82C}', '\u{82D}', '\u{951}', '\u{953}', '\u{954}', '\u{F82}',
-    '\u{F83}', '\u{F86}', '\u{F87}', '\u{135D}', '\u{135E}', '\u{135F}', '\u{17DD}',
-    '\u{193A}', '\u{1A17}', '\u{1A75}', '\u{1A76}', '\u{1A77}', '\u{1A78}', '\u{1A79}',
-    '\u{1A7A}', '\u{1A7B}', '\u{1A7C}', '\u{1B6B}', '\u{1B6D}', '\u{1B6E}', '\u{1B6F}',
-    '\u{1B70}', '\u{1B71}', '\u{1B72}', '\u{1B73}', '\u{1CD0}', '\u{1CD1}', '\u{1CD2}',
-    '\u{1CDA}', '\u{1CDB}', '\u{1CE0}', '\u{1DC0}', '\u{1DC1}', '\u{1DC3}', '\u{1DC4}',
-    '\u{1DC5}', '\u{1DC6}', '\u{1DC7}', '\u{1DC8}', '\u{1DC9}', '\u{1DCB}', '\u{1DCC}',
-    '\u{1DD1}', '\u{1DD2}', '\u{1DD3}', '\u{1DD4}', '\u{1DD5}', '\u{1DD6}', '\u{1DD7}',
-    '\u{1DD8}', '\u{1DD9}', '\u{1DDA}', '\u{1DDB}', '\u{1DDC}', '\u{1DDD}', '\u{1DDE}',
-    '\u{1DDF}', '\u{1DE0}', '\u{1DE1}', '\u{1DE2}', '\u{1DE3}', '\u{1DE4}', '\u{1DE5}',
-    '\u{1DE6}', '\u{1DFE}', '\u{20D0}', '\u{20D1}', '\u{20D4}', '\u{20D5}', '\u{20D6}',
-    '\u{20D7}', '\u{20DB}', '\u{20DC}', '\u{20E1}', '\u{20E7}', '\u{20E9}', '\u{20F0}',
-    '\u{2CEF}', '\u{2CF0}', '\u{2CF1}', '\u{2DE0}', '\u{2DE1}', '\u{2DE2}', '\u{2DE3}',
-    '\u{2DE4}', '\u{2DE5}', '\u{2DE6}', '\u{2DE7}', '\u{2DE8}', '\u{2DE9}', '\u{2DEA}',
-    '\u{2DEB}', '\u{2DEC}', '\u{2DED}', '\u{2DEE}', '\u{2DEF}', '\u{2DF0}', '\u{2DF1}',
-    '\u{2DF2}', '\u{2DF3}', '\u{2DF4}', '\u{2DF5}', '\u{2DF6}', '\u{2DF7}', '\u{2DF8}',
-    '\u{2DF9}', '\u{2DFA}', '\u{2DFB}', '\u{2DFC}', '\u{2DFD}', '\u{2DFE}', '\u{2DFF}',
-    '\u{A66F}', '\u{A67C}', '\u{A67D}', '\u{A6F0}', '\u{A6F1}', '\u{A8E0}', '\u{A8E1}',
-    '\u{A8E2}', '\u{A8E3}', '\u{A8E4}', '\u{A8E5}', '\u{A8E6}', '\u{A8E7}', '\u{A8E8}',
-    '\u{A8E9}', '\u{A8EA}', '\u{A8EB}', '\u{A8EC}', '\u{A8ED}', '\u{A8EE}', '\u{A8EF}',
-    '\u{A8F0}', '\u{A8F1}', '\u{AAB0}', '\u{AAB2}', '\u{AAB3}', '\u{AAB7}', '\u{AAB8}',
-    '\u{AABE}', '\u{AABF}', '\u{AAC1}', '\u{FE20}', '\u{FE21}', '\u{FE22}', '\u{FE23}',
-    '\u{FE24}', '\u{FE25}', '\u{FE26}', '\u{10A0F}', '\u{10A38}', '\u{1D185}', '\u{1D186}',
-    '\u{1D187}', '\u{1D188}', '\u{1D189}', '\u{1D1AA}', '\u{1D1AB}', '\u{1D1AC}',
-    '\u{1D1AD}', '\u{1D242}', '\u{1D243}', '\u{1D244}',
+    '\u{305}',
+    '\u{30D}',
+    '\u{30E}',
+    '\u{310}',
+    '\u{312}',
+    '\u{33D}',
+    '\u{33E}',
+    '\u{33F}',
+    '\u{346}',
+    '\u{34A}',
+    '\u{34B}',
+    '\u{34C}',
+    '\u{350}',
+    '\u{351}',
+    '\u{352}',
+    '\u{357}',
+    '\u{35B}',
+    '\u{363}',
+    '\u{364}',
+    '\u{365}',
+    '\u{366}',
+    '\u{367}',
+    '\u{368}',
+    '\u{369}',
+    '\u{36A}',
+    '\u{36B}',
+    '\u{36C}',
+    '\u{36D}',
+    '\u{36E}',
+    '\u{36F}',
+    '\u{483}',
+    '\u{484}',
+    '\u{485}',
+    '\u{486}',
+    '\u{487}',
+    '\u{592}',
+    '\u{593}',
+    '\u{594}',
+    '\u{595}',
+    '\u{597}',
+    '\u{598}',
+    '\u{599}',
+    '\u{59C}',
+    '\u{59D}',
+    '\u{59E}',
+    '\u{59F}',
+    '\u{5A0}',
+    '\u{5A1}',
+    '\u{5A8}',
+    '\u{5A9}',
+    '\u{5AB}',
+    '\u{5AC}',
+    '\u{5AF}',
+    '\u{5C4}',
+    '\u{610}',
+    '\u{611}',
+    '\u{612}',
+    '\u{613}',
+    '\u{614}',
+    '\u{615}',
+    '\u{616}',
+    '\u{617}',
+    '\u{657}',
+    '\u{658}',
+    '\u{659}',
+    '\u{65A}',
+    '\u{65B}',
+    '\u{65D}',
+    '\u{65E}',
+    '\u{6D6}',
+    '\u{6D7}',
+    '\u{6D8}',
+    '\u{6D9}',
+    '\u{6DA}',
+    '\u{6DB}',
+    '\u{6DC}',
+    '\u{6DF}',
+    '\u{6E0}',
+    '\u{6E1}',
+    '\u{6E2}',
+    '\u{6E4}',
+    '\u{6E7}',
+    '\u{6E8}',
+    '\u{6EB}',
+    '\u{6EC}',
+    '\u{730}',
+    '\u{732}',
+    '\u{733}',
+    '\u{735}',
+    '\u{736}',
+    '\u{73A}',
+    '\u{73D}',
+    '\u{73F}',
+    '\u{740}',
+    '\u{741}',
+    '\u{743}',
+    '\u{745}',
+    '\u{747}',
+    '\u{749}',
+    '\u{74A}',
+    '\u{7EB}',
+    '\u{7EC}',
+    '\u{7ED}',
+    '\u{7EE}',
+    '\u{7EF}',
+    '\u{7F0}',
+    '\u{7F1}',
+    '\u{7F3}',
+    '\u{816}',
+    '\u{817}',
+    '\u{818}',
+    '\u{819}',
+    '\u{81B}',
+    '\u{81C}',
+    '\u{81D}',
+    '\u{81E}',
+    '\u{81F}',
+    '\u{820}',
+    '\u{821}',
+    '\u{822}',
+    '\u{823}',
+    '\u{825}',
+    '\u{826}',
+    '\u{827}',
+    '\u{829}',
+    '\u{82A}',
+    '\u{82B}',
+    '\u{82C}',
+    '\u{82D}',
+    '\u{951}',
+    '\u{953}',
+    '\u{954}',
+    '\u{F82}',
+    '\u{F83}',
+    '\u{F86}',
+    '\u{F87}',
+    '\u{135D}',
+    '\u{135E}',
+    '\u{135F}',
+    '\u{17DD}',
+    '\u{193A}',
+    '\u{1A17}',
+    '\u{1A75}',
+    '\u{1A76}',
+    '\u{1A77}',
+    '\u{1A78}',
+    '\u{1A79}',
+    '\u{1A7A}',
+    '\u{1A7B}',
+    '\u{1A7C}',
+    '\u{1B6B}',
+    '\u{1B6D}',
+    '\u{1B6E}',
+    '\u{1B6F}',
+    '\u{1B70}',
+    '\u{1B71}',
+    '\u{1B72}',
+    '\u{1B73}',
+    '\u{1CD0}',
+    '\u{1CD1}',
+    '\u{1CD2}',
+    '\u{1CDA}',
+    '\u{1CDB}',
+    '\u{1CE0}',
+    '\u{1DC0}',
+    '\u{1DC1}',
+    '\u{1DC3}',
+    '\u{1DC4}',
+    '\u{1DC5}',
+    '\u{1DC6}',
+    '\u{1DC7}',
+    '\u{1DC8}',
+    '\u{1DC9}',
+    '\u{1DCB}',
+    '\u{1DCC}',
+    '\u{1DD1}',
+    '\u{1DD2}',
+    '\u{1DD3}',
+    '\u{1DD4}',
+    '\u{1DD5}',
+    '\u{1DD6}',
+    '\u{1DD7}',
+    '\u{1DD8}',
+    '\u{1DD9}',
+    '\u{1DDA}',
+    '\u{1DDB}',
+    '\u{1DDC}',
+    '\u{1DDD}',
+    '\u{1DDE}',
+    '\u{1DDF}',
+    '\u{1DE0}',
+    '\u{1DE1}',
+    '\u{1DE2}',
+    '\u{1DE3}',
+    '\u{1DE4}',
+    '\u{1DE5}',
+    '\u{1DE6}',
+    '\u{1DFE}',
+    '\u{20D0}',
+    '\u{20D1}',
+    '\u{20D4}',
+    '\u{20D5}',
+    '\u{20D6}',
+    '\u{20D7}',
+    '\u{20DB}',
+    '\u{20DC}',
+    '\u{20E1}',
+    '\u{20E7}',
+    '\u{20E9}',
+    '\u{20F0}',
+    '\u{2CEF}',
+    '\u{2CF0}',
+    '\u{2CF1}',
+    '\u{2DE0}',
+    '\u{2DE1}',
+    '\u{2DE2}',
+    '\u{2DE3}',
+    '\u{2DE4}',
+    '\u{2DE5}',
+    '\u{2DE6}',
+    '\u{2DE7}',
+    '\u{2DE8}',
+    '\u{2DE9}',
+    '\u{2DEA}',
+    '\u{2DEB}',
+    '\u{2DEC}',
+    '\u{2DED}',
+    '\u{2DEE}',
+    '\u{2DEF}',
+    '\u{2DF0}',
+    '\u{2DF1}',
+    '\u{2DF2}',
+    '\u{2DF3}',
+    '\u{2DF4}',
+    '\u{2DF5}',
+    '\u{2DF6}',
+    '\u{2DF7}',
+    '\u{2DF8}',
+    '\u{2DF9}',
+    '\u{2DFA}',
+    '\u{2DFB}',
+    '\u{2DFC}',
+    '\u{2DFD}',
+    '\u{2DFE}',
+    '\u{2DFF}',
+    '\u{A66F}',
+    '\u{A67C}',
+    '\u{A67D}',
+    '\u{A6F0}',
+    '\u{A6F1}',
+    '\u{A8E0}',
+    '\u{A8E1}',
+    '\u{A8E2}',
+    '\u{A8E3}',
+    '\u{A8E4}',
+    '\u{A8E5}',
+    '\u{A8E6}',
+    '\u{A8E7}',
+    '\u{A8E8}',
+    '\u{A8E9}',
+    '\u{A8EA}',
+    '\u{A8EB}',
+    '\u{A8EC}',
+    '\u{A8ED}',
+    '\u{A8EE}',
+    '\u{A8EF}',
+    '\u{A8F0}',
+    '\u{A8F1}',
+    '\u{AAB0}',
+    '\u{AAB2}',
+    '\u{AAB3}',
+    '\u{AAB7}',
+    '\u{AAB8}',
+    '\u{AABE}',
+    '\u{AABF}',
+    '\u{AAC1}',
+    '\u{FE20}',
+    '\u{FE21}',
+    '\u{FE22}',
+    '\u{FE23}',
+    '\u{FE24}',
+    '\u{FE25}',
+    '\u{FE26}',
+    '\u{10A0F}',
+    '\u{10A38}',
+    '\u{1D185}',
+    '\u{1D186}',
+    '\u{1D187}',
+    '\u{1D188}',
+    '\u{1D189}',
+    '\u{1D1AA}',
+    '\u{1D1AB}',
+    '\u{1D1AC}',
+    '\u{1D1AD}',
+    '\u{1D242}',
+    '\u{1D243}',
+    '\u{1D244}',
 ];
 
 fn kitty_diacritic_to_index(c: char) -> Option<u16> {
@@ -177,9 +431,11 @@ use zellij_utils::{consts::VERSION, shared::version_number};
 use crate::output::{
     CharacterChunk, HighlightSelection, KittyImageChunk, OutputBuffer, SixelImageChunk,
 };
-use crate::panes::kitty::{kitty_delete_all_visible, kitty_query_response};
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
+use crate::panes::kitty::{
+    kitty_delete_all_visible, kitty_delete_by_image_id, kitty_query_response,
+};
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::pane_image_scene::{FlowAnchor, KittyPlaceholderCell, PaneImageScene};
 use crate::panes::search::SearchResult;
@@ -1165,7 +1421,10 @@ impl Grid {
 
     fn resolve_flow_anchor(&self, anchor: &FlowAnchor) -> Option<(usize, usize)> {
         match anchor {
-            FlowAnchor::LogicalRow { logical_row, column } => Some((*logical_row, *column)),
+            FlowAnchor::LogicalRow {
+                logical_row,
+                column,
+            } => Some((*logical_row, *column)),
             FlowAnchor::CanonicalLine {
                 canonical_line_index,
                 offset_in_line,
@@ -1200,8 +1459,8 @@ impl Grid {
                         display_row_count += 1;
                     }
                     let requested_row_in_line = offset_in_line / self.width;
-                    let clamped_row_in_line = requested_row_in_line
-                        .min(display_row_count.saturating_sub(1));
+                    let clamped_row_in_line =
+                        requested_row_in_line.min(display_row_count.saturating_sub(1));
                     let row_in_line = canonical_row_start + clamped_row_in_line;
                     let column = if clamped_row_in_line < requested_row_in_line {
                         all_rows[row_in_line].width().min(self.width)
@@ -1625,6 +1884,15 @@ impl Grid {
                 }
             };
         }
+        log::debug!(
+            "grid change_size: {}x{} -> {}x{} lines_above={} viewport_rows={}",
+            self.width,
+            self.height,
+            new_columns,
+            new_rows,
+            self.lines_above.len(),
+            self.viewport.len(),
+        );
         self.height = new_rows;
         self.width = new_columns;
         self.set_scroll_region_to_viewport_size();
@@ -1663,7 +1931,11 @@ impl Grid {
         &mut self,
         x_offset: usize,
         y_offset: usize,
-    ) -> (Vec<CharacterChunk>, Vec<SixelImageChunk>) {
+    ) -> (
+        Vec<CharacterChunk>,
+        Vec<SixelImageChunk>,
+        std::collections::HashMap<usize, usize>,
+    ) {
         let changed_character_chunks = self.output_buffer.changed_chunks_in_viewport(
             self.viewport.make_contiguous(),
             self.width,
@@ -1675,7 +1947,7 @@ impl Grid {
             .output_buffer
             .changed_rects_in_viewport(self.viewport.len());
         let changed_sixel_image_chunks = self.sixel_grid.changed_sixel_chunks_in_viewport(
-            changed_rects,
+            changed_rects.clone(),
             self.lines_above.len(),
             self.width,
             x_offset,
@@ -1686,7 +1958,11 @@ impl Grid {
         }
         self.output_buffer.clear();
 
-        (changed_character_chunks, changed_sixel_image_chunks)
+        (
+            changed_character_chunks,
+            changed_sixel_image_chunks,
+            changed_rects,
+        )
     }
     pub fn serialize(&self, scrollback_lines_to_serialize: Option<usize>) -> Option<String> {
         match scrollback_lines_to_serialize {
@@ -1759,7 +2035,8 @@ impl Grid {
         }
         let raw_vte_output = String::new();
 
-        let (mut character_chunks, sixel_image_chunks) = self.read_changes(content_x, content_y);
+        let (mut character_chunks, sixel_image_chunks, changed_rects) =
+            self.read_changes(content_x, content_y);
 
         let plugin_highlight_selections = self.compute_plugin_highlight_selections();
 
@@ -1851,13 +2128,24 @@ impl Grid {
         }
         let image_render_bundle = crate::output::ImageRenderBundle {
             sixel_chunks: sixel_image_chunks,
-            ..Default::default()
+            kitty_render_bundle: self
+                .image_scene
+                .visible_kitty_render_bundle_for_changed_rects(
+                    changed_rects,
+                    content_x,
+                    content_y,
+                    self.lines_above.len(),
+                    self.width,
+                    self.height,
+                    *self.character_cell_size.borrow(),
+                    |anchor| self.resolve_flow_anchor(anchor),
+                ),
         };
 
         return Ok(Some(crate::output::PaneRenderOutput {
             character_chunks,
             raw_vte_output: Some(raw_vte_output),
-            changed_image_render_bundle: image_render_bundle,
+            damage_redraw_image_render_bundle: image_render_bundle,
         }));
     }
     /// Returns the cursor position and whether it is visible.
@@ -2067,8 +2355,11 @@ impl Grid {
             &mut self.lines_above,
             &mut self.link_handler.borrow_mut(),
         );
-        self.image_scene
-            .remove_kitty_placeholder_cell_at_anchor(&self.full_cursor_flow_anchor());
+        // Temporarily disabled while investigating placeholder loss across
+        // scroll / mouse / resize redraw paths. This unconditional deletion is
+        // correct for direct overwrite, but may be too aggressive when later
+        // redraw writes land on anchors that were not semantically intended to
+        // erase placeholder cells.
         // this function assumes the current line has enough room for terminal_character (that its
         // width has been checked beforehand)
         match self.viewport.get_mut(self.cursor.y) {
@@ -2148,12 +2439,34 @@ impl Grid {
         self.cursor.x += count_to_move;
     }
     pub fn replace_characters_in_line_after_cursor(&mut self, replace_with: TerminalCharacter) {
+        let logical_row = self.lines_above.len() + self.cursor.y;
+        let anchors_to_remove = self.image_scene.kitty_placeholder_anchors_in_range(
+            logical_row,
+            self.cursor.x,
+            self.width,
+            |anchor| self.resolve_flow_anchor(anchor),
+        );
+        for anchor in anchors_to_remove {
+            self.image_scene
+                .remove_kitty_placeholder_cell_at_anchor(&anchor);
+        }
         if let Some(row) = self.viewport.get_mut(self.cursor.y) {
             row.replace_and_pad_end(self.cursor.x, self.width, replace_with);
         }
         self.output_buffer.update_line(self.cursor.y);
     }
     pub fn replace_characters_in_line_before_cursor(&mut self, replace_with: TerminalCharacter) {
+        let logical_row = self.lines_above.len() + self.cursor.y;
+        let anchors_to_remove = self.image_scene.kitty_placeholder_anchors_in_range(
+            logical_row,
+            0,
+            self.cursor.x + 1,
+            |anchor| self.resolve_flow_anchor(anchor),
+        );
+        for anchor in anchors_to_remove {
+            self.image_scene
+                .remove_kitty_placeholder_cell_at_anchor(&anchor);
+        }
         let row = self.viewport.get_mut(self.cursor.y).unwrap();
         row.replace_and_pad_beginning(self.cursor.x, replace_with);
         self.output_buffer.update_line(self.cursor.y);
@@ -2180,6 +2493,17 @@ impl Grid {
         }
     }
     pub fn clear_cursor_line(&mut self) {
+        let logical_row = self.lines_above.len() + self.cursor.y;
+        let anchors_to_remove = self.image_scene.kitty_placeholder_anchors_in_range(
+            logical_row,
+            0,
+            self.width,
+            |anchor| self.resolve_flow_anchor(anchor),
+        );
+        for anchor in anchors_to_remove {
+            self.image_scene
+                .remove_kitty_placeholder_cell_at_anchor(&anchor);
+        }
         if let Some(viewport_line) = self.viewport.get_mut(self.cursor.y) {
             viewport_line.truncate(0);
             self.output_buffer.update_line(self.cursor.y);
@@ -2581,12 +2905,13 @@ impl Grid {
             );
             return;
         };
-        self.image_scene.add_kitty_placeholder_cell(KittyPlaceholderCell {
-            logical_placement_id,
-            placeholder_row,
-            placeholder_col,
-            anchor,
-        });
+        self.image_scene
+            .add_kitty_placeholder_cell(KittyPlaceholderCell {
+                logical_placement_id,
+                placeholder_row,
+                placeholder_col,
+                anchor,
+            });
     }
     /// Called by the server-side handler for SetPaneRegexHighlights.
     /// Upserts highlights keyed by pattern string for the given plugin.
@@ -3207,10 +3532,8 @@ impl Grid {
             subtract_isize_from_usize(self.scrollback_buffer_lines, transferred_rows_count);
     }
     fn move_cursor_down_by_pixels(&mut self, pixel_count: usize) {
-        let to_move = PaneImageScene::rows_for_pixel_height(
-            pixel_count,
-            *self.character_cell_size.borrow(),
-        );
+        let to_move =
+            PaneImageScene::rows_for_pixel_height(pixel_count, *self.character_cell_size.borrow());
         for _ in 0..to_move {
             self.add_canonical_line();
         }
@@ -3747,6 +4070,12 @@ impl Perform for Grid {
                 }
                 if kitty_delete_all_visible(&apc_bytes) {
                     self.image_scene.clear();
+                    self.mark_for_rerender();
+                    return;
+                }
+                if let Some((image_id, placement_id)) = kitty_delete_by_image_id(&apc_bytes) {
+                    self.image_scene
+                        .delete_kitty_protocol_placement(image_id, placement_id);
                     self.mark_for_rerender();
                     return;
                 }

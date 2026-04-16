@@ -1,10 +1,13 @@
-use super::super::{CharacterChunk, FloatingPanesStack, Output, OutputBuffer, SixelImageChunk};
+use super::super::{
+    CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, Output, OutputBuffer,
+    SixelImageChunk,
+};
 use crate::panes::sixel::SixelImageStore;
 use crate::panes::terminal_character::AnsiCode;
 use crate::panes::{LinkHandler, Row, TerminalCharacter};
 use crate::ClientId;
 use std::cell::RefCell;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use zellij_utils::pane_size::{Dimension, PaneGeom, Size, SizeInPixels};
 
@@ -30,6 +33,28 @@ fn create_character_chunk_from_str(text: &str, x: usize, y: usize) -> CharacterC
     let terminal_chars: Vec<TerminalCharacter> =
         text.chars().map(|c| TerminalCharacter::new(c)).collect();
     CharacterChunk::new(terminal_chars, x, y)
+}
+
+fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageChunk {
+    KittyImageChunk {
+        image_id,
+        placement_id: Some(image_id),
+        placement_mode: crate::output::KittyImagePlacementMode::Explicit,
+        cell_x: 0,
+        cell_y: 0,
+        columns,
+        rows,
+        source_x: 0,
+        source_y: 0,
+        source_width: 10,
+        source_height: 10,
+        z_index: 0,
+        x_offset: 0,
+        y_offset: 0,
+        image_data: KittyImageData::Png {
+            data: vec![1, 2, 3, 4],
+        },
+    }
 }
 
 /// Helper to create test clients
@@ -149,6 +174,105 @@ fn test_is_dirty_with_sixel_chunks() {
     assert!(
         output.is_dirty(),
         "Output should be dirty after adding sixel chunks"
+    );
+}
+
+#[test]
+fn test_is_dirty_with_kitty_scene_diffs() {
+    let client_ids = create_test_clients(1);
+    let base_chunk = create_kitty_chunk(1, 2, 2);
+    let changed_chunk = create_kitty_chunk(1, 3, 2);
+    let kitty_delete_all = "\u{1b}_Ga=d,d=A\u{1b}\\";
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.add_kitty_image_chunks_to_client(1, vec![base_chunk.clone()], None);
+    assert!(output.is_dirty(), "new kitty scene should be dirty");
+    let serialized = output.serialize().unwrap();
+    assert!(serialized.get(&1).unwrap().contains(kitty_delete_all));
+
+    let mut unchanged_output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    unchanged_output.add_clients(&client_ids, link_handler, None);
+    unchanged_output.set_last_rendered_kitty_chunks(
+        HashMap::from([(1, vec![base_chunk.clone()])]),
+        HashMap::new(),
+    );
+    unchanged_output.add_kitty_image_chunks_to_client(1, vec![base_chunk.clone()], None);
+    let serialized = unchanged_output.serialize().unwrap();
+    assert!(
+        !serialized.get(&1).unwrap().contains(kitty_delete_all),
+        "identical kitty scene should not force a kitty clear"
+    );
+
+    let mut changed_output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    changed_output.add_clients(&client_ids, link_handler, None);
+    changed_output.set_last_rendered_kitty_chunks(
+        HashMap::from([(1, vec![base_chunk.clone()])]),
+        HashMap::new(),
+    );
+    changed_output.add_kitty_image_chunks_to_client(1, vec![changed_chunk], None);
+    assert!(
+        changed_output.is_dirty(),
+        "changed kitty scene should be dirty"
+    );
+    let serialized = changed_output.serialize().unwrap();
+    assert!(serialized.get(&1).unwrap().contains(kitty_delete_all));
+
+    let mut cleared_output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    cleared_output.add_clients(&client_ids, link_handler, None);
+    cleared_output
+        .set_last_rendered_kitty_chunks(HashMap::from([(1, vec![base_chunk])]), HashMap::new());
+    assert!(
+        cleared_output.is_dirty(),
+        "clearing a previously rendered kitty scene should be dirty"
+    );
+    let serialized = cleared_output.serialize().unwrap();
+    assert!(serialized.get(&1).unwrap().contains(kitty_delete_all));
+}
+
+#[test]
+fn test_serialize_emits_kitty_damage_redraw_without_scene_change() {
+    let client_ids = create_test_clients(1);
+    let base_chunk = create_kitty_chunk(1, 2, 2);
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_kitty_chunks(
+        HashMap::from([(1, vec![base_chunk.clone()])]),
+        HashMap::new(),
+    );
+    output.add_kitty_image_chunks_to_client(1, vec![base_chunk.clone()], None);
+    output.add_damage_redraw_image_render_bundle_to_client(
+        1,
+        super::super::ImageRenderBundle {
+            sixel_chunks: vec![],
+            kitty_render_bundle: crate::panes::pane_image_scene::KittyRenderBundle {
+                explicit_chunks: vec![base_chunk],
+                placeholder_renders: vec![],
+            },
+        },
+        None,
+    );
+
+    assert!(
+        output.is_dirty(),
+        "kitty damage redraws should make output dirty even when the scene is unchanged"
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        !client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "kitty damage redraw should not force a full-scene clear when the scene is unchanged"
+    );
+    assert!(
+        client_output.contains("a=t") && client_output.contains("a=p"),
+        "kitty damage redraw should still serialize kitty output when the scene is unchanged"
     );
 }
 

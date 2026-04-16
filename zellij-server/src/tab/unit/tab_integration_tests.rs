@@ -996,6 +996,117 @@ fn take_snapshot_and_cursor_position(
     (format!("{:?}", grid), coords)
 }
 
+fn kitty_virtual_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAAAAAAA=\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn placeholder_rgba_text(image_id: u32, cols: usize, rows: usize) -> Vec<u8> {
+    let low = image_id & 0x00FF_FFFF;
+    let r = (low >> 16) & 0xFF;
+    let g = (low >> 8) & 0xFF;
+    let b = low & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    let diacritics = [
+        '\u{305}', '\u{30D}', '\u{30E}', '\u{310}', '\u{312}', '\u{33D}', '\u{33E}', '\u{33F}',
+        '\u{346}', '\u{34A}', '\u{34B}', '\u{34C}', '\u{350}', '\u{351}',
+    ];
+    let mut output = String::new();
+    for row in 0..rows {
+        output.push_str(&format!("\u{1b}[38;2;{r};{g};{b}m"));
+        let row_diacritic = diacritics[row];
+        for col in 0..cols {
+            let col_diacritic = diacritics[col];
+            output.push(placeholder);
+            output.push(row_diacritic);
+            output.push(col_diacritic);
+        }
+        output.push_str("\u{1b}[39m");
+        if row + 1 < rows {
+            output.push_str("\r\n");
+        }
+    }
+    output.into_bytes()
+}
+
+fn kitty_explicit_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
+    format!("\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAA==\u{1b}\\")
+        .into_bytes()
+}
+
+enum KittyResizeRenderMode {
+    Explicit,
+    Placeholder,
+}
+
+fn render_after_tiled_pane_resize(mode: KittyResizeRenderMode) -> (String, String) {
+    let size = Size {
+        cols: 120,
+        rows: 20,
+    };
+    let client_id = 1;
+    let new_pane_id = PaneId::Terminal(2);
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
+        width: 8,
+        height: 21,
+    })));
+    let mut tab = create_new_tab_with_sixel_support(size, sixel_image_store.clone());
+
+    tab.vertical_split(new_pane_id, None, client_id, None, None)
+        .unwrap();
+
+    let bytes = match mode {
+        KittyResizeRenderMode::Explicit => kitty_explicit_rgba(78, 32, 16, 4, 2),
+        KittyResizeRenderMode::Placeholder => {
+            let mut bytes = kitty_virtual_rgba(78, 32, 16, 4, 2);
+            bytes.extend_from_slice(&placeholder_rgba_text(78, 4, 2));
+            bytes
+        },
+    };
+    tab.handle_pty_bytes(1, bytes).unwrap();
+    tab.handle_pty_bytes(2, Vec::from("Right pane content".as_bytes()))
+        .unwrap();
+
+    let mut output = Output::new(sixel_image_store, character_cell_size, true, true);
+    tab.render(&mut output, None).unwrap();
+    let first_render = output
+        .serialize()
+        .unwrap()
+        .get(&client_id)
+        .unwrap()
+        .to_string();
+
+    let edge_position = Position::new(5, 60);
+    tab.handle_mouse_event(
+        &MouseEvent::new_left_press_with_ctrl_event(edge_position),
+        client_id,
+    )
+    .unwrap();
+    let motion_position = Position::new(5, 61);
+    tab.handle_mouse_event(
+        &MouseEvent::new_left_motion_with_ctrl_event(motion_position),
+        client_id,
+    )
+    .unwrap();
+    tab.handle_mouse_event(
+        &MouseEvent::new_left_release_with_ctrl_event(motion_position),
+        client_id,
+    )
+    .unwrap();
+
+    tab.render(&mut output, None).unwrap();
+    let resized_render = output
+        .serialize()
+        .unwrap()
+        .get(&client_id)
+        .unwrap()
+        .to_string();
+    (first_render, resized_render)
+}
+
 #[test]
 fn increase_tiled_pane_sizes_with_stacked_resizes() {
     // this is the default resizing algorithm
@@ -3501,6 +3612,50 @@ fn floating_pane_above_sixel_image() {
     );
 
     assert_snapshot!(snapshot);
+}
+
+#[test]
+fn kitty_placeholder_survives_tab_resize_and_render() {
+    let size = Size { cols: 40, rows: 10 };
+    let resized = Size { cols: 32, rows: 10 };
+    let client_id = 1;
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
+        width: 8,
+        height: 21,
+    })));
+    let mut tab = create_new_tab_with_sixel_support(size, sixel_image_store.clone());
+
+    let mut bytes = kitty_virtual_rgba(77, 32, 16, 4, 2);
+    bytes.extend_from_slice(&placeholder_rgba_text(77, 4, 2));
+    tab.handle_pty_bytes(1, bytes).unwrap();
+
+    let mut first_output = Output::new(
+        sixel_image_store.clone(),
+        character_cell_size.clone(),
+        true,
+        true,
+    );
+    tab.render(&mut first_output, None).unwrap();
+    let first_render = first_output.serialize().unwrap();
+    let first_render = first_render.get(&client_id).unwrap();
+    assert!(first_render.contains("U=1"));
+    assert!(first_render.contains('\u{10EEEE}'));
+
+    tab.resize_whole_tab(resized).unwrap();
+
+    let mut resized_output = Output::new(sixel_image_store, character_cell_size, true, true);
+    tab.render(&mut resized_output, None).unwrap();
+    let resized_render = resized_output.serialize().unwrap();
+    let resized_render = resized_render.get(&client_id).unwrap();
+    assert!(
+        resized_render.contains("U=1"),
+        "kitty virtual placement should still be serialized after tab resize"
+    );
+    assert!(
+        resized_render.contains('\u{10EEEE}'),
+        "kitty placeholder cells should still be serialized after tab resize"
+    );
 }
 
 #[test]
@@ -10530,6 +10685,85 @@ fn test_ctrl_drag_resizes_tiled_pane_vertically() {
 
     assert_ne!(snapshot_before, snapshot_after);
     assert_snapshot!(format!("{}", snapshot_after));
+}
+
+#[test]
+fn tiled_pane_resize_followup_frame_redraws_kitty_for_explicit_and_placeholder_modes() {
+    let (explicit_first_render, explicit_resized_render) =
+        render_after_tiled_pane_resize(KittyResizeRenderMode::Explicit);
+    let (placeholder_first_render, placeholder_resized_render) =
+        render_after_tiled_pane_resize(KittyResizeRenderMode::Placeholder);
+
+    assert!(explicit_first_render.contains("a=t"));
+    assert!(explicit_first_render.contains("a=p"));
+    assert!(!explicit_first_render.contains("U=1"));
+
+    assert!(placeholder_first_render.contains("a=t"));
+    assert!(placeholder_first_render.contains("U=1"));
+    assert!(placeholder_first_render.contains('\u{10EEEE}'));
+
+    assert!(
+        explicit_resized_render.contains("a=t") && explicit_resized_render.contains("a=p"),
+        "explicit follow-up frame should redraw kitty after tiled pane resize"
+    );
+    assert!(
+        placeholder_resized_render.contains("a=t")
+            && placeholder_resized_render.contains("U=1")
+            && placeholder_resized_render.contains('\u{10EEEE}'),
+        "placeholder follow-up frame should redraw kitty after tiled pane resize"
+    );
+}
+
+#[test]
+fn kitty_explicit_image_survives_tiled_pane_resize_and_render() {
+    let (first_render, resized_render) =
+        render_after_tiled_pane_resize(KittyResizeRenderMode::Explicit);
+    assert!(
+        first_render.contains("a=t"),
+        "initial explicit render should transmit kitty image data"
+    );
+    assert!(
+        first_render.contains("a=p"),
+        "initial explicit render should serialize a kitty display placement"
+    );
+    assert!(
+        resized_render.contains("a=t"),
+        "resized explicit render should retransmit kitty image data"
+    );
+    assert!(
+        resized_render.contains("a=p"),
+        "resized explicit render should serialize a kitty display placement"
+    );
+}
+
+#[test]
+fn kitty_placeholder_survives_tiled_pane_resize_and_render() {
+    let (first_render, resized_render) =
+        render_after_tiled_pane_resize(KittyResizeRenderMode::Placeholder);
+    assert!(
+        first_render.contains("a=t"),
+        "initial placeholder render should transmit kitty image data"
+    );
+    assert!(
+        first_render.contains("U=1"),
+        "initial placeholder render should serialize a kitty virtual placement"
+    );
+    assert!(
+        first_render.contains('\u{10EEEE}'),
+        "initial placeholder render should serialize kitty placeholder cells"
+    );
+    assert!(
+        resized_render.contains("a=t"),
+        "resized placeholder render should retransmit kitty image data after resize"
+    );
+    assert!(
+        resized_render.contains("U=1"),
+        "resized placeholder render should serialize a kitty virtual placement after resize"
+    );
+    assert!(
+        resized_render.contains('\u{10EEEE}'),
+        "resized placeholder render should serialize kitty placeholder cells after resize"
+    );
 }
 
 #[test]

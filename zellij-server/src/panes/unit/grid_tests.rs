@@ -4562,7 +4562,8 @@ fn osc_11_set_bg_produces_ansi_in_render_output() {
     let render_result = grid.render(0, 0, &style).unwrap();
     assert!(render_result.is_some(), "Expected render output");
 
-    let (chunks, _, _) = render_result.unwrap();
+    let render_output = render_result.unwrap();
+    let chunks = render_output.character_chunks;
     assert!(!chunks.is_empty(), "Expected at least one character chunk");
 
     // All chunks should carry the pane default bg
@@ -5401,6 +5402,58 @@ fn viewport_texts(grid: &Grid) -> Vec<String> {
     grid.viewport.iter().map(|r| row_text(r)).collect()
 }
 
+fn kitty_explicit_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
+    format!("\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAA==\u{1b}\\")
+        .into_bytes()
+}
+
+fn kitty_virtual_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAAAAAAA=\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_placeholder_text(image_id: u32) -> Vec<u8> {
+    let image_id_b = image_id & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    let row0 = '\u{305}';
+    let col0 = '\u{305}';
+    let col1 = '\u{30D}';
+    format!(
+        "\u{1b}[38;2;0;0;{image_id_b}m{placeholder}{row0}{col0}{placeholder}{row0}{col1}\u{1b}[39mX"
+    )
+    .into_bytes()
+}
+
+fn placeholder_rgba_text(image_id: u32, cols: usize, rows: usize) -> Vec<u8> {
+    let low = image_id & 0x00FF_FFFF;
+    let r = (low >> 16) & 0xFF;
+    let g = (low >> 8) & 0xFF;
+    let b = low & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    let diacritics = [
+        '\u{305}', '\u{30D}', '\u{30E}', '\u{310}', '\u{312}', '\u{33D}', '\u{33E}', '\u{33F}',
+        '\u{346}', '\u{34A}', '\u{34B}', '\u{34C}', '\u{350}', '\u{351}',
+    ];
+    let mut output = String::new();
+    for row in 0..rows {
+        output.push_str(&format!("\u{1b}[38;2;{r};{g};{b}m"));
+        let row_diacritic = diacritics[row];
+        for col in 0..cols {
+            let col_diacritic = diacritics[col];
+            output.push(placeholder);
+            output.push(row_diacritic);
+            output.push(col_diacritic);
+        }
+        output.push_str("\u{1b}[39m");
+        if row + 1 < rows {
+            output.push_str("\r\n");
+        }
+    }
+    output.into_bytes()
+}
+
 fn create_grid_with_size_and_raw(rows: usize, cols: usize, content: &[u8]) -> Grid {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
@@ -5431,6 +5484,158 @@ fn feed_bytes(grid: &mut Grid, bytes: &[u8]) {
     for byte in bytes {
         vte_parser.advance(grid, *byte);
     }
+}
+
+fn chunk_text(chunks: &[crate::output::CharacterChunk]) -> String {
+    chunks
+        .iter()
+        .flat_map(|chunk| chunk.terminal_characters.iter())
+        .map(|t| t.character)
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+#[test]
+fn kitty_placeholder_cells_advance_text_flow() {
+    let mut grid = create_grid_with_size_and_raw(5, 10, &kitty_virtual_rgba(7, 2, 1, 2, 1));
+    feed_bytes(&mut grid, &kitty_placeholder_text(7));
+
+    let placeholder_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(placeholder_renders.len(), 1);
+    assert_eq!(placeholder_renders[0].cells.len(), 2);
+    assert_eq!(placeholder_renders[0].cells[0].cell_x, 0);
+    assert_eq!(placeholder_renders[0].cells[1].cell_x, 1);
+    assert_eq!(placeholder_renders[0].cells[0].placeholder_col, 0);
+    assert_eq!(placeholder_renders[0].cells[1].placeholder_col, 1);
+    assert!(
+        viewport_texts(&grid)
+            .iter()
+            .all(|line| !line.contains('\u{10EEEE}')),
+        "raw kitty placeholder glyphs should not leak into viewport text"
+    );
+}
+
+#[test]
+fn kitty_placeholder_render_survives_grid_width_change() {
+    let mut grid = create_grid_with_size_and_raw(8, 14, &kitty_virtual_rgba(8, 56, 56, 14, 7));
+    feed_bytes(&mut grid, &placeholder_rgba_text(8, 14, 7));
+
+    let before_resize = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(before_resize.len(), 1);
+    assert!(
+        before_resize[0].cells.len() >= 90,
+        "expected a dense placeholder render before resize"
+    );
+
+    grid.change_size(8, 10);
+    let after_narrow = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(after_narrow.len(), 1);
+    assert!(
+        !after_narrow[0].cells.is_empty(),
+        "placeholder render should remain visible after narrowing"
+    );
+
+    grid.change_size(8, 14);
+    let after_widen = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(after_widen.len(), 1);
+    assert!(
+        !after_widen[0].cells.is_empty(),
+        "placeholder render should remain visible after widening back"
+    );
+}
+
+#[test]
+fn kitty_placeholder_render_survives_scroll_viewport_transitions() {
+    let mut grid = create_grid_with_size_and_raw(4, 8, &kitty_virtual_rgba(10, 16, 8, 4, 2));
+    feed_bytes(&mut grid, &placeholder_rgba_text(10, 4, 2));
+    feed_bytes(&mut grid, b"\r\nAA\r\nBB\r\nCC\r\nDD\r\nEE");
+
+    assert!(
+        grid.visible_kitty_placeholder_renders(0, 0).is_empty(),
+        "placeholder should be out of view at the bottom after enough subsequent text"
+    );
+
+    grid.move_viewport_up(4);
+    let after_scroll_up = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(after_scroll_up.len(), 1);
+    assert!(
+        !after_scroll_up[0].cells.is_empty(),
+        "placeholder should reappear when scrolling back to its rows"
+    );
+
+    grid.move_viewport_down(4);
+    assert!(
+        grid.visible_kitty_placeholder_renders(0, 0).is_empty(),
+        "placeholder should disappear again when scrolled back to the bottom"
+    );
+}
+
+#[test]
+fn kitty_placeholder_reflow_emits_changed_placeholder_render_bundle() {
+    let mut grid = create_grid_with_size_and_raw(4, 14, &kitty_virtual_rgba(13, 16, 8, 2, 1));
+    feed_bytes(&mut grid, b"AAAA");
+    feed_bytes(&mut grid, &placeholder_rgba_text(13, 2, 1));
+    feed_bytes(&mut grid, b"BBBBBBBB");
+
+    grid.change_size(4, 8);
+
+    let visible_placeholder_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(
+        visible_placeholder_renders.len(),
+        1,
+        "reflow should preserve visible placeholder state"
+    );
+
+    let render_output = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected render output after reflow");
+
+    assert!(
+        chunk_text(&render_output.character_chunks).contains("AAAABBBBBBBB"),
+        "reflow render should still emit surrounding line text"
+    );
+    assert_eq!(
+        render_output
+            .damage_redraw_image_render_bundle
+            .kitty_render_bundle
+            .placeholder_renders
+            .len(),
+        1,
+        "reflow render should emit placeholder redraw when changed rows intersect it"
+    );
+}
+
+#[test]
+fn kitty_delete_all_visible_clears_image_scene() {
+    let mut grid = create_grid_with_size_and_raw(5, 10, &kitty_explicit_rgba(9, 1, 1, 1, 1));
+    assert_eq!(grid.visible_kitty_image_chunks(0, 0).len(), 1);
+
+    feed_bytes(&mut grid, b"\x1b_Ga=d,d=A\x1b\\");
+
+    assert!(grid.visible_kitty_image_chunks(0, 0).is_empty());
+    assert!(grid.visible_kitty_placeholder_renders(0, 0).is_empty());
+}
+
+#[test]
+fn kitty_images_follow_clear_reset_and_alt_screen_lifecycle() {
+    let mut grid = create_grid_with_size_and_raw(5, 10, &kitty_explicit_rgba(11, 1, 1, 1, 1));
+    assert_eq!(grid.visible_kitty_image_chunks(0, 0).len(), 1);
+
+    feed_bytes(&mut grid, b"\x1b[?1049h");
+    assert!(grid.visible_kitty_image_chunks(0, 0).is_empty());
+
+    feed_bytes(&mut grid, b"\x1b[?1049l");
+    assert_eq!(grid.visible_kitty_image_chunks(0, 0).len(), 1);
+
+    feed_bytes(&mut grid, b"\x1b[2J");
+    assert!(grid.visible_kitty_image_chunks(0, 0).is_empty());
+
+    feed_bytes(&mut grid, &kitty_explicit_rgba(12, 1, 1, 1, 1));
+    assert_eq!(grid.visible_kitty_image_chunks(0, 0).len(), 1);
+
+    grid.reset_terminal_state();
+    assert!(grid.visible_kitty_image_chunks(0, 0).is_empty());
 }
 
 // All tests below use a 10-row, 40-col grid with scroll region 1;8
@@ -5632,7 +5837,7 @@ fn scroll_region_newline_bg_color_used_for_trailing_padding() {
     let content = b"\x1b[48;2;26;26;26m\x1b[1;5rAAA\r\nBBB\r\nCCC\r\nDDD\r\nEEE\r\nhi";
     let mut grid = create_grid_with_size_and_raw(10, 40, content);
     // read_changes returns character chunks with padding applied
-    let (chunks, _) = grid.read_changes(0, 0);
+    let (chunks, _, _) = grid.read_changes(0, 0);
     // Find the chunk for row 4 (the scroll-created row with "hi")
     let row_4_chunk = chunks.iter().find(|c| c.y == 4).expect("row 4 chunk");
     // The trailing padding character (last column) should have the row's bg_color

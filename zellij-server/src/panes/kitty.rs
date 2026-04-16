@@ -5,49 +5,303 @@ use crate::output::{KittyImageChunk, KittyImageData, KittyImagePlacementMode};
 
 const KITTY_UNICODE_PLACEHOLDER_CHAR: char = '\u{10EEEE}';
 const KITTY_ROWCOL_DIACRITICS: [char; 297] = [
-    '\u{305}', '\u{30D}', '\u{30E}', '\u{310}', '\u{312}', '\u{33D}', '\u{33E}',
-    '\u{33F}', '\u{346}', '\u{34A}', '\u{34B}', '\u{34C}', '\u{350}', '\u{351}',
-    '\u{352}', '\u{357}', '\u{35B}', '\u{363}', '\u{364}', '\u{365}', '\u{366}',
-    '\u{367}', '\u{368}', '\u{369}', '\u{36A}', '\u{36B}', '\u{36C}', '\u{36D}',
-    '\u{36E}', '\u{36F}', '\u{483}', '\u{484}', '\u{485}', '\u{486}', '\u{487}',
-    '\u{592}', '\u{593}', '\u{594}', '\u{595}', '\u{597}', '\u{598}', '\u{599}',
-    '\u{59C}', '\u{59D}', '\u{59E}', '\u{59F}', '\u{5A0}', '\u{5A1}', '\u{5A8}',
-    '\u{5A9}', '\u{5AB}', '\u{5AC}', '\u{5AF}', '\u{5C4}', '\u{610}', '\u{611}',
-    '\u{612}', '\u{613}', '\u{614}', '\u{615}', '\u{616}', '\u{617}', '\u{657}',
-    '\u{658}', '\u{659}', '\u{65A}', '\u{65B}', '\u{65D}', '\u{65E}', '\u{6D6}',
-    '\u{6D7}', '\u{6D8}', '\u{6D9}', '\u{6DA}', '\u{6DB}', '\u{6DC}', '\u{6DF}',
-    '\u{6E0}', '\u{6E1}', '\u{6E2}', '\u{6E4}', '\u{6E7}', '\u{6E8}', '\u{6EB}',
-    '\u{6EC}', '\u{730}', '\u{732}', '\u{733}', '\u{735}', '\u{736}', '\u{73A}',
-    '\u{73D}', '\u{73F}', '\u{740}', '\u{741}', '\u{743}', '\u{745}', '\u{747}',
-    '\u{749}', '\u{74A}', '\u{7EB}', '\u{7EC}', '\u{7ED}', '\u{7EE}', '\u{7EF}',
-    '\u{7F0}', '\u{7F1}', '\u{7F3}', '\u{816}', '\u{817}', '\u{818}', '\u{819}',
-    '\u{81B}', '\u{81C}', '\u{81D}', '\u{81E}', '\u{81F}', '\u{820}', '\u{821}',
-    '\u{822}', '\u{823}', '\u{825}', '\u{826}', '\u{827}', '\u{829}', '\u{82A}',
-    '\u{82B}', '\u{82C}', '\u{82D}', '\u{951}', '\u{953}', '\u{954}', '\u{F82}',
-    '\u{F83}', '\u{F86}', '\u{F87}', '\u{135D}', '\u{135E}', '\u{135F}', '\u{17DD}',
-    '\u{193A}', '\u{1A17}', '\u{1A75}', '\u{1A76}', '\u{1A77}', '\u{1A78}', '\u{1A79}',
-    '\u{1A7A}', '\u{1A7B}', '\u{1A7C}', '\u{1B6B}', '\u{1B6D}', '\u{1B6E}', '\u{1B6F}',
-    '\u{1B70}', '\u{1B71}', '\u{1B72}', '\u{1B73}', '\u{1CD0}', '\u{1CD1}', '\u{1CD2}',
-    '\u{1CDA}', '\u{1CDB}', '\u{1CE0}', '\u{1DC0}', '\u{1DC1}', '\u{1DC3}', '\u{1DC4}',
-    '\u{1DC5}', '\u{1DC6}', '\u{1DC7}', '\u{1DC8}', '\u{1DC9}', '\u{1DCB}', '\u{1DCC}',
-    '\u{1DD1}', '\u{1DD2}', '\u{1DD3}', '\u{1DD4}', '\u{1DD5}', '\u{1DD6}', '\u{1DD7}',
-    '\u{1DD8}', '\u{1DD9}', '\u{1DDA}', '\u{1DDB}', '\u{1DDC}', '\u{1DDD}', '\u{1DDE}',
-    '\u{1DDF}', '\u{1DE0}', '\u{1DE1}', '\u{1DE2}', '\u{1DE3}', '\u{1DE4}', '\u{1DE5}',
-    '\u{1DE6}', '\u{1DFE}', '\u{20D0}', '\u{20D1}', '\u{20D4}', '\u{20D5}', '\u{20D6}',
-    '\u{20D7}', '\u{20DB}', '\u{20DC}', '\u{20E1}', '\u{20E7}', '\u{20E9}', '\u{20F0}',
-    '\u{2CEF}', '\u{2CF0}', '\u{2CF1}', '\u{2DE0}', '\u{2DE1}', '\u{2DE2}', '\u{2DE3}',
-    '\u{2DE4}', '\u{2DE5}', '\u{2DE6}', '\u{2DE7}', '\u{2DE8}', '\u{2DE9}', '\u{2DEA}',
-    '\u{2DEB}', '\u{2DEC}', '\u{2DED}', '\u{2DEE}', '\u{2DEF}', '\u{2DF0}', '\u{2DF1}',
-    '\u{2DF2}', '\u{2DF3}', '\u{2DF4}', '\u{2DF5}', '\u{2DF6}', '\u{2DF7}', '\u{2DF8}',
-    '\u{2DF9}', '\u{2DFA}', '\u{2DFB}', '\u{2DFC}', '\u{2DFD}', '\u{2DFE}', '\u{2DFF}',
-    '\u{A66F}', '\u{A67C}', '\u{A67D}', '\u{A6F0}', '\u{A6F1}', '\u{A8E0}', '\u{A8E1}',
-    '\u{A8E2}', '\u{A8E3}', '\u{A8E4}', '\u{A8E5}', '\u{A8E6}', '\u{A8E7}', '\u{A8E8}',
-    '\u{A8E9}', '\u{A8EA}', '\u{A8EB}', '\u{A8EC}', '\u{A8ED}', '\u{A8EE}', '\u{A8EF}',
-    '\u{A8F0}', '\u{A8F1}', '\u{AAB0}', '\u{AAB2}', '\u{AAB3}', '\u{AAB7}', '\u{AAB8}',
-    '\u{AABE}', '\u{AABF}', '\u{AAC1}', '\u{FE20}', '\u{FE21}', '\u{FE22}', '\u{FE23}',
-    '\u{FE24}', '\u{FE25}', '\u{FE26}', '\u{10A0F}', '\u{10A38}', '\u{1D185}', '\u{1D186}',
-    '\u{1D187}', '\u{1D188}', '\u{1D189}', '\u{1D1AA}', '\u{1D1AB}', '\u{1D1AC}',
-    '\u{1D1AD}', '\u{1D242}', '\u{1D243}', '\u{1D244}',
+    '\u{305}',
+    '\u{30D}',
+    '\u{30E}',
+    '\u{310}',
+    '\u{312}',
+    '\u{33D}',
+    '\u{33E}',
+    '\u{33F}',
+    '\u{346}',
+    '\u{34A}',
+    '\u{34B}',
+    '\u{34C}',
+    '\u{350}',
+    '\u{351}',
+    '\u{352}',
+    '\u{357}',
+    '\u{35B}',
+    '\u{363}',
+    '\u{364}',
+    '\u{365}',
+    '\u{366}',
+    '\u{367}',
+    '\u{368}',
+    '\u{369}',
+    '\u{36A}',
+    '\u{36B}',
+    '\u{36C}',
+    '\u{36D}',
+    '\u{36E}',
+    '\u{36F}',
+    '\u{483}',
+    '\u{484}',
+    '\u{485}',
+    '\u{486}',
+    '\u{487}',
+    '\u{592}',
+    '\u{593}',
+    '\u{594}',
+    '\u{595}',
+    '\u{597}',
+    '\u{598}',
+    '\u{599}',
+    '\u{59C}',
+    '\u{59D}',
+    '\u{59E}',
+    '\u{59F}',
+    '\u{5A0}',
+    '\u{5A1}',
+    '\u{5A8}',
+    '\u{5A9}',
+    '\u{5AB}',
+    '\u{5AC}',
+    '\u{5AF}',
+    '\u{5C4}',
+    '\u{610}',
+    '\u{611}',
+    '\u{612}',
+    '\u{613}',
+    '\u{614}',
+    '\u{615}',
+    '\u{616}',
+    '\u{617}',
+    '\u{657}',
+    '\u{658}',
+    '\u{659}',
+    '\u{65A}',
+    '\u{65B}',
+    '\u{65D}',
+    '\u{65E}',
+    '\u{6D6}',
+    '\u{6D7}',
+    '\u{6D8}',
+    '\u{6D9}',
+    '\u{6DA}',
+    '\u{6DB}',
+    '\u{6DC}',
+    '\u{6DF}',
+    '\u{6E0}',
+    '\u{6E1}',
+    '\u{6E2}',
+    '\u{6E4}',
+    '\u{6E7}',
+    '\u{6E8}',
+    '\u{6EB}',
+    '\u{6EC}',
+    '\u{730}',
+    '\u{732}',
+    '\u{733}',
+    '\u{735}',
+    '\u{736}',
+    '\u{73A}',
+    '\u{73D}',
+    '\u{73F}',
+    '\u{740}',
+    '\u{741}',
+    '\u{743}',
+    '\u{745}',
+    '\u{747}',
+    '\u{749}',
+    '\u{74A}',
+    '\u{7EB}',
+    '\u{7EC}',
+    '\u{7ED}',
+    '\u{7EE}',
+    '\u{7EF}',
+    '\u{7F0}',
+    '\u{7F1}',
+    '\u{7F3}',
+    '\u{816}',
+    '\u{817}',
+    '\u{818}',
+    '\u{819}',
+    '\u{81B}',
+    '\u{81C}',
+    '\u{81D}',
+    '\u{81E}',
+    '\u{81F}',
+    '\u{820}',
+    '\u{821}',
+    '\u{822}',
+    '\u{823}',
+    '\u{825}',
+    '\u{826}',
+    '\u{827}',
+    '\u{829}',
+    '\u{82A}',
+    '\u{82B}',
+    '\u{82C}',
+    '\u{82D}',
+    '\u{951}',
+    '\u{953}',
+    '\u{954}',
+    '\u{F82}',
+    '\u{F83}',
+    '\u{F86}',
+    '\u{F87}',
+    '\u{135D}',
+    '\u{135E}',
+    '\u{135F}',
+    '\u{17DD}',
+    '\u{193A}',
+    '\u{1A17}',
+    '\u{1A75}',
+    '\u{1A76}',
+    '\u{1A77}',
+    '\u{1A78}',
+    '\u{1A79}',
+    '\u{1A7A}',
+    '\u{1A7B}',
+    '\u{1A7C}',
+    '\u{1B6B}',
+    '\u{1B6D}',
+    '\u{1B6E}',
+    '\u{1B6F}',
+    '\u{1B70}',
+    '\u{1B71}',
+    '\u{1B72}',
+    '\u{1B73}',
+    '\u{1CD0}',
+    '\u{1CD1}',
+    '\u{1CD2}',
+    '\u{1CDA}',
+    '\u{1CDB}',
+    '\u{1CE0}',
+    '\u{1DC0}',
+    '\u{1DC1}',
+    '\u{1DC3}',
+    '\u{1DC4}',
+    '\u{1DC5}',
+    '\u{1DC6}',
+    '\u{1DC7}',
+    '\u{1DC8}',
+    '\u{1DC9}',
+    '\u{1DCB}',
+    '\u{1DCC}',
+    '\u{1DD1}',
+    '\u{1DD2}',
+    '\u{1DD3}',
+    '\u{1DD4}',
+    '\u{1DD5}',
+    '\u{1DD6}',
+    '\u{1DD7}',
+    '\u{1DD8}',
+    '\u{1DD9}',
+    '\u{1DDA}',
+    '\u{1DDB}',
+    '\u{1DDC}',
+    '\u{1DDD}',
+    '\u{1DDE}',
+    '\u{1DDF}',
+    '\u{1DE0}',
+    '\u{1DE1}',
+    '\u{1DE2}',
+    '\u{1DE3}',
+    '\u{1DE4}',
+    '\u{1DE5}',
+    '\u{1DE6}',
+    '\u{1DFE}',
+    '\u{20D0}',
+    '\u{20D1}',
+    '\u{20D4}',
+    '\u{20D5}',
+    '\u{20D6}',
+    '\u{20D7}',
+    '\u{20DB}',
+    '\u{20DC}',
+    '\u{20E1}',
+    '\u{20E7}',
+    '\u{20E9}',
+    '\u{20F0}',
+    '\u{2CEF}',
+    '\u{2CF0}',
+    '\u{2CF1}',
+    '\u{2DE0}',
+    '\u{2DE1}',
+    '\u{2DE2}',
+    '\u{2DE3}',
+    '\u{2DE4}',
+    '\u{2DE5}',
+    '\u{2DE6}',
+    '\u{2DE7}',
+    '\u{2DE8}',
+    '\u{2DE9}',
+    '\u{2DEA}',
+    '\u{2DEB}',
+    '\u{2DEC}',
+    '\u{2DED}',
+    '\u{2DEE}',
+    '\u{2DEF}',
+    '\u{2DF0}',
+    '\u{2DF1}',
+    '\u{2DF2}',
+    '\u{2DF3}',
+    '\u{2DF4}',
+    '\u{2DF5}',
+    '\u{2DF6}',
+    '\u{2DF7}',
+    '\u{2DF8}',
+    '\u{2DF9}',
+    '\u{2DFA}',
+    '\u{2DFB}',
+    '\u{2DFC}',
+    '\u{2DFD}',
+    '\u{2DFE}',
+    '\u{2DFF}',
+    '\u{A66F}',
+    '\u{A67C}',
+    '\u{A67D}',
+    '\u{A6F0}',
+    '\u{A6F1}',
+    '\u{A8E0}',
+    '\u{A8E1}',
+    '\u{A8E2}',
+    '\u{A8E3}',
+    '\u{A8E4}',
+    '\u{A8E5}',
+    '\u{A8E6}',
+    '\u{A8E7}',
+    '\u{A8E8}',
+    '\u{A8E9}',
+    '\u{A8EA}',
+    '\u{A8EB}',
+    '\u{A8EC}',
+    '\u{A8ED}',
+    '\u{A8EE}',
+    '\u{A8EF}',
+    '\u{A8F0}',
+    '\u{A8F1}',
+    '\u{AAB0}',
+    '\u{AAB2}',
+    '\u{AAB3}',
+    '\u{AAB7}',
+    '\u{AAB8}',
+    '\u{AABE}',
+    '\u{AABF}',
+    '\u{AAC1}',
+    '\u{FE20}',
+    '\u{FE21}',
+    '\u{FE22}',
+    '\u{FE23}',
+    '\u{FE24}',
+    '\u{FE25}',
+    '\u{FE26}',
+    '\u{10A0F}',
+    '\u{10A38}',
+    '\u{1D185}',
+    '\u{1D186}',
+    '\u{1D187}',
+    '\u{1D188}',
+    '\u{1D189}',
+    '\u{1D1AA}',
+    '\u{1D1AB}',
+    '\u{1D1AC}',
+    '\u{1D1AD}',
+    '\u{1D242}',
+    '\u{1D243}',
+    '\u{1D244}',
 ];
 use crate::panes::pane_image_scene::{
     project_placement_to_viewport, FlowAnchor, ImageAssetId, ImagePlacementGeometry,
@@ -95,7 +349,11 @@ impl KittyImage {
     pub fn chunk_data(&self) -> KittyImageData {
         match &self.data {
             KittyStoredImageData::Png { data, .. } => KittyImageData::Png { data: data.clone() },
-            KittyStoredImageData::Rgba { data, width, height } => KittyImageData::Rgba {
+            KittyStoredImageData::Rgba {
+                data,
+                width,
+                height,
+            } => KittyImageData::Rgba {
                 data: data.clone(),
                 width: *width,
                 height: *height,
@@ -155,7 +413,7 @@ struct PendingKittyTransmit {
     image_format: KittyImageFormat,
     width: u32,
     height: u32,
-    placement: KittyPlacement,
+    placement: Option<KittyPlacement>,
     payload: Vec<u8>,
 }
 
@@ -224,9 +482,14 @@ impl KittyImageState {
         let protocol_image_id = pending.protocol_image_id;
         let mut placement = pending.placement.clone();
         let image = pending.into_image()?;
-        placement.anchor = anchor;
+        if let Some(placement) = placement.as_mut() {
+            placement.anchor = anchor;
+        }
         self.images.insert(image.id, image.clone());
         let asset_id = ImageAssetId(image.id as u64);
+        let Some(placement) = placement else {
+            return None;
+        };
         self.placements.retain(|p| {
             if let Some(new_placement_id) = placement.placement_id {
                 !(p.image_id == placement.image_id && p.placement_id == Some(new_placement_id))
@@ -236,12 +499,8 @@ impl KittyImageState {
         });
         let protocol_placement_id = placement.placement_id;
         let placement_mode = placement.placement_mode;
-        let geometry = placement.geometry_for_image(
-            &image,
-            cursor_x,
-            scrollback_row,
-            character_cell_size,
-        );
+        let geometry =
+            placement.geometry_for_image(&image, cursor_x, scrollback_row, character_cell_size);
         self.placements.push(placement);
         Some(KittyImageInsertion {
             asset_id,
@@ -279,7 +538,9 @@ impl KittyImageState {
                 } else {
                     next_global_kitty_image_id()
                 };
-                placement.image_id = image_id;
+                if let Some(placement) = placement.as_mut() {
+                    placement.image_id = image_id;
+                }
                 self.pending_transmit = Some(PendingKittyTransmit {
                     protocol_image_id,
                     image_id,
@@ -299,6 +560,41 @@ impl KittyImageState {
                         character_cell_size,
                     )
                 }
+            },
+            ParsedKittyCommand::DisplayPlacement {
+                protocol_image_id,
+                mut placement,
+            } => {
+                let image_id = *self
+                    .protocol_image_id_to_internal_id
+                    .get(&protocol_image_id)?;
+                let image = self.images.get(&image_id)?.clone();
+                placement.image_id = image_id;
+                placement.anchor = anchor;
+                self.placements.retain(|p| {
+                    if let Some(new_placement_id) = placement.placement_id {
+                        !(p.image_id == placement.image_id
+                            && p.placement_id == Some(new_placement_id))
+                    } else {
+                        true
+                    }
+                });
+                let geometry = placement.geometry_for_image(
+                    &image,
+                    cursor_x,
+                    scrollback_row,
+                    character_cell_size,
+                );
+                let protocol_placement_id = placement.placement_id;
+                let placement_mode = placement.placement_mode;
+                self.placements.push(placement);
+                Some(KittyImageInsertion {
+                    asset_id: ImageAssetId(image_id as u64),
+                    geometry,
+                    protocol_image_id: Some(protocol_image_id),
+                    protocol_placement_id,
+                    placement_mode,
+                })
             },
             ParsedKittyCommand::TransmitChunk { more, payload } => {
                 let pending = self.pending_transmit.as_mut()?;
@@ -376,7 +672,8 @@ impl KittyImageState {
             };
 
             if projection.clipped_left_cols > 0 {
-                source_x = source_x + scale_u32(source_width, projection.clipped_left_cols, columns);
+                source_x =
+                    source_x + scale_u32(source_width, projection.clipped_left_cols, columns);
             }
             source_width = scale_u32(source_width, projection.columns, columns);
             columns = projection.columns;
@@ -417,6 +714,25 @@ impl KittyImageState {
         self.pending_transmit = None;
     }
 
+    pub fn delete_protocol_placement(&mut self, protocol_image_id: u32, placement_id: Option<u32>) {
+        let Some(internal_image_id) = self
+            .protocol_image_id_to_internal_id
+            .get(&protocol_image_id)
+            .copied()
+        else {
+            return;
+        };
+        self.placements.retain(|placement| {
+            if placement.image_id != internal_image_id {
+                return true;
+            }
+            match placement_id {
+                Some(placement_id) => placement.placement_id != Some(placement_id),
+                None => false,
+            }
+        });
+    }
+
     pub fn serialize_chunks(chunks: &[KittyImageChunk]) -> String {
         if chunks.is_empty() {
             return String::new();
@@ -448,7 +764,9 @@ impl KittyImageState {
         raw_vte_output
     }
 
-    pub fn serialize_placeholder_renders(renders: &[crate::output::KittyPlaceholderRender]) -> String {
+    pub fn serialize_placeholder_renders(
+        renders: &[crate::output::KittyPlaceholderRender],
+    ) -> String {
         if renders.is_empty() {
             return String::new();
         }
@@ -513,9 +831,13 @@ enum ParsedKittyCommand {
         image_format: KittyImageFormat,
         width: u32,
         height: u32,
-        placement: KittyPlacement,
+        placement: Option<KittyPlacement>,
         more: bool,
         payload: Vec<u8>,
+    },
+    DisplayPlacement {
+        protocol_image_id: u32,
+        placement: KittyPlacement,
     },
     TransmitChunk {
         more: bool,
@@ -541,8 +863,8 @@ impl KittyPlacement {
             .unwrap_or_else(|| image.height().saturating_sub(source_y));
         let (columns, rows) = if let Some(cell_size) = character_cell_size {
             let default_columns = || {
-                ((source_width as usize + cell_size.width.saturating_sub(1)) / cell_size.width).max(1)
-                    as u32
+                ((source_width as usize + cell_size.width.saturating_sub(1)) / cell_size.width)
+                    .max(1) as u32
             };
             let default_rows = || {
                 ((source_height as usize + cell_size.height.saturating_sub(1)) / cell_size.height)
@@ -566,7 +888,8 @@ impl KittyPlacement {
                 (None, Some(rows)) => {
                     let scaled_height_pixels = (rows as u64) * (cell_size.height as u64);
                     let scaled_width_pixels = if source_height > 0 {
-                        ((scaled_height_pixels * (source_width as u64)) + (source_height as u64) - 1)
+                        ((scaled_height_pixels * (source_width as u64)) + (source_height as u64)
+                            - 1)
                             / (source_height as u64)
                     } else {
                         0
@@ -626,35 +949,39 @@ impl PendingKittyTransmit {
     }
 }
 
-pub fn kitty_delete_all_visible(apc_bytes: &[u8]) -> bool {
-    let Some(rest) = apc_bytes.strip_prefix(b"G") else {
-        return false;
-    };
+fn kitty_delete_header(apc_bytes: &[u8]) -> Option<HashMap<&str, &str>> {
+    let rest = apc_bytes.strip_prefix(b"G")?;
     let mut parts = rest.splitn(2, |b| *b == b';');
-    let Some(header) = parts.next() else {
-        return false;
-    };
-    let Ok(header) = std::str::from_utf8(header) else {
-        return false;
-    };
-    let mut action = None;
-    let mut delete_kind = None;
+    let header = std::str::from_utf8(parts.next()?).ok()?;
+    let mut kv = HashMap::new();
     for part in header.split(',') {
         if part.is_empty() {
             continue;
         }
         let mut split = part.splitn(2, '=');
-        let Some(key) = split.next() else {
-            continue;
-        };
+        let key = split.next()?;
         let value = split.next().unwrap_or("");
-        match key {
-            "a" => action = Some(value),
-            "d" => delete_kind = Some(value),
-            _ => {},
-        }
+        kv.insert(key, value);
     }
-    action == Some("d") && matches!(delete_kind, None | Some("a") | Some("A"))
+    Some(kv)
+}
+
+pub fn kitty_delete_all_visible(apc_bytes: &[u8]) -> bool {
+    let Some(kv) = kitty_delete_header(apc_bytes) else {
+        return false;
+    };
+    kv.get("a").copied() == Some("d")
+        && matches!(kv.get("d").copied(), None | Some("a") | Some("A"))
+}
+
+pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<u32>)> {
+    let kv = kitty_delete_header(apc_bytes)?;
+    if kv.get("a").copied() != Some("d") || kv.get("d").copied() != Some("i") {
+        return None;
+    }
+    let image_id = kv.get("i")?.parse::<u32>().ok()?;
+    let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
+    Some((image_id, placement_id))
 }
 
 pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
@@ -726,17 +1053,6 @@ impl ParsedKittyCommand {
         let payload = base64::decode(payload).ok()?;
 
         if let Some(action) = kv.get("a") {
-            if *action != "T" {
-                return None;
-            }
-            let image_format = match kv.get("f").copied().unwrap_or("32") {
-                "100" => KittyImageFormat::Png,
-                "32" => KittyImageFormat::Rgba,
-                _ => return None,
-            };
-            let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
-            let width = kv.get("s").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
-            let height = kv.get("v").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
             let placement = KittyPlacement {
                 image_id: 0,
                 placement_id: kv.get("p").and_then(|p| p.parse::<u32>().ok()),
@@ -758,15 +1074,51 @@ impl ParsedKittyCommand {
                 z_index: kv.get("z").and_then(|v| v.parse::<i32>().ok()),
                 ..Default::default()
             };
-            Some(ParsedKittyCommand::ImmediateTransmit {
-                protocol_image_id,
-                image_format,
-                width,
-                height,
-                placement,
-                more,
-                payload,
-            })
+            match *action {
+                "T" | "t" => {
+                    let image_format = match kv.get("f").copied().unwrap_or("32") {
+                        "100" => KittyImageFormat::Png,
+                        "32" => KittyImageFormat::Rgba,
+                        _ => return None,
+                    };
+                    let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
+                    let width = kv.get("s").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+                    let height = kv.get("v").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+                    let should_create_placement = *action == "T"
+                        || kv.contains_key("p")
+                        || kv.contains_key("c")
+                        || kv.contains_key("r")
+                        || kv.contains_key("x")
+                        || kv.contains_key("y")
+                        || kv.contains_key("w")
+                        || kv.contains_key("h")
+                        || kv.contains_key("X")
+                        || kv.contains_key("Y")
+                        || kv.contains_key("z")
+                        || kv.get("U").copied() == Some("1");
+                    Some(ParsedKittyCommand::ImmediateTransmit {
+                        protocol_image_id,
+                        image_format,
+                        width,
+                        height,
+                        placement: if should_create_placement {
+                            Some(placement)
+                        } else {
+                            None
+                        },
+                        more,
+                        payload,
+                    })
+                },
+                "p" => {
+                    let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok())?;
+                    Some(ParsedKittyCommand::DisplayPlacement {
+                        protocol_image_id,
+                        placement,
+                    })
+                },
+                _ => None,
+            }
         } else {
             Some(ParsedKittyCommand::TransmitChunk { more, payload })
         }
@@ -871,7 +1223,10 @@ fn serialize_placeholder_render(
 ) -> String {
     let mut output = String::new();
     output.push_str("\u{1b}_G");
-    output.push_str(&serialize_virtual_placeholder_placement(render, placement_id));
+    output.push_str(&serialize_virtual_placeholder_placement(
+        render,
+        placement_id,
+    ));
     output.push_str("\u{1b}\\");
 
     let image_id_low_24 = render.image_id & 0x00FF_FFFF;
@@ -889,12 +1244,7 @@ fn serialize_placeholder_render(
         output.push_str(&format!("\u{1b}[{};{}H", cell.cell_y + 1, cell.cell_x + 1));
         output.push_str(&format!(
             "\u{1b}[38;2;{};{};{}m\u{1b}[58;2;{};{};{}m",
-            image_id_r,
-            image_id_g,
-            image_id_b,
-            placement_id_r,
-            placement_id_g,
-            placement_id_b,
+            image_id_r, image_id_g, image_id_b, placement_id_r, placement_id_g, placement_id_b,
         ));
         let Some(row_diacritic) = KITTY_ROWCOL_DIACRITICS.get(cell.placeholder_row).copied() else {
             continue;
@@ -938,4 +1288,91 @@ fn serialize_virtual_placeholder_placement(
         parts.push(format!("Y={}", render.y_offset));
     }
     parts.join(",")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_image(width: u32, height: u32) -> KittyImage {
+        KittyImage {
+            id: 1,
+            data: KittyStoredImageData::Rgba {
+                data: vec![0; (width * height * 4) as usize],
+                width,
+                height,
+            },
+        }
+    }
+
+    #[test]
+    fn one_dimensional_kitty_sizing_preserves_prediction_and_wire_intent() {
+        let image = test_image(40, 20);
+        let cell_size = Some(SizeInPixels {
+            width: 10,
+            height: 10,
+        });
+        let cases = vec![
+            (Some(3), Some(5), 3usize, 5usize, true, true),
+            (Some(3), None, 3usize, 2usize, true, false),
+            (None, Some(3), 6usize, 3usize, false, true),
+        ];
+
+        for (columns, rows, expected_columns, expected_rows, expect_c, expect_r) in cases {
+            let placement = KittyPlacement {
+                image_id: 1,
+                placement_id: Some(7),
+                placement_mode: KittyImagePlacementMode::Explicit,
+                anchor: FlowAnchor::LogicalRow {
+                    logical_row: 0,
+                    column: 0,
+                },
+                source_x: None,
+                source_y: None,
+                source_width: None,
+                source_height: None,
+                columns,
+                rows,
+                columns_specified: columns.is_some(),
+                rows_specified: rows.is_some(),
+                x_offset: None,
+                y_offset: None,
+                z_index: None,
+            };
+            let geometry = placement.geometry_for_image(&image, 0, 0, cell_size);
+            assert_eq!(geometry.columns, expected_columns);
+            assert_eq!(geometry.rows, expected_rows);
+            assert_eq!(geometry.columns_specified, expect_c);
+            assert_eq!(geometry.rows_specified, expect_r);
+
+            let chunk = KittyImageChunk {
+                image_id: 1,
+                placement_id: Some(7),
+                placement_mode: KittyImagePlacementMode::Explicit,
+                cell_x: 0,
+                cell_y: 0,
+                columns: if geometry.columns_specified {
+                    geometry.columns
+                } else {
+                    0
+                },
+                rows: if geometry.rows_specified {
+                    geometry.rows
+                } else {
+                    0
+                },
+                source_x: geometry.source_x,
+                source_y: geometry.source_y,
+                source_width: geometry.source_width,
+                source_height: geometry.source_height,
+                z_index: geometry.z_index,
+                x_offset: geometry.x_offset,
+                y_offset: geometry.y_offset,
+                image_data: image.chunk_data(),
+            };
+            let serialized = serialize_display(&chunk, 7);
+            assert_eq!(serialized.contains("c="), expect_c);
+            assert_eq!(serialized.contains("r="), expect_r);
+        }
+    }
 }

@@ -393,11 +393,7 @@ impl Pane for PluginPane {
     fn render(
         &mut self,
         client_id: Option<ClientId>,
-    ) -> Result<Option<(
-        Vec<CharacterChunk>,
-        Option<String>,
-        Vec<crate::output::ImageChunk>,
-    )>> {
+    ) -> Result<Option<crate::output::PaneRenderOutput>> {
         if client_id.is_none() {
             return Ok(None);
         }
@@ -423,13 +419,15 @@ impl Pane for PluginPane {
         }
         Ok(None)
     }
-    fn visible_kitty_image_chunks(
+    fn visible_kitty_render_bundle(
         &self,
         client_id: Option<ClientId>,
-    ) -> Vec<crate::output::KittyImageChunk> {
+    ) -> crate::panes::pane_image_scene::KittyRenderBundle {
         client_id
             .and_then(|client_id| self.grids.get(&client_id))
-            .map(|grid| grid.visible_kitty_image_chunks(self.get_content_x(), self.get_content_y()))
+            .map(|grid| {
+                grid.visible_kitty_render_bundle(self.get_content_x(), self.get_content_y())
+            })
             .unwrap_or_default()
     }
     fn render_frame(
