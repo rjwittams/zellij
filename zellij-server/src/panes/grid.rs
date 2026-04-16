@@ -177,7 +177,7 @@ use zellij_utils::{consts::VERSION, shared::version_number};
 use crate::output::{
     CharacterChunk, HighlightSelection, KittyImageChunk, OutputBuffer, SixelImageChunk,
 };
-use crate::panes::kitty::kitty_query_response;
+use crate::panes::kitty::{kitty_delete_all_visible, kitty_query_response};
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
 use crate::panes::link_handler::LinkHandler;
@@ -2055,6 +2055,8 @@ impl Grid {
             &mut self.lines_above,
             &mut self.link_handler.borrow_mut(),
         );
+        self.image_scene
+            .remove_kitty_placeholder_cell_at_anchor(&self.full_cursor_flow_anchor());
         // this function assumes the current line has enough room for terminal_character (that its
         // width has been checked beforehand)
         match self.viewport.get_mut(self.cursor.y) {
@@ -3717,6 +3719,11 @@ impl Perform for Grid {
             if apc_bytes.first() == Some(&b'G') {
                 if let Some(query_response) = kitty_query_response(&apc_bytes) {
                     self.queue_pending_message_to_pty(query_response.to_apc_response());
+                    return;
+                }
+                if kitty_delete_all_visible(&apc_bytes) {
+                    self.image_scene.clear();
+                    self.mark_for_rerender();
                     return;
                 }
                 let character_cell_size = *self.character_cell_size.borrow();

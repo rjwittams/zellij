@@ -506,6 +506,37 @@ impl PendingKittyTransmit {
     }
 }
 
+pub fn kitty_delete_all_visible(apc_bytes: &[u8]) -> bool {
+    let Some(rest) = apc_bytes.strip_prefix(b"G") else {
+        return false;
+    };
+    let mut parts = rest.splitn(2, |b| *b == b';');
+    let Some(header) = parts.next() else {
+        return false;
+    };
+    let Ok(header) = std::str::from_utf8(header) else {
+        return false;
+    };
+    let mut action = None;
+    let mut delete_kind = None;
+    for part in header.split(',') {
+        if part.is_empty() {
+            continue;
+        }
+        let mut split = part.splitn(2, '=');
+        let Some(key) = split.next() else {
+            continue;
+        };
+        let value = split.next().unwrap_or("");
+        match key {
+            "a" => action = Some(value),
+            "d" => delete_kind = Some(value),
+            _ => {},
+        }
+    }
+    action == Some("d") && matches!(delete_kind, None | Some("a") | Some("A"))
+}
+
 pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
     let rest = apc_bytes.strip_prefix(b"G")?;
     let mut parts = rest.splitn(2, |b| *b == b';');

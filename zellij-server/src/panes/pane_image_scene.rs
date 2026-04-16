@@ -272,6 +272,11 @@ impl PaneImageScene {
         self.kitty_placeholder_cells.push(placeholder_cell);
     }
 
+    pub fn remove_kitty_placeholder_cell_at_anchor(&mut self, anchor: &FlowAnchor) {
+        self.kitty_placeholder_cells
+            .retain(|placeholder_cell| &placeholder_cell.anchor != anchor);
+    }
+
     pub fn visible_kitty_image_chunks<F>(
         &self,
         content_x: usize,
