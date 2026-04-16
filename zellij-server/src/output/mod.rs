@@ -1535,6 +1535,11 @@ pub enum KittyImageData {
     Png {
         data: Vec<u8>,
     },
+    Rgb {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
     Rgba {
         data: Vec<u8>,
         width: u32,

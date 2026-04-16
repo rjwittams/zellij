@@ -121,11 +121,29 @@ def png_data(path: Path) -> bytes:
     return path.read_bytes()
 
 
+def rgb_gradient(w: int, h: int) -> bytes:
+    b = bytearray()
+    for y in range(h):
+        for x in range(w):
+            b.extend((x * 255 // max(1, w - 1), y * 255 // max(1, h - 1), 180))
+    return bytes(b)
+
+
 def rgba_gradient(w: int, h: int) -> bytes:
     b = bytearray()
     for y in range(h):
         for x in range(w):
             b.extend((x * 255 // max(1, w - 1), y * 255 // max(1, h - 1), 180, 255))
+    return bytes(b)
+
+
+def rgba_alpha_checker(w: int, h: int, tile: int = 8) -> bytes:
+    b = bytearray()
+    for y in range(h):
+        for x in range(w):
+            checker = ((x // tile) + (y // tile)) % 2
+            alpha = 255 if checker == 0 else 0
+            b.extend((255, 255, 255, alpha))
     return bytes(b)
 
 
@@ -260,13 +278,20 @@ def explicit_png(
     flush()
 
 
-def explicit_rgba(image_id=101, w=56, h=28, cols=14, rows=7, x=27, y=5):
+def explicit_rgb(image_id=101, w=56, h=28, cols=14, rows=7, x=3, y=5):
     goto(x, y)
-    chunked_apc(f"q=2,a=T,C=1,f=32,s={w},v={h},i={image_id},c={cols},r={rows}", rgba_gradient(w, h))
+    chunked_apc(f"q=2,a=T,C=1,f=24,s={w},v={h},i={image_id},c={cols},r={rows}", rgb_gradient(w, h))
     flush()
 
 
-def placeholder_rgba(image_id=102, w=56, h=56, cols=14, rows=7, x=3, y=16):
+def explicit_rgba(image_id=102, w=56, h=28, cols=14, rows=7, x=27, y=5, alpha_demo: bool = False):
+    goto(x, y)
+    payload = rgba_alpha_checker(w, h) if alpha_demo else rgba_gradient(w, h)
+    chunked_apc(f"q=2,a=T,C=1,f=32,s={w},v={h},i={image_id},c={cols},r={rows}", payload)
+    flush()
+
+
+def placeholder_rgba(image_id=103, w=56, h=56, cols=14, rows=7, x=3, y=16):
     chunked_apc(f"q=2,a=T,C=1,U=1,f=32,s={w},v={h},i={image_id},c={cols},r={rows}", rgba_gradient(w, h))
     low = image_id & 0xFFFFFF
     r = (low >> 16) & 0xFF
@@ -292,9 +317,10 @@ def divider(title: str):
 
 
 def wait_for_enter(prompt: str = "Press Enter for next stage..."):
-    goto(1, 29)
     reset_attrs()
-    out(prompt)
+    if prompt:
+        goto(1, 29)
+        out(prompt)
     flush()
     try:
         input()
@@ -367,7 +393,7 @@ def stage_detect() -> Caps:
     y += 1
     label("  - kitty basic query is only coarse protocol detection, not the full feature matrix.", 1, y)
     y += 1
-    label("  - later stages explicitly test: PNG, chunked RGBA, placeholders, aspect rules, multi-placement delete, erase interactions, and delete-all-visible.", 1, y)
+    label("  - later stages explicitly test: PNG, chunked RGB, chunked RGBA, placeholders, aspect rules, multi-placement delete, erase interactions, and delete-all-visible.", 1, y)
     return caps
 
 
@@ -381,18 +407,33 @@ def stage_explicit_png(path: Path, caps: Caps):
     explicit_png(path)
 
 
-def stage_explicit_rgba(caps: Caps):
-    divider("Stage 3/9: explicit RGBA chunked placement")
+def stage_explicit_rgb(caps: Caps):
+    divider("Stage 3/10: explicit RGB chunked placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
-    label("Expect: a full gradient block fills most of the boxed area below.", 1, 3)
-    draw_box(26, 4, 14, 7, "rgba")
-    explicit_rgba()
+    label("Expect: a full gradient block fills most of the boxed area below using f=24 RGB payloads.", 1, 3)
+    draw_box(2, 4, 14, 7, "rgb")
+    explicit_rgb()
+
+
+def stage_explicit_rgba(caps: Caps):
+    divider("Stage 4/10: explicit RGBA chunked placement")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+    label("Expect: the left box shows an RGB gradient background with an RGBA alpha-checker over it.", 1, 3)
+    label("Transparent RGBA tiles should reveal the background; opaque tiles should appear as white squares.", 1, 4)
+    label("The right box is a plain RGBA gradient control using the same f=32 path.", 1, 5)
+    draw_box(2, 7, 14, 7, "rgba alpha")
+    draw_box(26, 7, 14, 7, "rgba control")
+    explicit_rgb(image_id=102, w=56, h=28, cols=14, rows=7, x=3, y=8)
+    explicit_rgba(image_id=103, w=56, h=28, cols=14, rows=7, x=3, y=8, alpha_demo=True)
+    explicit_rgba(image_id=104, w=56, h=28, cols=14, rows=7, x=27, y=8)
 
 
 def stage_placeholder(caps: Caps):
-    divider("Stage 4/9: Unicode placeholder placement")
+    divider("Stage 5/10: Unicode placeholder placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -402,7 +443,7 @@ def stage_placeholder(caps: Caps):
 
 
 def stage_aspect(path: Path, caps: Caps):
-    divider("Stage 5/9: aspect comparison for explicit placement")
+    divider("Stage 6/10: aspect comparison for explicit placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -418,7 +459,7 @@ def stage_aspect(path: Path, caps: Caps):
 
 
 def stage_multi_delete(path: Path, caps: Caps):
-    divider("Stage 6/9: multi-placement and targeted delete")
+    divider("Stage 7/10: multi-placement and targeted delete")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -436,7 +477,7 @@ def stage_multi_delete(path: Path, caps: Caps):
 
 
 def stage_erase(caps: Caps):
-    divider("Stage 7/9: erase interactions for placeholder flow")
+    divider("Stage 8/10: erase interactions for placeholder flow")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -464,7 +505,7 @@ def stage_erase(caps: Caps):
 
 
 def stage_resize_reflow(path: Path, caps: Caps):
-    divider("Stage 8/9: resize and reflow coherence")
+    divider("Stage 9/10: resize and reflow coherence")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -508,14 +549,11 @@ def stage_resize_reflow(path: Path, caps: Caps):
         out(f"POST-RESIZE SCROLL {i:02d}: image/text relationship should remain coherent after resize.\n")
     flush()
     prompt_line("Inspect post-resize scroll behavior, then press Enter for the final delete stage.")
-    try:
-        input()
-    except EOFError:
-        time.sleep(1.0)
+    wait_for_enter("")
 
 
 def stage_delete(caps: Caps):
-    divider("Stage 9/9: delete all visible kitty images")
+    divider("Stage 10/10: delete all visible kitty images")
     label("Expect: all kitty images disappear after delete-all-visible.", 1, 3)
     if caps.kitty_basic_query:
         delete_all()
@@ -526,6 +564,8 @@ def all_stages(path: Path):
     caps = stage_detect()
     wait_for_enter()
     stage_explicit_png(path, caps)
+    wait_for_enter()
+    stage_explicit_rgb(caps)
     wait_for_enter()
     stage_explicit_rgba(caps)
     wait_for_enter()
@@ -538,7 +578,6 @@ def all_stages(path: Path):
     stage_erase(caps)
     wait_for_enter()
     stage_resize_reflow(path, caps)
-    wait_for_enter()
     stage_delete(caps)
     goto(1, 7)
     out("Done.\n")
@@ -548,7 +587,7 @@ def all_stages(path: Path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("png", nargs="?", default=str(DEFAULT_PNG), help="png path (defaults to assets/logo.png)")
-    p.add_argument("--mode", choices=["all", "detect", "explicit-png", "explicit-rgba", "placeholder", "aspect", "multi-delete", "erase", "resize", "delete"], default="all")
+    p.add_argument("--mode", choices=["all", "detect", "explicit-png", "explicit-rgb", "explicit-rgba", "placeholder", "aspect", "multi-delete", "erase", "resize", "delete"], default="all")
     args = p.parse_args()
 
     path = Path(args.png)
@@ -565,6 +604,8 @@ def main():
     wait_for_enter()
     if args.mode == "explicit-png":
         stage_explicit_png(path, caps)
+    elif args.mode == "explicit-rgb":
+        stage_explicit_rgb(caps)
     elif args.mode == "explicit-rgba":
         stage_explicit_rgba(caps)
     elif args.mode == "placeholder":

@@ -317,6 +317,11 @@ pub enum KittyStoredImageData {
         width: u32,
         height: u32,
     },
+    Rgb {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
     Rgba {
         data: Vec<u8>,
         width: u32,
@@ -333,15 +338,16 @@ pub struct KittyImage {
 impl KittyImage {
     pub fn width(&self) -> u32 {
         match &self.data {
-            KittyStoredImageData::Png { width, .. } | KittyStoredImageData::Rgba { width, .. } => {
-                *width
-            },
+            KittyStoredImageData::Png { width, .. }
+            | KittyStoredImageData::Rgb { width, .. }
+            | KittyStoredImageData::Rgba { width, .. } => *width,
         }
     }
 
     pub fn height(&self) -> u32 {
         match &self.data {
             KittyStoredImageData::Png { height, .. }
+            | KittyStoredImageData::Rgb { height, .. }
             | KittyStoredImageData::Rgba { height, .. } => *height,
         }
     }
@@ -349,6 +355,15 @@ impl KittyImage {
     pub fn chunk_data(&self) -> KittyImageData {
         match &self.data {
             KittyStoredImageData::Png { data, .. } => KittyImageData::Png { data: data.clone() },
+            KittyStoredImageData::Rgb {
+                data,
+                width,
+                height,
+            } => KittyImageData::Rgb {
+                data: data.clone(),
+                width: *width,
+                height: *height,
+            },
             KittyStoredImageData::Rgba {
                 data,
                 width,
@@ -420,6 +435,7 @@ struct PendingKittyTransmit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KittyImageFormat {
     Png,
+    Rgb,
     Rgba,
 }
 
@@ -936,6 +952,11 @@ impl PendingKittyTransmit {
                     height,
                 }
             },
+            KittyImageFormat::Rgb => KittyStoredImageData::Rgb {
+                data: self.payload,
+                width: self.width,
+                height: self.height,
+            },
             KittyImageFormat::Rgba => KittyStoredImageData::Rgba {
                 data: self.payload,
                 width: self.width,
@@ -1078,6 +1099,7 @@ impl ParsedKittyCommand {
                 "T" | "t" => {
                     let image_format = match kv.get("f").copied().unwrap_or("32") {
                         "100" => KittyImageFormat::Png,
+                        "24" => KittyImageFormat::Rgb,
                         "32" => KittyImageFormat::Rgba,
                         _ => return None,
                     };
@@ -1149,6 +1171,16 @@ fn serialize_transmit(image_id: u32, image_data: &KittyImageData) -> Vec<String>
     let payload = match image_data {
         KittyImageData::Png { data } => {
             parts.push("f=100".to_string());
+            data
+        },
+        KittyImageData::Rgb {
+            data,
+            width,
+            height,
+        } => {
+            parts.push("f=24".to_string());
+            parts.push(format!("s={}", width));
+            parts.push(format!("v={}", height));
             data
         },
         KittyImageData::Rgba {
@@ -1303,6 +1335,67 @@ mod tests {
                 height,
             },
         }
+    }
+
+    #[test]
+    fn kitty_rgb24_payloads_roundtrip_natively() {
+        let payload = vec![0x12, 0x34, 0x56];
+        let parsed = ParsedKittyCommand::parse(b"Ga=t,f=24,s=1,v=1,i=7;EjRW").unwrap();
+        let ParsedKittyCommand::ImmediateTransmit {
+            protocol_image_id,
+            image_format,
+            width,
+            height,
+            payload: parsed_payload,
+            ..
+        } = parsed
+        else {
+            panic!("expected immediate transmit");
+        };
+        assert_eq!(protocol_image_id, Some(7));
+        assert_eq!(image_format, KittyImageFormat::Rgb);
+        assert_eq!(width, 1);
+        assert_eq!(height, 1);
+        assert_eq!(parsed_payload, payload);
+
+        let image = PendingKittyTransmit {
+            protocol_image_id: Some(7),
+            image_id: 99,
+            image_format,
+            width,
+            height,
+            placement: None,
+            payload: payload.clone(),
+        }
+        .into_image()
+        .unwrap();
+        match image.data {
+            KittyStoredImageData::Rgb {
+                data,
+                width,
+                height,
+            } => {
+                assert_eq!(data, payload);
+                assert_eq!(width, 1);
+                assert_eq!(height, 1);
+            },
+            other => panic!("expected rgb image data, got {:?}", other),
+        }
+
+        let serialized = serialize_transmit(
+            99,
+            &KittyImageData::Rgb {
+                data: vec![0x12, 0x34, 0x56],
+                width: 1,
+                height: 1,
+            },
+        );
+        assert_eq!(serialized.len(), 1);
+        assert!(serialized[0].contains("a=t"));
+        assert!(serialized[0].contains("f=24"));
+        assert!(serialized[0].contains("s=1"));
+        assert!(serialized[0].contains("v=1"));
+        assert!(serialized[0].ends_with(";EjRW"));
     }
 
     #[test]
