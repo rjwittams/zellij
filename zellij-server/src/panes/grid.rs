@@ -437,7 +437,9 @@ use crate::panes::kitty::{
     kitty_delete_all_visible, kitty_delete_by_image_id, kitty_query_response,
 };
 use crate::panes::link_handler::LinkHandler;
-use crate::panes::pane_image_scene::{FlowAnchor, KittyPlaceholderCell, PaneImageScene};
+use crate::panes::pane_image_scene::{
+    FlowAnchor, KittyDamageRedraw, KittyPlaceholderCell, PaneImageScene,
+};
 use crate::panes::search::SearchResult;
 use crate::panes::terminal_character::{
     AnsiCode, CharsetIndex, Cursor, CursorShape, RcCharacterStyles, StandardCharset,
@@ -2126,12 +2128,13 @@ impl Grid {
                 }
             }
         }
+        let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
         let image_render_bundle = crate::output::ImageRenderBundle {
             sixel_chunks: sixel_image_chunks,
             kitty_render_bundle: self
                 .image_scene
-                .visible_kitty_render_bundle_for_changed_rects(
-                    changed_rects,
+                .visible_kitty_render_bundle_for_damage_redraw(
+                    &kitty_damage_redraw,
                     content_x,
                     content_y,
                     self.lines_above.len(),

@@ -9,6 +9,60 @@ pub struct KittyRenderBundle {
     pub explicit_chunks: Vec<KittyImageChunk>,
     pub placeholder_renders: Vec<KittyPlaceholderRender>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DamageRowSpan {
+    pub start_row: usize,
+    pub line_count: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KittyDamageRedraw {
+    row_spans: Vec<DamageRowSpan>,
+}
+
+impl KittyDamageRedraw {
+    pub fn from_changed_rects(changed_rects: HashMap<usize, usize>) -> Self {
+        let mut row_spans: Vec<DamageRowSpan> = changed_rects
+            .into_iter()
+            .filter_map(|(start_row, line_count)| {
+                if line_count == 0 {
+                    None
+                } else {
+                    Some(DamageRowSpan {
+                        start_row,
+                        line_count,
+                    })
+                }
+            })
+            .collect();
+        row_spans.sort_by_key(|span| span.start_row);
+        KittyDamageRedraw { row_spans }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.row_spans.is_empty()
+    }
+
+    pub fn row_spans(&self) -> &[DamageRowSpan] {
+        &self.row_spans
+    }
+
+    pub fn intersects_absolute_rows(
+        &self,
+        content_y: usize,
+        absolute_y: usize,
+        row_count: usize,
+    ) -> bool {
+        let item_start = absolute_y;
+        let item_end = absolute_y + row_count.max(1);
+        self.row_spans.iter().any(|span| {
+            let changed_start = content_y + span.start_row;
+            let changed_end = changed_start + span.line_count;
+            item_start < changed_end && changed_start < item_end
+        })
+    }
+}
 use crate::panes::kitty::{KittyImageInsertion, KittyImageState};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -771,9 +825,9 @@ impl PaneImageScene {
         }
     }
 
-    pub fn visible_kitty_render_bundle_for_changed_rects<F>(
+    pub fn visible_kitty_render_bundle_for_damage_redraw<F>(
         &self,
-        changed_rects: HashMap<usize, usize>,
+        damage_redraw: &KittyDamageRedraw,
         content_x: usize,
         content_y: usize,
         scrollback_size_in_lines: usize,
@@ -785,7 +839,7 @@ impl PaneImageScene {
     where
         F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
     {
-        if changed_rects.is_empty() {
+        if damage_redraw.is_empty() {
             return KittyRenderBundle::default();
         }
         let visible_bundle = self.visible_kitty_render_bundle(
@@ -797,19 +851,12 @@ impl PaneImageScene {
             character_cell_size,
             resolve_anchor,
         );
-        let intersects_changed_rect = |absolute_y: usize, row_count: usize| {
-            changed_rects.iter().any(|(start_row, line_count)| {
-                let changed_start = content_y + *start_row;
-                let changed_end = changed_start + *line_count;
-                let item_start = absolute_y;
-                let item_end = absolute_y + row_count.max(1);
-                item_start < changed_end && changed_start < item_end
-            })
-        };
         let explicit_chunks = visible_bundle
             .explicit_chunks
             .into_iter()
-            .filter(|chunk| intersects_changed_rect(chunk.cell_y, chunk.rows))
+            .filter(|chunk| {
+                damage_redraw.intersects_absolute_rows(content_y, chunk.cell_y, chunk.rows)
+            })
             .collect();
         let placeholder_renders = visible_bundle
             .placeholder_renders
@@ -818,7 +865,7 @@ impl PaneImageScene {
                 render
                     .cells
                     .iter()
-                    .any(|cell| intersects_changed_rect(cell.cell_y, 1))
+                    .any(|cell| damage_redraw.intersects_absolute_rows(content_y, cell.cell_y, 1))
             })
             .collect();
         KittyRenderBundle {
