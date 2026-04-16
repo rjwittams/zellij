@@ -384,6 +384,37 @@ impl KittyImageState {
 }
 
 #[derive(Clone, Debug)]
+pub enum KittyQueryResponse {
+    Ok {
+        image_id: Option<u32>,
+        placement_id: Option<u32>,
+    },
+}
+
+impl KittyQueryResponse {
+    pub fn to_apc_response(&self) -> String {
+        match self {
+            KittyQueryResponse::Ok {
+                image_id,
+                placement_id,
+            } => {
+                let mut control_data = String::new();
+                if let Some(image_id) = image_id {
+                    control_data.push_str(&format!("i={}", image_id));
+                    if let Some(placement_id) = placement_id {
+                        control_data.push_str(&format!(",p={}", placement_id));
+                    }
+                    control_data.push(';');
+                } else {
+                    control_data.push(';');
+                }
+                format!("\u{1b}_G{}OK\u{1b}\\", control_data)
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 enum ParsedKittyCommand {
     ImmediateTransmit {
         protocol_image_id: Option<u32>,
@@ -473,6 +504,53 @@ impl PendingKittyTransmit {
             data,
         })
     }
+}
+
+pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
+    let rest = apc_bytes.strip_prefix(b"G")?;
+    let mut parts = rest.splitn(2, |b| *b == b';');
+    let header = std::str::from_utf8(parts.next()?).ok()?;
+    let payload_b64 = parts.next().unwrap_or_default();
+
+    let mut kv = HashMap::new();
+    for part in header.split(',') {
+        if part.is_empty() {
+            continue;
+        }
+        let mut split = part.splitn(2, '=');
+        let key = split.next()?;
+        let value = split.next().unwrap_or("");
+        kv.insert(key, value);
+    }
+
+    if kv.get("a").copied() != Some("q") {
+        return None;
+    }
+
+    let format = kv.get("f").copied().unwrap_or("32");
+    let payload = base64::decode(payload_b64).ok()?;
+    let valid = match format {
+        "24" => {
+            let width = kv.get("s").and_then(|v| v.parse::<usize>().ok())?;
+            let height = kv.get("v").and_then(|v| v.parse::<usize>().ok())?;
+            payload.len() == width * height * 3
+        },
+        "32" => {
+            let width = kv.get("s").and_then(|v| v.parse::<usize>().ok())?;
+            let height = kv.get("v").and_then(|v| v.parse::<usize>().ok())?;
+            payload.len() == width * height * 4
+        },
+        "100" => parse_png_dimensions(&payload).is_some(),
+        _ => false,
+    };
+    if !valid {
+        return None;
+    }
+
+    Some(KittyQueryResponse::Ok {
+        image_id: kv.get("i").and_then(|i| i.parse::<u32>().ok()),
+        placement_id: kv.get("p").and_then(|p| p.parse::<u32>().ok()),
+    })
 }
 
 impl ParsedKittyCommand {

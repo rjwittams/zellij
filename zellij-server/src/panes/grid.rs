@@ -177,6 +177,7 @@ use zellij_utils::{consts::VERSION, shared::version_number};
 use crate::output::{
     CharacterChunk, HighlightSelection, KittyImageChunk, OutputBuffer, SixelImageChunk,
 };
+use crate::panes::kitty::kitty_query_response;
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
 use crate::panes::link_handler::LinkHandler;
@@ -3531,6 +3532,10 @@ impl Grid {
             },
         }
     }
+    fn queue_pending_message_to_pty(&mut self, message: String) {
+        self.pending_messages_to_pty.push(message.into_bytes());
+    }
+
     pub fn is_alternate_mode_active(&self) -> bool {
         self.alternate_screen_state.is_some()
     }
@@ -3710,6 +3715,10 @@ impl Perform for Grid {
         }
         if let Some(apc_bytes) = self.apc_bytes.take() {
             if apc_bytes.first() == Some(&b'G') {
+                if let Some(query_response) = kitty_query_response(&apc_bytes) {
+                    self.queue_pending_message_to_pty(query_response.to_apc_response());
+                    return;
+                }
                 let character_cell_size = *self.character_cell_size.borrow();
                 if let Some(image_effect) = self.image_scene.handle_kitty_apc(
                     &apc_bytes,
