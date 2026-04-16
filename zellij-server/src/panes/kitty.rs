@@ -1,7 +1,7 @@
 use base64;
 use zellij_utils::pane_size::SizeInPixels;
 
-use crate::output::KittyImageChunk;
+use crate::output::{KittyImageChunk, KittyImageData};
 use crate::panes::pane_image_scene::{
     project_placement_to_viewport, FlowAnchor, ImageAssetId, ImagePlacementGeometry,
     PlacementOccupancy,
@@ -10,11 +10,51 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Clone, Debug)]
+pub enum KittyStoredImageData {
+    Png {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+    Rgba {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub struct KittyImage {
     pub id: u32,
-    pub png_data: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
+    pub data: KittyStoredImageData,
+}
+
+impl KittyImage {
+    pub fn width(&self) -> u32 {
+        match &self.data {
+            KittyStoredImageData::Png { width, .. } | KittyStoredImageData::Rgba { width, .. } => {
+                *width
+            },
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        match &self.data {
+            KittyStoredImageData::Png { height, .. }
+            | KittyStoredImageData::Rgba { height, .. } => *height,
+        }
+    }
+
+    pub fn chunk_data(&self) -> KittyImageData {
+        match &self.data {
+            KittyStoredImageData::Png { data, .. } => KittyImageData::Png { data: data.clone() },
+            KittyStoredImageData::Rgba { data, width, height } => KittyImageData::Rgba {
+                data: data.clone(),
+                width: *width,
+                height: *height,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -55,11 +95,29 @@ impl Default for KittyPlacement {
     }
 }
 
+#[derive(Clone, Debug)]
+struct PendingKittyTransmit {
+    protocol_image_id: Option<u32>,
+    image_id: u32,
+    image_format: KittyImageFormat,
+    width: u32,
+    height: u32,
+    placement: KittyPlacement,
+    payload: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KittyImageFormat {
+    Png,
+    Rgba,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct KittyImageState {
     images: HashMap<u32, KittyImage>,
     placements: Vec<KittyPlacement>,
     protocol_image_id_to_internal_id: HashMap<u32, u32>,
+    pending_transmit: Option<PendingKittyTransmit>,
 }
 
 static NEXT_GLOBAL_KITTY_IMAGE_ID: AtomicU32 = AtomicU32::new(1);
@@ -85,6 +143,43 @@ pub struct KittyImageInsertion {
 }
 
 impl KittyImageState {
+    fn finalize_pending_transmit(
+        &mut self,
+        anchor: FlowAnchor,
+        cursor_x: usize,
+        scrollback_row: usize,
+        character_cell_size: Option<SizeInPixels>,
+    ) -> Option<KittyImageInsertion> {
+        let pending = self.pending_transmit.take()?;
+        let protocol_image_id = pending.protocol_image_id;
+        let mut placement = pending.placement.clone();
+        let image = pending.into_image()?;
+        placement.anchor = anchor;
+        self.images.insert(image.id, image.clone());
+        let asset_id = ImageAssetId(image.id as u64);
+        self.placements.retain(|p| {
+            if let Some(new_placement_id) = placement.placement_id {
+                !(p.image_id == placement.image_id && p.placement_id == Some(new_placement_id))
+            } else {
+                true
+            }
+        });
+        let protocol_placement_id = placement.placement_id;
+        let geometry = placement.geometry_for_image(
+            &image,
+            cursor_x,
+            scrollback_row,
+            character_cell_size,
+        );
+        self.placements.push(placement);
+        Some(KittyImageInsertion {
+            asset_id,
+            geometry,
+            protocol_image_id,
+            protocol_placement_id,
+        })
+    }
+
     pub fn handle_apc(
         &mut self,
         apc_bytes: &[u8],
@@ -93,48 +188,59 @@ impl KittyImageState {
         scrollback_row: usize,
         character_cell_size: Option<SizeInPixels>,
     ) -> Option<KittyImageInsertion> {
-        let Some(command) = KittyGraphicsCommand::parse(apc_bytes) else {
-            return None;
-        };
+        let command = ParsedKittyCommand::parse(apc_bytes)?;
         match command {
-            KittyGraphicsCommand::TransmitAndDisplay {
-                mut image,
-                mut placement,
+            ParsedKittyCommand::ImmediateTransmit {
                 protocol_image_id,
+                image_format,
+                width,
+                height,
+                mut placement,
+                more,
+                payload,
             } => {
-                if let Some(protocol_image_id) = protocol_image_id {
-                    let internal_id = *self
+                let image_id = if let Some(protocol_image_id) = protocol_image_id {
+                    *self
                         .protocol_image_id_to_internal_id
                         .entry(protocol_image_id)
-                        .or_insert_with(next_global_kitty_image_id);
-                    image.id = internal_id;
-                    placement.image_id = internal_id;
-                }
-                self.images.insert(image.id, image.clone());
-                let asset_id = ImageAssetId(image.id as u64);
-                self.placements.retain(|p| {
-                    if let Some(new_placement_id) = placement.placement_id {
-                        !(p.image_id == placement.image_id
-                            && p.placement_id == Some(new_placement_id))
-                    } else {
-                        true
-                    }
-                });
-                placement.anchor = anchor;
-                let protocol_placement_id = placement.placement_id;
-                let geometry = placement.geometry_for_image(
-                    &image,
-                    cursor_x,
-                    scrollback_row,
-                    character_cell_size,
-                );
-                self.placements.push(placement);
-                Some(KittyImageInsertion {
-                    asset_id,
-                    geometry,
+                        .or_insert_with(next_global_kitty_image_id)
+                } else {
+                    next_global_kitty_image_id()
+                };
+                placement.image_id = image_id;
+                self.pending_transmit = Some(PendingKittyTransmit {
                     protocol_image_id,
-                    protocol_placement_id,
-                })
+                    image_id,
+                    image_format,
+                    width,
+                    height,
+                    placement,
+                    payload,
+                });
+                if more {
+                    None
+                } else {
+                    self.finalize_pending_transmit(
+                        anchor,
+                        cursor_x,
+                        scrollback_row,
+                        character_cell_size,
+                    )
+                }
+            },
+            ParsedKittyCommand::TransmitChunk { more, payload } => {
+                let pending = self.pending_transmit.as_mut()?;
+                pending.payload.extend(payload);
+                if more {
+                    None
+                } else {
+                    self.finalize_pending_transmit(
+                        anchor,
+                        cursor_x,
+                        scrollback_row,
+                        character_cell_size,
+                    )
+                }
             },
         }
     }
@@ -164,10 +270,10 @@ impl KittyImageState {
             let mut source_y = placement.source_y.unwrap_or(0);
             let mut source_width = placement
                 .source_width
-                .unwrap_or_else(|| image.width.saturating_sub(source_x));
+                .unwrap_or_else(|| image.width().saturating_sub(source_x));
             let mut source_height = placement
                 .source_height
-                .unwrap_or_else(|| image.height.saturating_sub(source_y));
+                .unwrap_or_else(|| image.height().saturating_sub(source_y));
             let mut columns = placement.columns.unwrap_or_else(|| {
                 ((source_width as usize + cell_size.width.saturating_sub(1)) / cell_size.width)
                     .max(1) as u32
@@ -225,7 +331,7 @@ impl KittyImageState {
                 z_index: placement.z_index.unwrap_or(0),
                 x_offset: placement.x_offset.unwrap_or(0),
                 y_offset: placement.y_offset.unwrap_or(0),
-                png_data: image.png_data.clone(),
+                image_data: image.chunk_data(),
             });
         }
         chunks
@@ -235,6 +341,7 @@ impl KittyImageState {
         self.images.clear();
         self.placements.clear();
         self.protocol_image_id_to_internal_id.clear();
+        self.pending_transmit = None;
     }
 
     pub fn serialize_chunks(chunks: &[KittyImageChunk]) -> String {
@@ -267,11 +374,19 @@ impl KittyImageState {
 }
 
 #[derive(Clone, Debug)]
-enum KittyGraphicsCommand {
-    TransmitAndDisplay {
-        image: KittyImage,
-        placement: KittyPlacement,
+enum ParsedKittyCommand {
+    ImmediateTransmit {
         protocol_image_id: Option<u32>,
+        image_format: KittyImageFormat,
+        width: u32,
+        height: u32,
+        placement: KittyPlacement,
+        more: bool,
+        payload: Vec<u8>,
+    },
+    TransmitChunk {
+        more: bool,
+        payload: Vec<u8>,
     },
 }
 
@@ -287,10 +402,10 @@ impl KittyPlacement {
         let source_y = self.source_y.unwrap_or(0);
         let source_width = self
             .source_width
-            .unwrap_or_else(|| image.width.saturating_sub(source_x));
+            .unwrap_or_else(|| image.width().saturating_sub(source_x));
         let source_height = self
             .source_height
-            .unwrap_or_else(|| image.height.saturating_sub(source_y));
+            .unwrap_or_else(|| image.height().saturating_sub(source_y));
         let (columns, rows) = if let Some(cell_size) = character_cell_size {
             (
                 self.columns.unwrap_or_else(|| {
@@ -326,7 +441,31 @@ impl KittyPlacement {
     }
 }
 
-impl KittyGraphicsCommand {
+impl PendingKittyTransmit {
+    fn into_image(self) -> Option<KittyImage> {
+        let data = match self.image_format {
+            KittyImageFormat::Png => {
+                let (width, height) = parse_png_dimensions(&self.payload)?;
+                KittyStoredImageData::Png {
+                    data: self.payload,
+                    width,
+                    height,
+                }
+            },
+            KittyImageFormat::Rgba => KittyStoredImageData::Rgba {
+                data: self.payload,
+                width: self.width,
+                height: self.height,
+            },
+        };
+        Some(KittyImage {
+            id: self.image_id,
+            data,
+        })
+    }
+}
+
+impl ParsedKittyCommand {
     fn parse(apc_bytes: &[u8]) -> Option<Self> {
         let rest = apc_bytes.strip_prefix(b"G")?;
         let mut parts = rest.splitn(2, |b| *b == b';');
@@ -344,25 +483,23 @@ impl KittyGraphicsCommand {
             kv.insert(key, value);
         }
 
-        let action = *kv.get("a")?;
-        let format = kv.get("f").copied().unwrap_or("32");
-        if action != "T" || format != "100" {
-            return None;
-        }
+        let more = kv.get("m").and_then(|m| m.parse::<u8>().ok()).unwrap_or(0) != 0;
+        let payload = base64::decode(payload).ok()?;
 
-        let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
-        let image_id = protocol_image_id.unwrap_or_else(next_global_kitty_image_id);
-
-        let png_data = base64::decode(payload).ok()?;
-        let (width, height) = parse_png_dimensions(&png_data)?;
-        let image = KittyImage {
-            id: image_id,
-            png_data,
-            width,
-            height,
-        };
-        let placement = KittyPlacement {
-            image_id,
+        if let Some(action) = kv.get("a") {
+            if *action != "T" {
+                return None;
+            }
+            let image_format = match kv.get("f").copied().unwrap_or("32") {
+                "100" => KittyImageFormat::Png,
+                "32" => KittyImageFormat::Rgba,
+                _ => return None,
+            };
+            let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
+            let width = kv.get("s").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+            let height = kv.get("v").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+            let placement = KittyPlacement {
+                image_id: 0,
             placement_id: kv.get("p").and_then(|p| p.parse::<u32>().ok()),
             source_x: kv.get("x").and_then(|v| v.parse::<u32>().ok()),
             source_y: kv.get("y").and_then(|v| v.parse::<u32>().ok()),
@@ -375,11 +512,18 @@ impl KittyGraphicsCommand {
             z_index: kv.get("z").and_then(|v| v.parse::<i32>().ok()),
             ..Default::default()
         };
-        Some(KittyGraphicsCommand::TransmitAndDisplay {
-            image,
-            placement,
-            protocol_image_id,
-        })
+            Some(ParsedKittyCommand::ImmediateTransmit {
+                protocol_image_id,
+                image_format,
+                width,
+                height,
+                placement,
+                more,
+                payload,
+            })
+        } else {
+            Some(ParsedKittyCommand::TransmitChunk { more, payload })
+        }
     }
 }
 
@@ -397,13 +541,28 @@ fn parse_png_dimensions(png_data: &[u8]) -> Option<(u32, u32)> {
 }
 
 fn serialize_transmit(chunk: &KittyImageChunk) -> String {
-    let parts = vec![
+    let mut parts = vec![
         "a=t".to_string(),
-        "f=100".to_string(),
         format!("i={}", chunk.image_id),
         "q=2".to_string(),
     ];
-    let payload = base64::encode(&chunk.png_data);
+    let payload = match &chunk.image_data {
+        KittyImageData::Png { data } => {
+            parts.push("f=100".to_string());
+            data
+        },
+        KittyImageData::Rgba {
+            data,
+            width,
+            height,
+        } => {
+            parts.push("f=32".to_string());
+            parts.push(format!("s={}", width));
+            parts.push(format!("v={}", height));
+            data
+        },
+    };
+    let payload = base64::encode(payload);
     format!("{};{}", parts.join(","), payload)
 }
 

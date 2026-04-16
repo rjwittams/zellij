@@ -1261,7 +1261,19 @@ pub struct SixelImageChunk {
     pub sixel_image_id: usize,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KittyImageData {
+    Png {
+        data: Vec<u8>,
+    },
+    Rgba {
+        data: Vec<u8>,
+        width: u32,
+        height: u32,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KittyImageChunk {
     pub image_id: u32,
     pub placement_id: Option<u32>,
@@ -1276,7 +1288,7 @@ pub struct KittyImageChunk {
     pub z_index: i32,
     pub x_offset: u32,
     pub y_offset: u32,
-    pub png_data: Vec<u8>,
+    pub image_data: KittyImageData,
 }
 
 #[derive(Debug, Clone)]
