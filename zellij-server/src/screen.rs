@@ -75,7 +75,7 @@ use crate::panes::terminal_pane::{BRACKETED_PASTE_BEGIN, BRACKETED_PASTE_END};
 use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
 
 use crate::{
-    output::Output,
+    output::{KittyImageChunk, Output},
     panes::sixel::SixelImageStore,
     panes::PaneId,
     plugins::{DumpSessionLayoutResponse, PluginId, PluginInstruction, PluginRenderAsset},
@@ -1465,6 +1465,8 @@ pub(crate) struct Screen {
     /// Resolved styling to apply when `host_terminal_theme_mode == Light`.
     /// `None` disables auto-switch. Refreshed on each reconfigure.
     host_theme_light_styling: Option<Styling>,
+    regular_last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
+    watcher_last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
 }
 
 /// A pending forward waiting to be dispatched once the current in-flight
@@ -1619,6 +1621,8 @@ impl Screen {
             host_terminal_theme_mode: None,
             host_theme_dark_styling: None,
             host_theme_light_styling: None,
+            regular_last_rendered_kitty_chunks: HashMap::new(),
+            watcher_last_rendered_kitty_chunks: HashMap::new(),
         }
     }
 
@@ -2510,6 +2514,9 @@ impl Screen {
                 self.styled_underlines,
                 self.osc8_hyperlinks,
             );
+            output.set_last_rendered_kitty_chunks(
+                self.regular_last_rendered_kitty_chunks.clone(),
+            );
 
             let has_ansi_subscribers = self.pane_render_subscribers.values().any(|s| s.ansi);
             output.collect_ansi_pane_contents =
@@ -2593,6 +2600,8 @@ impl Screen {
 
             if non_watcher_output_was_dirty || has_bell {
                 let serialized_output = output.serialize().context(err_context)?;
+                self.regular_last_rendered_kitty_chunks =
+                    output.take_last_rendered_kitty_chunks();
                 let _ = self
                     .bus
                     .senders
@@ -2658,11 +2667,25 @@ impl Screen {
                     // For each watcher, clone the output and serialize with size constraints
                     for (watcher_id, watcher_state) in &self.watcher_clients {
                         let mut watcher_specific_output = watcher_output.clone();
+                        watcher_specific_output.set_last_rendered_kitty_chunks(HashMap::from([(
+                            followed_client_id,
+                            self.watcher_last_rendered_kitty_chunks
+                                .get(watcher_id)
+                                .cloned()
+                                .unwrap_or_default(),
+                        )]));
 
                         // Serialize this watcher's output with size constraints (cropping and padding handled inside)
                         let mut serialized_output = watcher_specific_output
                             .serialize_with_size(Some(watcher_state.size()), Some(self.size))
                             .context(err_context)?;
+
+                        let watcher_last_rendered = watcher_specific_output
+                            .take_last_rendered_kitty_chunks()
+                            .remove(&followed_client_id)
+                            .unwrap_or_default();
+                        self.watcher_last_rendered_kitty_chunks
+                            .insert(*watcher_id, watcher_last_rendered);
 
                         // Get the output for the followed client and map it to this watcher
                         if let Some(followed_output) = serialized_output.remove(&followed_client_id)

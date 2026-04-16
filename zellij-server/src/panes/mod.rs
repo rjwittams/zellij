@@ -1,7 +1,9 @@
 pub mod alacritty_functions;
 pub mod grid;
 pub mod hyperlink_tracker;
+pub mod kitty;
 pub mod link_handler;
+pub mod pane_image_scene;
 pub mod selection;
 pub mod sixel;
 pub mod terminal_character;
@@ -18,6 +20,7 @@ pub use alacritty_functions::*;
 pub use floating_panes::*;
 pub use grid::*;
 pub use link_handler::*;
+pub use pane_image_scene::*;
 pub(crate) use plugin_pane::*;
 pub use selection::Selection;
 pub use sixel::*;

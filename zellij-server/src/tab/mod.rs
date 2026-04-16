@@ -38,7 +38,7 @@ use self::clipboard::ClipboardProvider;
 use crate::route::NotificationEnd;
 use crate::{
     os_input_output::ServerOsApi,
-    output::{CharacterChunk, Output, SixelImageChunk},
+    output::{CharacterChunk, Output},
     panes::floating_panes::floating_pane_grid::half_size_middle_geom,
     panes::grid::namespace_notification_id,
     panes::sixel::SixelImageStore,
@@ -274,7 +274,17 @@ pub trait Pane {
     fn render(
         &mut self,
         client_id: Option<ClientId>,
-    ) -> Result<Option<(Vec<CharacterChunk>, Option<String>, Vec<SixelImageChunk>)>>; // TODO: better
+    ) -> Result<Option<(
+        Vec<CharacterChunk>,
+        Option<String>,
+        Vec<crate::output::ImageChunk>,
+    )>>; // TODO: better
+    fn visible_kitty_image_chunks(
+        &self,
+        _client_id: Option<ClientId>,
+    ) -> Vec<crate::output::KittyImageChunk> {
+        vec![]
+    }
     fn render_frame(
         &mut self,
         client_id: ClientId,

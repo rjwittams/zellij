@@ -4,6 +4,7 @@ use crate::panes::Row;
 
 use crate::panes::Selection;
 use crate::{
+    panes::kitty::KittyImageState,
     panes::sixel::SixelImageStore,
     panes::terminal_character::{AnsiCode, CharacterStyles},
     panes::{LinkHandler, PaneId, TerminalCharacter, DEFAULT_STYLES, EMPTY_TERMINAL_CHARACTER},
@@ -197,6 +198,7 @@ fn serialize_chunks_with_newlines(
 fn serialize_chunks(
     character_chunks: Vec<CharacterChunk>,
     sixel_chunks: Option<&Vec<SixelImageChunk>>,
+    kitty_chunks: Option<&Vec<KittyImageChunk>>,
     link_handler: Option<&mut Rc<RefCell<LinkHandler>>>,
     sixel_image_store: Option<&mut SixelImageStore>,
     styled_underlines: bool,
@@ -296,6 +298,9 @@ fn serialize_chunks(
         vte_output.push_str(sixel_vte);
         vte_output.push_str(restore_cursor_position);
     }
+    if let Some(kitty_chunks) = kitty_chunks {
+        vte_output.push_str(&KittyImageState::serialize_chunks(kitty_chunks));
+    }
     Ok(vte_output)
 }
 
@@ -303,6 +308,18 @@ type AbsoluteMiddleStart = usize;
 type AbsoluteMiddleEnd = usize;
 type PadLeftEndBy = usize;
 type PadRightStartBy = usize;
+
+fn kitty_delete_all_vte() -> String {
+    "\u{1b}_Ga=d,d=A\u{1b}\\".to_string()
+}
+
+fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
+    if original == 0 {
+        0
+    } else {
+        ((total as u64 * kept as u64) / original as u64) as u32
+    }
+}
 fn adjust_middle_segment_for_wide_chars(
     middle_start: usize,
     middle_end: usize,
@@ -356,6 +373,8 @@ pub struct Output {
     post_vte_instructions: HashMap<ClientId, Vec<String>>,
     client_character_chunks: HashMap<ClientId, Vec<CharacterChunk>>,
     sixel_chunks: HashMap<ClientId, Vec<SixelImageChunk>>,
+    kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
+    last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
     link_handler: Option<Rc<RefCell<LinkHandler>>>,
     sixel_image_store: Rc<RefCell<SixelImageStore>>,
     character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
@@ -368,6 +387,19 @@ pub struct Output {
 }
 
 impl Output {
+    fn kitty_scene_is_dirty(&self) -> bool {
+        let mut client_ids = std::collections::HashSet::new();
+        client_ids.extend(self.kitty_chunks.keys().copied());
+        client_ids.extend(self.last_rendered_kitty_chunks.keys().copied());
+        client_ids.into_iter().any(|client_id| {
+            self.kitty_chunks.get(&client_id).cloned().unwrap_or_default()
+                != self
+                    .last_rendered_kitty_chunks
+                    .get(&client_id)
+                    .cloned()
+                    .unwrap_or_default()
+        })
+    }
     pub fn new(
         sixel_image_store: Rc<RefCell<SixelImageStore>>,
         character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
@@ -381,6 +413,17 @@ impl Output {
             osc8_hyperlinks,
             ..Default::default()
         }
+    }
+    pub fn set_last_rendered_kitty_chunks(
+        &mut self,
+        last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
+    ) {
+        self.last_rendered_kitty_chunks = last_rendered_kitty_chunks;
+    }
+    pub fn take_last_rendered_kitty_chunks(
+        &mut self,
+    ) -> HashMap<ClientId, Vec<KittyImageChunk>> {
+        std::mem::take(&mut self.last_rendered_kitty_chunks)
     }
     pub fn add_clients(
         &mut self,
@@ -517,6 +560,65 @@ impl Output {
             }
         }
     }
+    pub fn add_kitty_image_chunks_to_client(
+        &mut self,
+        client_id: ClientId,
+        kitty_image_chunks: Vec<KittyImageChunk>,
+        z_index: Option<usize>,
+    ) {
+        let mut kitty_chunks = if let Some(floating_panes_stack) = &self.floating_panes_stack {
+            floating_panes_stack.visible_kitty_image_chunks(kitty_image_chunks, z_index)
+        } else {
+            kitty_image_chunks
+        };
+        let entry = self.kitty_chunks.entry(client_id).or_insert_with(Vec::new);
+        entry.append(&mut kitty_chunks);
+    }
+    pub fn add_kitty_image_chunks_to_multiple_clients(
+        &mut self,
+        kitty_image_chunks: Vec<KittyImageChunk>,
+        client_ids: impl Iterator<Item = ClientId>,
+        z_index: Option<usize>,
+    ) {
+        let kitty_chunks = if let Some(floating_panes_stack) = &self.floating_panes_stack {
+            floating_panes_stack.visible_kitty_image_chunks(kitty_image_chunks, z_index)
+        } else {
+            kitty_image_chunks
+        };
+        for client_id in client_ids {
+            let entry = self.kitty_chunks.entry(client_id).or_insert_with(Vec::new);
+            entry.append(&mut kitty_chunks.clone());
+        }
+    }
+    pub fn add_image_chunks_to_client(
+        &mut self,
+        client_id: ClientId,
+        image_chunks: Vec<ImageChunk>,
+        z_index: Option<usize>,
+    ) {
+        let (sixel_chunks, kitty_chunks) = ImageChunk::split_by_protocol(image_chunks);
+        self.add_sixel_image_chunks_to_client(client_id, sixel_chunks, z_index);
+        self.add_kitty_image_chunks_to_client(client_id, kitty_chunks, z_index);
+    }
+    pub fn add_image_chunks_to_multiple_clients(
+        &mut self,
+        image_chunks: Vec<ImageChunk>,
+        client_ids: impl Iterator<Item = ClientId>,
+        z_index: Option<usize>,
+    ) {
+        let client_ids: Vec<ClientId> = client_ids.collect();
+        let (sixel_chunks, kitty_chunks) = ImageChunk::split_by_protocol(image_chunks);
+        self.add_sixel_image_chunks_to_multiple_clients(
+            sixel_chunks,
+            client_ids.iter().copied(),
+            z_index,
+        );
+        self.add_kitty_image_chunks_to_multiple_clients(
+            kitty_chunks,
+            client_ids.iter().copied(),
+            z_index,
+        );
+    }
     pub fn serialize(&mut self) -> Result<HashMap<ClientId, String>> {
         let err_context = || "failed to serialize output to clients".to_string();
 
@@ -524,14 +626,34 @@ impl Output {
 
         for (client_id, client_character_chunks) in self.client_character_chunks.drain() {
             let mut client_serialized_render_instructions = String::new();
+            let current_kitty_chunks = self.kitty_chunks.remove(&client_id).unwrap_or_default();
 
             // append pre-vte instructions for this client
+            let mut pre_vte_clears_display = false;
             if let Some(pre_vte_instructions_for_client) =
                 self.pre_vte_instructions.remove(&client_id)
             {
                 for vte_instruction in pre_vte_instructions_for_client {
+                    if vte_instruction.contains("\u{1b}[2J") {
+                        pre_vte_clears_display = true;
+                    }
                     client_serialized_render_instructions.push_str(&vte_instruction);
                 }
+            }
+
+            let previous_kitty_chunks = if pre_vte_clears_display {
+                vec![]
+            } else {
+                self.last_rendered_kitty_chunks
+                    .get(&client_id)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let kitty_scene_changed = previous_kitty_chunks != current_kitty_chunks;
+            if kitty_scene_changed {
+                client_serialized_render_instructions.push_str("\u{1b}[s");
+                client_serialized_render_instructions.push_str(&kitty_delete_all_vte());
+                client_serialized_render_instructions.push_str("\u{1b}[u");
             }
 
             // append the actual vte
@@ -539,6 +661,7 @@ impl Output {
                 &serialize_chunks(
                     client_character_chunks,
                     self.sixel_chunks.get(&client_id),
+                    if kitty_scene_changed { Some(&current_kitty_chunks) } else { None },
                     self.link_handler.as_mut(),
                     Some(&mut self.sixel_image_store.borrow_mut()),
                     self.styled_underlines,
@@ -556,6 +679,7 @@ impl Output {
                     client_serialized_render_instructions.push_str(&vte_instruction);
                 }
             }
+            self.last_rendered_kitty_chunks.insert(client_id, current_kitty_chunks);
             serialized_render_instructions.insert(client_id, client_serialized_render_instructions);
         }
         Ok(serialized_render_instructions)
@@ -572,12 +696,17 @@ impl Output {
 
         for (client_id, client_character_chunks) in self.client_character_chunks.drain() {
             let mut client_serialized_render_instructions = String::new();
+            let current_kitty_chunks = self.kitty_chunks.remove(&client_id).unwrap_or_default();
 
             // append pre-vte instructions for this client
+            let mut pre_vte_clears_display = false;
             if let Some(pre_vte_instructions_for_client) =
                 self.pre_vte_instructions.remove(&client_id)
             {
                 for vte_instruction in pre_vte_instructions_for_client {
+                    if vte_instruction.contains("\u{1b}[2J") {
+                        pre_vte_clears_display = true;
+                    }
                     client_serialized_render_instructions.push_str(&vte_instruction);
                 }
             }
@@ -602,11 +731,27 @@ impl Output {
                 }
             }
 
+            let previous_kitty_chunks = if pre_vte_clears_display {
+                vec![]
+            } else {
+                self.last_rendered_kitty_chunks
+                    .get(&client_id)
+                    .cloned()
+                    .unwrap_or_default()
+            };
+            let kitty_scene_changed = previous_kitty_chunks != current_kitty_chunks;
+            if kitty_scene_changed {
+                client_serialized_render_instructions.push_str("\u{1b}[s");
+                client_serialized_render_instructions.push_str(&kitty_delete_all_vte());
+                client_serialized_render_instructions.push_str("\u{1b}[u");
+            }
+
             // append the actual vte with size constraints
             client_serialized_render_instructions.push_str(
                 &serialize_chunks(
                     client_character_chunks,
                     self.sixel_chunks.get(&client_id),
+                    if kitty_scene_changed { Some(&current_kitty_chunks) } else { None },
                     self.link_handler.as_mut(),
                     Some(&mut self.sixel_image_store.borrow_mut()),
                     self.styled_underlines,
@@ -636,6 +781,7 @@ impl Output {
                 }
             }
 
+            self.last_rendered_kitty_chunks.insert(client_id, current_kitty_chunks);
             serialized_render_instructions.insert(client_id, client_serialized_render_instructions);
         }
         Ok(serialized_render_instructions)
@@ -645,11 +791,14 @@ impl Output {
             || !self.post_vte_instructions.is_empty()
             || self.client_character_chunks.values().any(|c| !c.is_empty())
             || self.sixel_chunks.values().any(|c| !c.is_empty())
+            || self.kitty_chunks.values().any(|c| !c.is_empty())
+            || self.kitty_scene_is_dirty()
     }
     pub fn has_rendered_assets(&self) -> bool {
         // pre_vte and post_vte are not considered rendered assets as they should not be visible
         self.client_character_chunks.values().any(|c| !c.is_empty())
             || self.sixel_chunks.values().any(|c| !c.is_empty())
+            || self.kitty_chunks.values().any(|c| !c.is_empty())
     }
     pub fn cursor_is_visible(
         &mut self,
@@ -986,6 +1135,85 @@ impl FloatingPanesStack {
         }
         uncovered_chunks
     }
+    pub fn visible_kitty_image_chunks(
+        &self,
+        mut kitty_image_chunks: Vec<KittyImageChunk>,
+        z_index: Option<usize>,
+    ) -> Vec<KittyImageChunk> {
+        let z_index = z_index.unwrap_or(0);
+        let mut chunks_to_check: Vec<KittyImageChunk> = kitty_image_chunks.drain(..).collect();
+        let panes_to_check = self.layers.iter().skip(z_index);
+        for pane_geom in panes_to_check {
+            let chunks_against_this_pane: Vec<KittyImageChunk> = chunks_to_check.drain(..).collect();
+            for k_chunk in chunks_against_this_pane {
+                let mut uncovered_chunks = self.remove_covered_kitty_parts(pane_geom, &k_chunk);
+                chunks_to_check.append(&mut uncovered_chunks);
+            }
+        }
+        chunks_to_check
+    }
+    fn remove_covered_kitty_parts(
+        &self,
+        pane_geom: &PaneGeom,
+        k_chunk: &KittyImageChunk,
+    ) -> Vec<KittyImageChunk> {
+        let pane_top_edge = pane_geom.y;
+        let pane_left_edge = pane_geom.x;
+        let pane_bottom_edge = pane_geom.y + pane_geom.rows.as_usize().saturating_sub(1);
+        let pane_right_edge = pane_geom.x + pane_geom.cols.as_usize().saturating_sub(1);
+        let chunk_top_edge = k_chunk.cell_y;
+        let chunk_left_edge = k_chunk.cell_x;
+        let chunk_bottom_edge = k_chunk.cell_y + k_chunk.rows.saturating_sub(1);
+        let chunk_right_edge = k_chunk.cell_x + k_chunk.columns.saturating_sub(1);
+        let mut uncovered = vec![];
+        let covers_completely = pane_top_edge <= chunk_top_edge
+            && pane_bottom_edge >= chunk_bottom_edge
+            && pane_left_edge <= chunk_left_edge
+            && pane_right_edge >= chunk_right_edge;
+        if covers_completely {
+            return uncovered;
+        }
+        let intersects_vertically = (pane_left_edge >= chunk_left_edge && pane_left_edge <= chunk_right_edge)
+            || (pane_right_edge >= chunk_left_edge && pane_right_edge <= chunk_right_edge)
+            || (pane_left_edge <= chunk_left_edge && pane_right_edge >= chunk_right_edge);
+        let intersects_horizontally = (pane_top_edge >= chunk_top_edge && pane_top_edge <= chunk_bottom_edge)
+            || (pane_bottom_edge >= chunk_top_edge && pane_bottom_edge <= chunk_bottom_edge)
+            || (pane_top_edge <= chunk_top_edge && pane_bottom_edge >= chunk_bottom_edge);
+        if pane_top_edge > chunk_top_edge && pane_top_edge <= chunk_bottom_edge && intersects_vertically {
+            let kept_rows = pane_top_edge - chunk_top_edge;
+            uncovered.push(KittyImageChunk { rows: kept_rows, source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows), ..k_chunk.clone() });
+        }
+        if pane_bottom_edge >= chunk_top_edge && pane_bottom_edge < chunk_bottom_edge && intersects_vertically {
+            let removed_rows = pane_bottom_edge + 1 - chunk_top_edge;
+            let kept_rows = k_chunk.rows.saturating_sub(removed_rows);
+            uncovered.push(KittyImageChunk {
+                cell_y: pane_bottom_edge + 1,
+                rows: kept_rows,
+                source_y: k_chunk.source_y + scale_u32(k_chunk.source_height, removed_rows, k_chunk.rows),
+                source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
+                ..k_chunk.clone()
+            });
+        }
+        if pane_left_edge > chunk_left_edge && pane_left_edge <= chunk_right_edge && intersects_horizontally {
+            let kept_cols = pane_left_edge - chunk_left_edge;
+            uncovered.push(KittyImageChunk { columns: kept_cols, source_width: scale_u32(k_chunk.source_width, kept_cols, k_chunk.columns), ..k_chunk.clone() });
+        }
+        if pane_right_edge >= chunk_left_edge && pane_right_edge < chunk_right_edge && intersects_horizontally {
+            let removed_cols = pane_right_edge + 1 - chunk_left_edge;
+            let kept_cols = k_chunk.columns.saturating_sub(removed_cols);
+            uncovered.push(KittyImageChunk {
+                cell_x: pane_right_edge + 1,
+                columns: kept_cols,
+                source_x: k_chunk.source_x + scale_u32(k_chunk.source_width, removed_cols, k_chunk.columns),
+                source_width: scale_u32(k_chunk.source_width, kept_cols, k_chunk.columns),
+                ..k_chunk.clone()
+            });
+        }
+        if uncovered.is_empty() {
+            uncovered.push(k_chunk.clone());
+        }
+        uncovered
+    }
     pub fn cursor_is_visible(
         &self,
         cursor_x: usize,
@@ -1031,6 +1259,44 @@ pub struct SixelImageChunk {
     pub sixel_image_pixel_width: usize,
     pub sixel_image_pixel_height: usize,
     pub sixel_image_id: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct KittyImageChunk {
+    pub image_id: u32,
+    pub placement_id: Option<u32>,
+    pub cell_x: usize,
+    pub cell_y: usize,
+    pub columns: usize,
+    pub rows: usize,
+    pub source_x: u32,
+    pub source_y: u32,
+    pub source_width: u32,
+    pub source_height: u32,
+    pub z_index: i32,
+    pub x_offset: u32,
+    pub y_offset: u32,
+    pub png_data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub enum ImageChunk {
+    Sixel(SixelImageChunk),
+    Kitty(KittyImageChunk),
+}
+
+impl ImageChunk {
+    pub fn split_by_protocol(chunks: Vec<ImageChunk>) -> (Vec<SixelImageChunk>, Vec<KittyImageChunk>) {
+        let mut sixel_chunks = vec![];
+        let mut kitty_chunks = vec![];
+        for chunk in chunks {
+            match chunk {
+                ImageChunk::Sixel(chunk) => sixel_chunks.push(chunk),
+                ImageChunk::Kitty(chunk) => kitty_chunks.push(chunk),
+            }
+        }
+        (sixel_chunks, kitty_chunks)
+    }
 }
 
 impl CharacterChunk {

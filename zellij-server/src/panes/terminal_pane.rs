@@ -1,4 +1,4 @@
-use crate::output::{CharacterChunk, SixelImageChunk};
+use crate::output::CharacterChunk;
 use crate::panes::sixel::SixelImageStore;
 use crate::panes::LinkHandler;
 use crate::panes::{
@@ -354,7 +354,11 @@ impl Pane for TerminalPane {
     fn render(
         &mut self,
         _client_id: Option<ClientId>,
-    ) -> Result<Option<(Vec<CharacterChunk>, Option<String>, Vec<SixelImageChunk>)>> {
+    ) -> Result<Option<(
+        Vec<CharacterChunk>,
+        Option<String>,
+        Vec<crate::output::ImageChunk>,
+    )>> {
         if self.should_render() {
             let content_x = self.get_content_x();
             let content_y = self.get_content_y();
@@ -373,6 +377,13 @@ impl Pane for TerminalPane {
         } else {
             Ok(None)
         }
+    }
+    fn visible_kitty_image_chunks(
+        &self,
+        _client_id: Option<ClientId>,
+    ) -> Vec<crate::output::KittyImageChunk> {
+        self.grid
+            .visible_kitty_image_chunks(self.get_content_x(), self.get_content_y())
     }
     fn render_frame(
         &mut self,

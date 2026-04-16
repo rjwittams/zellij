@@ -111,10 +111,13 @@ pub(crate) fn namespace_notification_id(metadata: &str, pane_id: u32) -> String 
 use vte::{Params, Perform};
 use zellij_utils::{consts::VERSION, shared::version_number};
 
-use crate::output::{CharacterChunk, HighlightSelection, OutputBuffer, SixelImageChunk};
+use crate::output::{
+    CharacterChunk, HighlightSelection, KittyImageChunk, OutputBuffer, SixelImageChunk,
+};
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
 use crate::panes::link_handler::LinkHandler;
+use crate::panes::pane_image_scene::{FlowAnchor, PaneImageScene};
 use crate::panes::search::SearchResult;
 use crate::panes::terminal_character::{
     AnsiCode, CharsetIndex, Cursor, CursorShape, RcCharacterStyles, StandardCharset,
@@ -654,7 +657,7 @@ pub struct Grid {
     pub pending_forwarded_queries: Vec<crate::host_query::HostQuery>,
     ui_component_bytes: Option<Vec<u8>>,
     apc_bytes: Option<Vec<u8>>,
-    pending_kitty_graphics_apc_sequences: Vec<Vec<u8>>,
+    image_scene: PaneImageScene,
     style: Style,
     debug: bool,
     arrow_fonts: bool,
@@ -975,7 +978,7 @@ impl Grid {
             pending_forwarded_queries: Vec::new(),
             ui_component_bytes: None,
             apc_bytes: None,
-            pending_kitty_graphics_apc_sequences: Vec::new(),
+            image_scene: PaneImageScene::default(),
             style,
             debug,
             arrow_fonts,
@@ -1082,6 +1085,72 @@ impl Grid {
     fn set_active_charset(&mut self, index: CharsetIndex) {
         self.active_charset = index;
     }
+    fn canonical_line_count(rows: &VecDeque<Row>) -> usize {
+        rows.iter().filter(|row| row.is_canonical).count()
+    }
+
+    fn full_cursor_flow_anchor(&self) -> FlowAnchor {
+        let canonical_lines_above = Self::canonical_line_count(&self.lines_above);
+        FlowAnchor::CanonicalLine {
+            canonical_line_index: canonical_lines_above + self.cursor_canonical_line_index(),
+            offset_in_line: self.cursor_index_in_canonical_line(),
+        }
+    }
+
+    fn resolve_flow_anchor(&self, anchor: &FlowAnchor) -> Option<(usize, usize)> {
+        match anchor {
+            FlowAnchor::LogicalRow { logical_row, column } => Some((*logical_row, *column)),
+            FlowAnchor::CanonicalLine {
+                canonical_line_index,
+                offset_in_line,
+            } => self.resolve_canonical_line_anchor(*canonical_line_index, *offset_in_line),
+        }
+    }
+
+    fn resolve_canonical_line_anchor(
+        &self,
+        canonical_line_index: usize,
+        offset_in_line: usize,
+    ) -> Option<(usize, usize)> {
+        if self.width == 0 {
+            return None;
+        }
+        let mut canonical_lines_traversed = 0;
+        let all_rows: Vec<&Row> = self
+            .lines_above
+            .iter()
+            .chain(self.viewport.iter())
+            .collect();
+        let mut row_index = 0;
+        while row_index < all_rows.len() {
+            let row = all_rows.get(row_index)?;
+            if row.is_canonical {
+                if canonical_lines_traversed == canonical_line_index {
+                    let canonical_row_start = row_index;
+                    let mut display_row_count = 1;
+                    while canonical_row_start + display_row_count < all_rows.len()
+                        && !all_rows[canonical_row_start + display_row_count].is_canonical
+                    {
+                        display_row_count += 1;
+                    }
+                    let requested_row_in_line = offset_in_line / self.width;
+                    let clamped_row_in_line = requested_row_in_line
+                        .min(display_row_count.saturating_sub(1));
+                    let row_in_line = canonical_row_start + clamped_row_in_line;
+                    let column = if clamped_row_in_line < requested_row_in_line {
+                        all_rows[row_in_line].width().min(self.width)
+                    } else {
+                        offset_in_line % self.width
+                    };
+                    return Some((row_in_line, column));
+                }
+                canonical_lines_traversed += 1;
+            }
+            row_index += 1;
+        }
+        None
+    }
+
     fn cursor_canonical_line_index(&self) -> usize {
         let mut cursor_canonical_line_index = 0;
         let mut canonical_lines_traversed = 0;
@@ -1112,6 +1181,22 @@ impl Grid {
         }
         cursor_index_in_canonical_line
     }
+    fn saved_cursor_canonical_line_index(&self) -> Option<usize> {
+        let saved_cursor_position = self.saved_cursor_position.as_ref()?;
+        let mut saved_cursor_canonical_line_index = 0;
+        let mut canonical_lines_traversed = 0;
+        for (i, line) in self.viewport.iter().enumerate() {
+            if line.is_canonical {
+                saved_cursor_canonical_line_index = canonical_lines_traversed;
+                canonical_lines_traversed += 1;
+            }
+            if i == saved_cursor_position.y {
+                break;
+            }
+        }
+        Some(saved_cursor_canonical_line_index)
+    }
+
     fn saved_cursor_index_in_canonical_line(&self) -> Option<usize> {
         if let Some(saved_cursor_position) = self.saved_cursor_position.as_ref() {
             let mut cursor_canonical_line_index = 0;
@@ -1268,6 +1353,7 @@ impl Grid {
             self.horizontal_tabstops = create_horizontal_tabstops(new_columns);
             let mut cursor_canonical_line_index = self.cursor_canonical_line_index();
             let cursor_index_in_canonical_line = self.cursor_index_in_canonical_line();
+            let saved_cursor_canonical_line_index = self.saved_cursor_canonical_line_index();
             let saved_cursor_index_in_canonical_line = self.saved_cursor_index_in_canonical_line();
             let mut viewport_canonical_lines = vec![];
             for mut row in self.viewport.drain(..) {
@@ -1337,11 +1423,19 @@ impl Grid {
 
             let mut new_cursor_y = self.canonical_line_y_coordinates(cursor_canonical_line_index)
                 + (cursor_index_in_canonical_line / new_columns);
-            let mut saved_cursor_y_coordinates =
-                self.saved_cursor_position.as_ref().map(|saved_cursor| {
-                    self.canonical_line_y_coordinates(saved_cursor.y)
-                        + saved_cursor_index_in_canonical_line.as_ref().unwrap() / new_columns
-                });
+            let mut saved_cursor_y_coordinates = match (
+                saved_cursor_canonical_line_index,
+                saved_cursor_index_in_canonical_line.as_ref(),
+            ) {
+                (
+                    Some(saved_cursor_canonical_line_index),
+                    Some(saved_cursor_index_in_canonical_line),
+                ) => Some(
+                    self.canonical_line_y_coordinates(saved_cursor_canonical_line_index)
+                        + saved_cursor_index_in_canonical_line / new_columns,
+                ),
+                _ => None,
+            };
 
             // A cursor at EOL has two equivalent positions - end of this line or beginning of
             // next. If not already at the beginning of line, bias to EOL so add character logic
@@ -1557,16 +1651,35 @@ impl Grid {
             },
         }
     }
+    pub fn visible_kitty_image_chunks(
+        &self,
+        content_x: usize,
+        content_y: usize,
+    ) -> Vec<KittyImageChunk> {
+        self.image_scene.visible_kitty_image_chunks(
+            content_x,
+            content_y,
+            self.lines_above.len(),
+            self.width,
+            self.height,
+            *self.character_cell_size.borrow(),
+            |anchor| self.resolve_flow_anchor(anchor),
+        )
+    }
     pub fn render(
         &mut self,
         content_x: usize,
         content_y: usize,
         style: &Style,
-    ) -> Result<Option<(Vec<CharacterChunk>, Option<String>, Vec<SixelImageChunk>)>> {
+    ) -> Result<Option<(
+        Vec<CharacterChunk>,
+        Option<String>,
+        Vec<crate::output::ImageChunk>,
+    )>> {
         if self.lock_renders {
             return Ok(None);
         }
-        let mut raw_vte_output = String::new();
+        let raw_vte_output = String::new();
 
         let (mut character_chunks, sixel_image_chunks) = self.read_changes(content_x, content_y);
 
@@ -1658,23 +1771,15 @@ impl Grid {
                 }
             }
         }
-        if !self.pending_kitty_graphics_apc_sequences.is_empty() {
-            let cursor_x = content_x + self.cursor.x + 1;
-            let cursor_y = content_y + self.cursor.y + 1;
-            raw_vte_output.push_str("\u{1b}[s");
-            raw_vte_output.push_str(&format!("\u{1b}[{};{}H", cursor_y, cursor_x));
-            for apc_sequence in self.pending_kitty_graphics_apc_sequences.drain(..) {
-                raw_vte_output.push_str("\u{1b}_");
-                raw_vte_output.push_str(&String::from_utf8_lossy(&apc_sequence));
-                raw_vte_output.push_str("\u{1b}\\");
-            }
-            raw_vte_output.push_str("\u{1b}[u");
-        }
+        let image_chunks: Vec<crate::output::ImageChunk> = sixel_image_chunks
+            .into_iter()
+            .map(crate::output::ImageChunk::Sixel)
+            .collect();
 
         return Ok(Some((
             character_chunks,
             Some(raw_vte_output),
-            sixel_image_chunks,
+            image_chunks,
         )));
     }
     /// Returns the cursor position and whether it is visible.
@@ -2300,6 +2405,7 @@ impl Grid {
         if let Some(images_to_reap) = self.sixel_grid.clear() {
             self.sixel_grid.reap_images(images_to_reap);
         }
+        self.image_scene.clear();
     }
     fn set_preceding_character(&mut self, terminal_character: TerminalCharacter) {
         self.preceding_char = Some(terminal_character);
@@ -2923,16 +3029,12 @@ impl Grid {
             subtract_isize_from_usize(self.scrollback_buffer_lines, transferred_rows_count);
     }
     fn move_cursor_down_by_pixels(&mut self, pixel_count: usize) {
-        if let Some(character_cell_size) = {
-            let c = *self.character_cell_size.borrow();
-            c
-        } {
-            // thanks borrow checker
-            let pixel_height = character_cell_size.height;
-            let to_move = (pixel_count as f64 / pixel_height as f64).ceil() as usize;
-            for _ in 0..to_move {
-                self.add_canonical_line();
-            }
+        let to_move = PaneImageScene::rows_for_pixel_height(
+            pixel_count,
+            *self.character_cell_size.borrow(),
+        );
+        for _ in 0..to_move {
+            self.add_canonical_line();
         }
     }
     fn current_cursor_pixel_coordinates(&self) -> Option<(usize, usize)> {
@@ -3457,8 +3559,26 @@ impl Perform for Grid {
         }
         if let Some(apc_bytes) = self.apc_bytes.take() {
             if apc_bytes.first() == Some(&b'G') {
-                self.pending_kitty_graphics_apc_sequences.push(apc_bytes);
-                self.mark_for_rerender();
+                let character_cell_size = *self.character_cell_size.borrow();
+                if let Some(image_effect) = self.image_scene.handle_kitty_apc(
+                    &apc_bytes,
+                    self.full_cursor_flow_anchor(),
+                    self.cursor.x,
+                    self.lines_above.len() + self.cursor.y,
+                    character_cell_size,
+                ) {
+                    match image_effect.placement.content_flow {
+                        crate::panes::pane_image_scene::ImageContentFlow::NoCursorMovement => {},
+                        crate::panes::pane_image_scene::ImageContentFlow::MoveCursorByCells {
+                            ..
+                        } => {
+                            for _ in 0..image_effect.placement.rows() {
+                                self.add_canonical_line();
+                            }
+                        },
+                    }
+                    self.mark_for_rerender();
+                }
             }
         }
     }
@@ -3879,6 +3999,7 @@ impl Perform for Grid {
                     if let Some(images_to_reap) = self.sixel_grid.clear() {
                         self.sixel_grid.reap_images(images_to_reap);
                     }
+                    self.image_scene.clear();
                 } else if clear_type == 3 {
                     self.clear_lines_above();
                     if let Some(images_to_reap) = self.sixel_grid.clear() {
@@ -3934,6 +4055,7 @@ impl Perform for Grid {
                                     &mut self.viewport,
                                     &mut self.cursor,
                                     &mut self.sixel_grid,
+                                    &mut self.image_scene,
                                     &mut self.supports_kitty_keyboard_protocol,
                                 );
                             }
@@ -4042,11 +4164,13 @@ impl Perform for Grid {
                                 &mut self.sixel_grid,
                                 SixelGrid::new(self.character_cell_size.clone(), sixel_image_store),
                             );
+                            let current_image_scene = std::mem::take(&mut self.image_scene);
                             self.alternate_screen_state = Some(AlternateScreenState::new(
                                 current_lines_above,
                                 current_viewport,
                                 current_cursor,
                                 alternate_sixelgrid,
+                                current_image_scene,
                                 current_supports_kitty_keyboard_protocol,
                             ));
                             self.clear_viewport_before_rendering = true;
@@ -4554,6 +4678,7 @@ pub struct AlternateScreenState {
     viewport: VecDeque<Row>,
     cursor: Cursor,
     sixel_grid: SixelGrid,
+    image_scene: PaneImageScene,
     supports_kitty_keyboard_protocol: bool,
 }
 impl AlternateScreenState {
@@ -4562,6 +4687,7 @@ impl AlternateScreenState {
         viewport: VecDeque<Row>,
         cursor: Cursor,
         sixel_grid: SixelGrid,
+        image_scene: PaneImageScene,
         supports_kitty_keyboard_protocol: bool,
     ) -> Self {
         AlternateScreenState {
@@ -4569,6 +4695,7 @@ impl AlternateScreenState {
             viewport,
             cursor,
             sixel_grid,
+            image_scene,
             supports_kitty_keyboard_protocol,
         }
     }
@@ -4578,12 +4705,14 @@ impl AlternateScreenState {
         viewport: &mut VecDeque<Row>,
         cursor: &mut Cursor,
         sixel_grid: &mut SixelGrid,
+        image_scene: &mut PaneImageScene,
         supports_kitty_keyboard_protocol: &mut bool,
     ) {
         std::mem::swap(&mut self.lines_above, lines_above);
         std::mem::swap(&mut self.viewport, viewport);
         std::mem::swap(&mut self.cursor, cursor);
         std::mem::swap(&mut self.sixel_grid, sixel_grid);
+        std::mem::swap(&mut self.image_scene, image_scene);
         std::mem::swap(
             &mut self.supports_kitty_keyboard_protocol,
             supports_kitty_keyboard_protocol,

@@ -77,11 +77,11 @@ impl<'a> PaneContentsAndUi<'a> {
         // here we drop the fake cursors so that their lines will be updated
         // and we can clear them from the UI below
         drop(self.pane.drain_fake_cursors());
+        let clients: Vec<ClientId> = clients.collect();
 
-        if let Some((character_chunks, raw_vte_output, sixel_image_chunks)) =
+        if let Some((character_chunks, raw_vte_output, image_chunks)) =
             self.pane.render(None).context(err_context)?
         {
-            let clients: Vec<ClientId> = clients.collect();
             self.output
                 .add_character_chunks_to_multiple_clients(
                     character_chunks,
@@ -89,8 +89,10 @@ impl<'a> PaneContentsAndUi<'a> {
                     self.z_index,
                 )
                 .context(err_context)?;
+            let (sixel_chunks, _kitty_chunks_from_render) =
+                crate::output::ImageChunk::split_by_protocol(image_chunks);
             self.output.add_sixel_image_chunks_to_multiple_clients(
-                sixel_image_chunks,
+                sixel_chunks,
                 clients.iter().copied(),
                 self.z_index,
             );
@@ -108,12 +110,17 @@ impl<'a> PaneContentsAndUi<'a> {
                 }
             }
         }
+        self.output.add_kitty_image_chunks_to_multiple_clients(
+            self.pane.visible_kitty_image_chunks(None),
+            clients.iter().copied(),
+            self.z_index,
+        );
         Ok(())
     }
     pub fn render_pane_contents_for_client(&mut self, client_id: ClientId) -> Result<()> {
         let err_context = || format!("failed to render pane contents for client {client_id}");
 
-        if let Some((character_chunks, raw_vte_output, sixel_image_chunks)) = self
+        if let Some((character_chunks, raw_vte_output, image_chunks)) = self
             .pane
             .render(Some(client_id))
             .with_context(err_context)?
@@ -121,11 +128,10 @@ impl<'a> PaneContentsAndUi<'a> {
             self.output
                 .add_character_chunks_to_client(client_id, character_chunks, self.z_index)
                 .with_context(err_context)?;
-            self.output.add_sixel_image_chunks_to_client(
-                client_id,
-                sixel_image_chunks,
-                self.z_index,
-            );
+            let (sixel_chunks, _kitty_chunks_from_render) =
+                crate::output::ImageChunk::split_by_protocol(image_chunks);
+            self.output
+                .add_sixel_image_chunks_to_client(client_id, sixel_chunks, self.z_index);
             if let Some(raw_vte_output) = raw_vte_output {
                 self.output.add_post_vte_instruction_to_client(
                     client_id,
@@ -138,6 +144,11 @@ impl<'a> PaneContentsAndUi<'a> {
                 );
             }
         }
+        self.output.add_kitty_image_chunks_to_client(
+            client_id,
+            self.pane.visible_kitty_image_chunks(Some(client_id)),
+            self.z_index,
+        );
         Ok(())
     }
     pub fn render_fake_cursor_if_needed(&mut self, client_id: ClientId) -> Result<()> {

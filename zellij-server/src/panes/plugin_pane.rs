@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::time::Instant;
 
-use crate::output::{CharacterChunk, SixelImageChunk};
+use crate::output::CharacterChunk;
 use crate::panes::{
     grid::Grid,
     sixel::SixelImageStore,
@@ -393,7 +393,11 @@ impl Pane for PluginPane {
     fn render(
         &mut self,
         client_id: Option<ClientId>,
-    ) -> Result<Option<(Vec<CharacterChunk>, Option<String>, Vec<SixelImageChunk>)>> {
+    ) -> Result<Option<(
+        Vec<CharacterChunk>,
+        Option<String>,
+        Vec<crate::output::ImageChunk>,
+    )>> {
         if client_id.is_none() {
             return Ok(None);
         }
@@ -418,6 +422,15 @@ impl Pane for PluginPane {
             }
         }
         Ok(None)
+    }
+    fn visible_kitty_image_chunks(
+        &self,
+        client_id: Option<ClientId>,
+    ) -> Vec<crate::output::KittyImageChunk> {
+        client_id
+            .and_then(|client_id| self.grids.get(&client_id))
+            .map(|grid| grid.visible_kitty_image_chunks(self.get_content_x(), self.get_content_y()))
+            .unwrap_or_default()
     }
     fn render_frame(
         &mut self,
