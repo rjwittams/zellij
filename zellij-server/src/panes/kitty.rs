@@ -143,6 +143,16 @@ pub struct KittyImageInsertion {
 }
 
 impl KittyImageState {
+    pub fn image_chunk_data(&self, image_id: u32) -> Option<KittyImageData> {
+        self.images.get(&image_id).map(|image| image.chunk_data())
+    }
+
+    pub fn image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
+        self.images
+            .get(&image_id)
+            .map(|image| (image.width(), image.height()))
+    }
+
     fn finalize_pending_transmit(
         &mut self,
         anchor: FlowAnchor,

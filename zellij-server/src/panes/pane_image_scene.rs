@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use zellij_utils::pane_size::SizeInPixels;
 
 use crate::output::KittyImageChunk;
@@ -194,9 +196,19 @@ pub fn next_logical_placement_id() -> LogicalPlacementId {
     LogicalPlacementId(NEXT_LOGICAL_PLACEMENT_ID.fetch_add(1, Ordering::Relaxed))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KittyPlaceholderCell {
+    pub image_id: u32,
+    pub placement_id: Option<u32>,
+    pub placeholder_row: u16,
+    pub placeholder_col: u16,
+    pub anchor: FlowAnchor,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct PaneImageScene {
     kitty: KittyImageState,
+    kitty_placeholder_cells: Vec<KittyPlaceholderCell>,
 }
 
 impl PaneImageScene {
@@ -256,6 +268,10 @@ impl PaneImageScene {
             })
     }
 
+    pub fn add_kitty_placeholder_cell(&mut self, placeholder_cell: KittyPlaceholderCell) {
+        self.kitty_placeholder_cells.push(placeholder_cell);
+    }
+
     pub fn visible_kitty_image_chunks<F>(
         &self,
         content_x: usize,
@@ -269,18 +285,123 @@ impl PaneImageScene {
     where
         F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
     {
-        self.kitty.visible_chunks(
+        let mut chunks = self.kitty.visible_chunks(
             content_x,
             content_y,
             scrollback_size_in_lines,
             viewport_width,
             viewport_height,
             character_cell_size,
-            resolve_anchor,
-        )
+            &resolve_anchor,
+        );
+
+        let mut grouped_placeholder_cells: HashMap<(u32, Option<u32>), Vec<&KittyPlaceholderCell>> =
+            HashMap::new();
+        for placeholder_cell in &self.kitty_placeholder_cells {
+            grouped_placeholder_cells
+                .entry((placeholder_cell.image_id, placeholder_cell.placement_id))
+                .or_default()
+                .push(placeholder_cell);
+        }
+
+        for ((image_id, placement_id), placeholder_cells) in grouped_placeholder_cells {
+            let Some((image_width, image_height)) = self.kitty.image_dimensions(image_id) else {
+                continue;
+            };
+            let Some(image_data) = self.kitty.image_chunk_data(image_id) else {
+                continue;
+            };
+
+            let mut resolved_cells = vec![];
+            for cell in placeholder_cells {
+                let Some((logical_row, column)) = resolve_anchor(&cell.anchor) else {
+                    continue;
+                };
+                resolved_cells.push((
+                    logical_row,
+                    column,
+                    cell.placeholder_row as usize,
+                    cell.placeholder_col as usize,
+                ));
+            }
+            if resolved_cells.is_empty() {
+                continue;
+            }
+
+            let top_left_logical_row = resolved_cells
+                .iter()
+                .map(|(logical_row, _, placeholder_row, _)| logical_row.saturating_sub(*placeholder_row))
+                .min()
+                .unwrap_or(0);
+            let top_left_column = resolved_cells
+                .iter()
+                .map(|(_, column, _, placeholder_col)| column.saturating_sub(*placeholder_col))
+                .min()
+                .unwrap_or(0);
+            let columns = resolved_cells
+                .iter()
+                .map(|(_, _, _, placeholder_col)| *placeholder_col)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            let rows = resolved_cells
+                .iter()
+                .map(|(_, _, placeholder_row, _)| *placeholder_row)
+                .max()
+                .unwrap_or(0)
+                + 1;
+
+            let Some(projection) = project_placement_to_viewport(
+                top_left_logical_row,
+                top_left_column,
+                &PlacementOccupancy { columns, rows },
+                content_x,
+                content_y,
+                scrollback_size_in_lines,
+                viewport_width,
+                viewport_height,
+            ) else {
+                continue;
+            };
+
+            let source_x = if projection.clipped_left_cols > 0 {
+                ((image_width as u64 * projection.clipped_left_cols as u64) / columns as u64) as u32
+            } else {
+                0
+            };
+            let source_y = if projection.clipped_top_rows > 0 {
+                ((image_height as u64 * projection.clipped_top_rows as u64) / rows as u64) as u32
+            } else {
+                0
+            };
+            let source_width =
+                ((image_width as u64 * projection.columns as u64) / columns as u64) as u32;
+            let source_height =
+                ((image_height as u64 * projection.rows as u64) / rows as u64) as u32;
+
+            chunks.push(KittyImageChunk {
+                image_id,
+                placement_id,
+                cell_x: projection.cell_x,
+                cell_y: projection.cell_y,
+                columns: projection.columns,
+                rows: projection.rows,
+                source_x,
+                source_y,
+                source_width,
+                source_height,
+                z_index: 0,
+                x_offset: 0,
+                y_offset: 0,
+                image_data,
+            });
+        }
+
+        chunks
     }
 
     pub fn clear(&mut self) {
         self.kitty.clear();
+        self.kitty_placeholder_cells.clear();
     }
 }
