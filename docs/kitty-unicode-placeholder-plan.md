@@ -1,5 +1,14 @@
 # Kitty Unicode placeholder support plan
 
+Status: historical / transitional design note.
+
+This document is still useful for the original placeholder implementation shape and protocol notes,
+but it is no longer the main source of truth for current status or future architecture.
+
+Prefer these documents for current work:
+- `docs/kitty-graphics-checklist.md` for implementation/stabilization status
+- `docs/kitty-image-rearchitecture-sketch.md` for the next architecture pass
+
 Goal: support the real-app kitty path used by `ratatui-image` / Ghostty-style placeholder rendering.
 
 This builds on the existing Zellij kitty asset/placement work and the checklist in:
@@ -128,6 +137,43 @@ Definition of done:
 - clear/reset/alt-screen semantics remain correct
 - deletion semantics later hook into shared scene lifecycle
 
+## Findings from the smoke harness / terminal matrix
+
+The staged smoke harness now shows an important distinction between:
+- direct terminal behavior in Kitty / Ghostty / WezTerm
+- Zellij-interposed behavior
+
+Key findings:
+
+1. **Current placeholder support is now materially better than this document's midpoint captured**.
+   - Real apps can render.
+   - Restoring width-1 text-flow semantics for placeholder cells fixed the major Stage 4 smoke regression in Zellij-in-Kitty and Zellij-in-Ghostty.
+
+2. **Normalization and projection still matter**.
+   - Earlier direct Kitty/Ghostty vs Zellij differences were real.
+   - But the remaining Stage 5 issue turned out to be strongly tied to preserving one-dimensional explicit sizing semantics and matching Zellij's internal occupancy/projection math, not just placeholder wire-form fidelity.
+   - WezTerm still diverges materially both direct and interposed, so it remains a secondary comparison point rather than the primary design target.
+
+3. **Explicit placement sizing is a real tradeoff, not a trivial bug**.
+   - When both `c` and `r` are specified, the image is fit to the rectangle and may distort.
+   - When only one is specified, aspect ratio can be preserved, but overflow / layout mismatch can occur.
+   - Therefore, a simple serializer tweak is not a general fix.
+
+## Architectural conclusion
+
+The current shared scene direction is still correct, but we should avoid treating:
+- explicit placements
+- Unicode placeholder / virtual placements
+as fully interchangeable output modes.
+
+At the same time, the latest fixes show that the shared scene can preserve more native-looking behavior than this earlier note assumed, provided text-flow occupancy and explicit sizing semantics are modeled correctly.
+
+The likely path to better fidelity is:
+- keep a shared logical scene for ownership/lifecycle/reflow/composition
+- **preserve placeholder origin semantics** in the model
+- eventually prefer placeholder-preserving output for placeholder-originated kitty content
+  instead of always flattening everything into explicit `a=p`-style redraw.
+
 ## Known open questions
 
 1. Should first implementation target:
@@ -143,10 +189,13 @@ Definition of done:
    - exact row/col mapping
    - or just bounding-box image display for first proof
 
-## Recommended next coding step
-Implement **Phase 1 only** first:
-- detect placeholder text shape in `Grid::print(...)` / character ingestion
-- suppress raw glyph leakage
-- log/store enough metadata for one placeholder cell
+4. What minimum provenance should be kept so placeholder-originated content does not get irreversibly flattened into explicit-placement output semantics?
 
-Then extend to Phase 2 once the detection path is understood in practice.
+## Recommended next coding step
+Keep current behavior for compatibility, but add enough provenance to avoid digging deeper into the
+"everything becomes explicit redraw" hole.
+
+That suggests the next implementation step should be:
+- add output-mode / origin-mode metadata for kitty placements or chunks
+- keep current output behavior initially
+- then experiment with placeholder-preserving output for placeholder-originated content

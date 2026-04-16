@@ -68,27 +68,30 @@ Scope for now:
 - [ ] Requesting image ids via `I=`
 
 ### 6. Delete semantics
-- [ ] `a=d` delete command support
-- [ ] Delete all visible placements
+- [x] `a=d` delete command support for current real-app needs
+- [x] Delete all visible placements (`a=d,d=A`)
 - [ ] Delete by image id / placement id
 - [ ] Delete by cell / row / column / z-index
 - [ ] Upper/lower case storage-freeing semantics
 - [ ] Abort partial upload on delete during chunked transfer
 
 ### 7. Unicode placeholder / virtual placement mode
-This is the big missing real-app feature for `ratatui-image` / Ghostty-style integrations.
+This now works for real apps, and the smoke-harness placeholder stage is back to looking correct in Kitty/Ghostty-class behavior after restoring width-1 text-flow semantics for placeholder cells.
 
-- [ ] Support virtual placement creation with `U=1`
-- [ ] Support `a=T,U=1` combined transmit + virtual placement
-- [ ] Support `a=p,U=1` virtual placement without immediate explicit draw
-- [ ] Parse placeholder text cells using `U+10EEEE`
-- [ ] Parse row/column diacritics
-- [ ] Decode image id from foreground color
-- [ ] Decode placement id from underline color if needed
-- [ ] Treat placeholder cells as pane-flow-owned image anchors
-- [ ] Prevent raw placeholder glyph leakage into normal text rendering
-- [ ] Compose placeholder-backed image visibility into pane image scene
+- [x] Support virtual placement creation with `U=1`
+- [x] Support `a=T,U=1` combined transmit + virtual placement
+- [x] Support `a=p,U=1` virtual placement without immediate explicit draw
+- [x] Parse placeholder text cells using `U+10EEEE`
+- [x] Parse row/column diacritics
+- [x] Decode image id from foreground color
+- [x] Decode placement id from underline color if needed
+- [x] Treat placeholder cells as pane-flow-owned image anchors
+- [x] Prevent raw placeholder glyph leakage into normal text rendering
+- [x] Compose placeholder-backed image visibility into pane image scene
 - [ ] Reflow placeholder-backed images correctly with text
+- [x] Match smoke-harness placeholder fidelity well enough for current Kitty/Ghostty proof branch
+- [ ] Finish auditing native Kitty/Ghostty fidelity under more aggressive resize/reflow cases
+- [ ] Preserve placeholder semantics without WezTerm-like normalization artifacts
 
 ### 8. Relative placements
 - [ ] `P=` / `Q=` parent placement references
@@ -108,16 +111,46 @@ Deferred for now.
 - [ ] animation control
 - [ ] frame composition
 
+## Stabilization shortlist
+
+### Must stabilize now
+- [x] direct kitty query response used by real autodetection
+- [x] delete-all-visible lifecycle (`a=d,d=A`) for current real apps
+- [x] placeholder-backed image disappears when app explicitly deletes visible images
+- [ ] placeholder cleanup on erase/line clear/region clear beyond direct overwrite
+- [ ] resize/reflow sanity for both explicit and placeholder paths
+- [ ] tab/pane switch sanity across image and non-image states
+- [x] Stage 4 placeholder smoke behavior now looks correct in Zellij-in-Kitty and Zellij-in-Ghostty
+- [x] Stage 5 explicit sizing smoke behavior now looks correct in Zellij-in-Kitty and Zellij-in-Ghostty
+- [x] document current fidelity status clearly: Kitty/Ghostty smoke path now good, WezTerm still diverges similarly direct vs interposed
+
+### Defer until after stabilization
+- [ ] `f=24`
+- [ ] `o=z`
+- [ ] file/shared-memory media (`t=f/t/s`)
+- [ ] richer delete variants beyond current real-app needs
+- [ ] relative placements
+- [ ] quotas/eviction policy
+- [ ] animation
+
 ## Real-app checkpoints
 
 ### Already working
 - [x] Direct PNG kitty test script
 - [x] `chafa` immediate kitty path
 - [x] `chafa` autodetected kitty path in current environment
+- [x] `ratatui-image` / `flotilla` autodetected kitty path
+- [x] `yazi` kitty path with `ZELLIJ_SESSION_NAME` unset
 
 ### Next target
-- [ ] `flotilla` / `ratatui-image` splash via kitty
-  - likely blocked mainly on Unicode placeholders / virtual placements
+- [x] richer spec-driven smoke/example coverage
+  - [x] explicit PNG
+  - [x] explicit RGBA chunked
+  - [x] Unicode placeholders
+  - [x] query
+  - [x] delete-all-visible
+  - [ ] later: mixed sixel + kitty
+  - [ ] capture/record cross-terminal behavior matrix more formally
 
 ## Notes from the docs that matter architecturally
 - The protocol has a real distinction between:
@@ -129,3 +162,7 @@ Deferred for now.
 - `C=1` is the correct cursor policy for our redraw path.
 - Clear/reset/alt-screen semantics are protocol semantics, not just renderer details.
 - Unicode placeholder mode is not just another serializer detail; it is text-flow integrated.
+- Current proof branch shows that placeholder compatibility is achievable with a shared scene.
+- Earlier placeholder fidelity concerns were materially improved by restoring width-1 text-flow semantics for placeholder cells; the smoke-harness placeholder stage now looks correct in Zellij-in-Kitty and Zellij-in-Ghostty.
+- Explicit sizing fidelity for `c+r` / `c only` / `r only` was materially improved by preserving sizing intent on output and matching Zellij's internal occupancy prediction to the one-dimensional sizing mode.
+- WezTerm still diverges in similar ways both direct and interposed, so remaining WezTerm differences should not be treated as the primary design reference.

@@ -1717,12 +1717,12 @@ impl Grid {
             },
         }
     }
-    pub fn visible_kitty_image_chunks(
+    pub fn visible_kitty_render_bundle(
         &self,
         content_x: usize,
         content_y: usize,
-    ) -> Vec<KittyImageChunk> {
-        self.image_scene.visible_kitty_image_chunks(
+    ) -> crate::panes::pane_image_scene::KittyRenderBundle {
+        self.image_scene.visible_kitty_render_bundle(
             content_x,
             content_y,
             self.lines_above.len(),
@@ -1732,16 +1732,28 @@ impl Grid {
             |anchor| self.resolve_flow_anchor(anchor),
         )
     }
+    pub fn visible_kitty_image_chunks(
+        &self,
+        content_x: usize,
+        content_y: usize,
+    ) -> Vec<KittyImageChunk> {
+        self.visible_kitty_render_bundle(content_x, content_y)
+            .explicit_chunks
+    }
+    pub fn visible_kitty_placeholder_renders(
+        &self,
+        content_x: usize,
+        content_y: usize,
+    ) -> Vec<crate::output::KittyPlaceholderRender> {
+        self.visible_kitty_render_bundle(content_x, content_y)
+            .placeholder_renders
+    }
     pub fn render(
         &mut self,
         content_x: usize,
         content_y: usize,
         style: &Style,
-    ) -> Result<Option<(
-        Vec<CharacterChunk>,
-        Option<String>,
-        Vec<crate::output::ImageChunk>,
-    )>> {
+    ) -> Result<Option<crate::output::PaneRenderOutput>> {
         if self.lock_renders {
             return Ok(None);
         }
@@ -1837,16 +1849,16 @@ impl Grid {
                 }
             }
         }
-        let image_chunks: Vec<crate::output::ImageChunk> = sixel_image_chunks
-            .into_iter()
-            .map(crate::output::ImageChunk::Sixel)
-            .collect();
+        let image_render_bundle = crate::output::ImageRenderBundle {
+            sixel_chunks: sixel_image_chunks,
+            ..Default::default()
+        };
 
-        return Ok(Some((
+        return Ok(Some(crate::output::PaneRenderOutput {
             character_chunks,
-            Some(raw_vte_output),
-            image_chunks,
-        )));
+            raw_vte_output: Some(raw_vte_output),
+            changed_image_render_bundle: image_render_bundle,
+        }));
     }
     /// Returns the cursor position and whether it is visible.
     /// The position is returned unconditionally (as long as the cursor is within
@@ -2501,12 +2513,14 @@ impl Grid {
 
     fn consume_kitty_placeholder_char(&mut self, c: char) -> bool {
         if c == KITTY_UNICODE_PLACEHOLDER_CHAR {
+            self.finalize_pending_kitty_placeholder();
             self.pending_kitty_placeholder = Some(PendingKittyPlaceholder {
                 image_id_low_bits: self.kitty_placeholder_image_id_from_styles(),
                 placement_id: self.kitty_placeholder_placement_id_from_styles(),
                 anchor: Some(self.full_cursor_flow_anchor()),
                 ..Default::default()
             });
+            self.move_cursor_forward_until_edge(1);
             return true;
         }
 
@@ -2556,9 +2570,19 @@ impl Grid {
         } else {
             image_id_low_bits
         };
+        let Some(logical_placement_id) = self
+            .image_scene
+            .kitty_logical_placement_id(image_id, pending.placement_id)
+        else {
+            log::debug!(
+                "kitty placeholder unresolved: image_id={}, placement_id={:?}",
+                image_id,
+                pending.placement_id
+            );
+            return;
+        };
         self.image_scene.add_kitty_placeholder_cell(KittyPlaceholderCell {
-            image_id,
-            placement_id: pending.placement_id,
+            logical_placement_id,
             placeholder_row,
             placeholder_col,
             anchor,
