@@ -4060,11 +4060,7 @@ impl Perform for Grid {
         }
     }
 
-    fn apc_end(&mut self, interrupted: bool) {
-        if interrupted {
-            self.apc_bytes = None;
-            return;
-        }
+    fn apc_end(&mut self) {
         if let Some(apc_bytes) = self.apc_bytes.take() {
             if apc_bytes.first() == Some(&b'G') {
                 if let Some(query_response) = kitty_query_response(&apc_bytes) {
