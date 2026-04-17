@@ -4,7 +4,10 @@ use zellij_utils::pane_size::SizeInPixels;
 use crate::output::{
     KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyPlaceholderRender,
 };
-use crate::panes::kitty_placeholder::{KITTY_ROWCOL_DIACRITICS, KITTY_UNICODE_PLACEHOLDER_CHAR};
+use crate::panes::kitty_placeholder::{
+    kitty_diacritic_to_index, KITTY_ROWCOL_DIACRITICS, KITTY_UNICODE_PLACEHOLDER_CHAR,
+};
+use crate::panes::terminal_character::{AnsiCode, RcCharacterStyles};
 
 use crate::panes::pane_image_scene::{
     project_placement_to_viewport, FlowAnchor, ImageAssetId, ImagePlacementGeometry,
@@ -38,6 +41,93 @@ impl KittyImage {
 
     pub fn chunk_data(&self) -> KittyImageData {
         self.data.clone()
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PendingKittyPlaceholder {
+    image_id_low_bits: Option<u32>,
+    placement_id: Option<u32>,
+    row_diacritic: Option<char>,
+    column_diacritic: Option<char>,
+    image_id_high_byte_diacritic: Option<char>,
+    anchor: Option<FlowAnchor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedKittyPlaceholder {
+    pub image_id: u32,
+    pub placement_id: Option<u32>,
+    pub placeholder_row: u16,
+    pub placeholder_col: u16,
+    pub anchor: FlowAnchor,
+}
+
+impl PendingKittyPlaceholder {
+    pub fn new(styles: &RcCharacterStyles, anchor: FlowAnchor) -> Self {
+        Self {
+            image_id_low_bits: kitty_placeholder_image_id_from_styles(styles),
+            placement_id: kitty_placeholder_placement_id_from_styles(styles),
+            anchor: Some(anchor),
+            ..Default::default()
+        }
+    }
+
+    pub fn absorb_diacritic(&mut self, c: char) -> bool {
+        if self.row_diacritic.is_none() {
+            self.row_diacritic = Some(c);
+            true
+        } else if self.column_diacritic.is_none() {
+            self.column_diacritic = Some(c);
+            true
+        } else if self.image_id_high_byte_diacritic.is_none() {
+            self.image_id_high_byte_diacritic = Some(c);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn resolve(self) -> Option<ResolvedKittyPlaceholder> {
+        let anchor = self.anchor?;
+        let image_id_low_bits = self.image_id_low_bits?;
+        let row_diacritic = self.row_diacritic?;
+        let column_diacritic = self.column_diacritic?;
+        let placeholder_row = kitty_diacritic_to_index(row_diacritic)? as u16;
+        let placeholder_col = kitty_diacritic_to_index(column_diacritic)? as u16;
+        let image_id = if let Some(high_byte_diacritic) = self.image_id_high_byte_diacritic {
+            let high_byte = kitty_diacritic_to_index(high_byte_diacritic)?;
+            image_id_low_bits | ((high_byte as u32) << 24)
+        } else {
+            image_id_low_bits
+        };
+        Some(ResolvedKittyPlaceholder {
+            image_id,
+            placement_id: self.placement_id,
+            placeholder_row,
+            placeholder_col,
+            anchor,
+        })
+    }
+}
+
+fn kitty_placeholder_image_id_from_styles(styles: &RcCharacterStyles) -> Option<u32> {
+    match styles.foreground {
+        Some(AnsiCode::ColorIndex(index)) => Some(index as u32),
+        Some(AnsiCode::RgbCode((r, g, b))) => {
+            Some(((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
+        },
+        _ => None,
+    }
+}
+
+fn kitty_placeholder_placement_id_from_styles(styles: &RcCharacterStyles) -> Option<u32> {
+    match styles.underline_color {
+        Some(AnsiCode::ColorIndex(index)) => Some(index as u32),
+        Some(AnsiCode::RgbCode((r, g, b))) => {
+            Some(((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
+        },
+        _ => None,
     }
 }
 

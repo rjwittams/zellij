@@ -1,3 +1,4 @@
+use super::kitty_placeholder::KITTY_UNICODE_PLACEHOLDER_CHAR;
 use super::sixel::{PixelRect, SixelGrid, SixelImageStore};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -18,8 +19,6 @@ use std::{
 };
 
 use vte;
-
-use crate::panes::kitty_placeholder::{kitty_diacritic_to_index, KITTY_UNICODE_PLACEHOLDER_CHAR};
 use zellij_utils::{
     consts::{DEFAULT_SCROLL_BUFFER_SIZE, SCROLL_BUFFER_SIZE},
     data::{Palette, PaletteColor, Styling},
@@ -30,14 +29,10 @@ use zellij_utils::{
 
 const TABSTOP_WIDTH: usize = 8; // TODO: is this always right?
 pub const MAX_TITLE_STACK_SIZE: usize = 1000;
-#[derive(Clone, Debug, Default)]
-struct PendingKittyPlaceholder {
-    image_id_low_bits: Option<u32>,
-    placement_id: Option<u32>,
-    row_diacritic: Option<char>,
-    column_diacritic: Option<char>,
-    image_id_high_byte_diacritic: Option<char>,
-    anchor: Option<FlowAnchor>,
+pub struct GridChanges {
+    pub character_chunks: Vec<CharacterChunk>,
+    pub sixel_image_chunks: Vec<SixelImageChunk>,
+    pub changed_rects: HashMap<usize, usize>,
 }
 
 /// Rewrites OSC 99 metadata for multiplexer forwarding:
@@ -130,6 +125,7 @@ use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
 use crate::panes::kitty::{
     kitty_delete_all_visible, kitty_delete_by_image_id, kitty_query_response,
+    PendingKittyPlaceholder,
 };
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::pane_image_scene::{
@@ -1582,15 +1578,6 @@ impl Grid {
                 }
             };
         }
-        log::debug!(
-            "grid change_size: {}x{} -> {}x{} lines_above={} viewport_rows={}",
-            self.width,
-            self.height,
-            new_columns,
-            new_rows,
-            self.lines_above.len(),
-            self.viewport.len(),
-        );
         self.height = new_rows;
         self.width = new_columns;
         self.set_scroll_region_to_viewport_size();
@@ -1625,15 +1612,7 @@ impl Grid {
         }
         lines
     }
-    pub fn read_changes(
-        &mut self,
-        x_offset: usize,
-        y_offset: usize,
-    ) -> (
-        Vec<CharacterChunk>,
-        Vec<SixelImageChunk>,
-        std::collections::HashMap<usize, usize>,
-    ) {
+    pub fn read_changes(&mut self, x_offset: usize, y_offset: usize) -> GridChanges {
         let changed_character_chunks = self.output_buffer.changed_chunks_in_viewport(
             self.viewport.make_contiguous(),
             self.width,
@@ -1656,11 +1635,11 @@ impl Grid {
         }
         self.output_buffer.clear();
 
-        (
-            changed_character_chunks,
-            changed_sixel_image_chunks,
+        GridChanges {
+            character_chunks: changed_character_chunks,
+            sixel_image_chunks: changed_sixel_image_chunks,
             changed_rects,
-        )
+        }
     }
     pub fn serialize(&self, scrollback_lines_to_serialize: Option<usize>) -> Option<String> {
         match scrollback_lines_to_serialize {
@@ -1733,8 +1712,11 @@ impl Grid {
         }
         let raw_vte_output = String::new();
 
-        let (mut character_chunks, sixel_image_chunks, changed_rects) =
-            self.read_changes(content_x, content_y);
+        let GridChanges {
+            mut character_chunks,
+            sixel_image_chunks,
+            changed_rects,
+        } = self.read_changes(content_x, content_y);
 
         let plugin_highlight_selections = self.compute_plugin_highlight_selections();
 
@@ -1841,11 +1823,11 @@ impl Grid {
                 ),
         };
 
-        return Ok(Some(PaneRenderOutput {
+        Ok(Some(PaneRenderOutput {
             character_chunks,
             raw_vte_output: Some(raw_vte_output),
             damage_redraw_image_render_bundle: image_render_bundle,
-        }));
+        }))
     }
     /// Returns the cursor position and whether it is visible.
     /// The position is returned unconditionally (as long as the cursor is within
@@ -2509,48 +2491,19 @@ impl Grid {
         self.preceding_char = Some(terminal_character);
     }
 
-    fn kitty_placeholder_image_id_from_styles(&self) -> Option<u32> {
-        match self.cursor.pending_styles.foreground {
-            Some(AnsiCode::ColorIndex(index)) => Some(index as u32),
-            Some(AnsiCode::RgbCode((r, g, b))) => {
-                Some(((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
-            },
-            _ => None,
-        }
-    }
-
-    fn kitty_placeholder_placement_id_from_styles(&self) -> Option<u32> {
-        match self.cursor.pending_styles.underline_color {
-            Some(AnsiCode::ColorIndex(index)) => Some(index as u32),
-            Some(AnsiCode::RgbCode((r, g, b))) => {
-                Some(((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
-            },
-            _ => None,
-        }
-    }
-
     fn consume_kitty_placeholder_char(&mut self, c: char) -> bool {
         if c == KITTY_UNICODE_PLACEHOLDER_CHAR {
             self.finalize_pending_kitty_placeholder();
-            self.pending_kitty_placeholder = Some(PendingKittyPlaceholder {
-                image_id_low_bits: self.kitty_placeholder_image_id_from_styles(),
-                placement_id: self.kitty_placeholder_placement_id_from_styles(),
-                anchor: Some(self.full_cursor_flow_anchor()),
-                ..Default::default()
-            });
+            self.pending_kitty_placeholder = Some(PendingKittyPlaceholder::new(
+                &self.cursor.pending_styles,
+                self.full_cursor_flow_anchor(),
+            ));
             self.move_cursor_forward_until_edge(1);
             return true;
         }
 
         if let Some(pending) = self.pending_kitty_placeholder.as_mut() {
-            if c.width().unwrap_or(0) == 0 {
-                if pending.row_diacritic.is_none() {
-                    pending.row_diacritic = Some(c);
-                } else if pending.column_diacritic.is_none() {
-                    pending.column_diacritic = Some(c);
-                } else if pending.image_id_high_byte_diacritic.is_none() {
-                    pending.image_id_high_byte_diacritic = Some(c);
-                }
+            if c.width().unwrap_or(0) == 0 && pending.absorb_diacritic(c) {
                 return true;
             }
             self.finalize_pending_kitty_placeholder();
@@ -2562,49 +2515,26 @@ impl Grid {
         let Some(pending) = self.pending_kitty_placeholder.take() else {
             return;
         };
-        let Some(anchor) = pending.anchor else {
+        let Some(resolved) = pending.resolve() else {
             return;
-        };
-        let Some(image_id_low_bits) = pending.image_id_low_bits else {
-            return;
-        };
-        let Some(row_diacritic) = pending.row_diacritic else {
-            return;
-        };
-        let Some(column_diacritic) = pending.column_diacritic else {
-            return;
-        };
-        let Some(placeholder_row) = kitty_diacritic_to_index(row_diacritic) else {
-            return;
-        };
-        let Some(placeholder_col) = kitty_diacritic_to_index(column_diacritic) else {
-            return;
-        };
-        let image_id = if let Some(high_byte_diacritic) = pending.image_id_high_byte_diacritic {
-            let Some(high_byte) = kitty_diacritic_to_index(high_byte_diacritic) else {
-                return;
-            };
-            image_id_low_bits | ((high_byte as u32) << 24)
-        } else {
-            image_id_low_bits
         };
         let Some(logical_placement_id) = self
             .image_scene
-            .kitty_logical_placement_id(image_id, pending.placement_id)
+            .kitty_logical_placement_id(resolved.image_id, resolved.placement_id)
         else {
             log::debug!(
                 "kitty placeholder unresolved: image_id={}, placement_id={:?}",
-                image_id,
-                pending.placement_id
+                resolved.image_id,
+                resolved.placement_id
             );
             return;
         };
         self.image_scene
             .add_kitty_placeholder_cell(KittyPlaceholderCell {
                 logical_placement_id,
-                placeholder_row,
-                placeholder_col,
-                anchor,
+                placeholder_row: resolved.placeholder_row,
+                placeholder_col: resolved.placeholder_col,
+                anchor: resolved.anchor,
             });
     }
     /// Called by the server-side handler for SetPaneRegexHighlights.
