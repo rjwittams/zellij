@@ -6,7 +6,6 @@ use crate::panes::Row;
 
 use crate::panes::Selection;
 use crate::{
-    panes::kitty::KittyImageState,
     panes::sixel::SixelImageStore,
     panes::terminal_character::{AnsiCode, CharacterStyles},
     panes::{LinkHandler, PaneId, TerminalCharacter, DEFAULT_STYLES, EMPTY_TERMINAL_CHARACTER},
@@ -19,7 +18,6 @@ use std::{
     collections::{HashMap, HashSet},
     str,
 };
-use std::ops::Deref;
 use zellij_utils::data::{HighlightLayer, PaneContents, PaneRenderReport};
 use zellij_utils::errors::prelude::*;
 use zellij_utils::pane_size::SizeInPixels;
@@ -213,7 +211,7 @@ fn serialize_chunks(
 
     let mut vte_output = String::new();
 
-    if let Some(image_prelude) = prepared_image_output.vte_prelude(){
+    if let Some(image_prelude) = prepared_image_output.vte_prelude() {
         vte_output.push_str(&image_prelude);
     }
 
@@ -270,7 +268,6 @@ fn serialize_chunks(
     prepared_image_output.serialize_image_chunks(image_output, max_size, &mut vte_output)?;
     Ok(vte_output)
 }
-
 
 type AbsoluteMiddleStart = usize;
 type AbsoluteMiddleEnd = usize;
@@ -534,7 +531,9 @@ impl Output {
             }
 
             // append the actual text+image output
-            let prepared_image_output = self.image_output.prepare_render_body_for_client(client_id, pre_vte_clears_display);
+            let prepared_image_output = self
+                .image_output
+                .prepare_render_body_for_client(client_id, pre_vte_clears_display);
             client_serialized_render_instructions.push_str(
                 &serialize_chunks(
                     client_character_chunks,
@@ -613,7 +612,7 @@ impl Output {
             client_serialized_render_instructions.push_str(
                 &serialize_chunks(
                     client_character_chunks,
-                    & mut self.image_output,
+                    &mut self.image_output,
                     prepared_image_output,
                     self.link_handler.as_mut(),
                     self.styled_underlines,
