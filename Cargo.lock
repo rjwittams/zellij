@@ -4103,7 +4103,7 @@ dependencies = [
 [[package]]
 name = "vte"
 version = "0.15.0"
-source = "git+https://github.com/rjwittams/vte.git?rev=938124591a52d92c29060f2fecd41e46368d5dd6#938124591a52d92c29060f2fecd41e46368d5dd6"
+source = "git+https://github.com/rjwittams/vte.git?rev=f98b547b7e03361498d4a2c28a2c4e4fc01b58b5#f98b547b7e03361498d4a2c28a2c4e4fc01b58b5"
 dependencies = [
  "arrayvec 0.7.6",
  "memchr",

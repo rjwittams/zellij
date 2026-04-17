@@ -110,7 +110,7 @@ tokio-util = { version = "0.7.15" }
 unicode-width = { version = "0.1.8", default-features = false }
 url = { version = "2.2.2", default-features = false, features = ["serde"] }
 uuid = { version = "1.4.1", default-features = false, features = ["serde", "v4", "std"] }
-vte = { git = "https://github.com/rjwittams/vte.git", rev = "938124591a52d92c29060f2fecd41e46368d5dd6", default-features = false }
+vte = { git = "https://github.com/rjwittams/vte.git", rev = "f98b547b7e03361498d4a2c28a2c4e4fc01b58b5", default-features = false }
 windows-sys = { version = "0.59", default-features = false }
 names = { version = "0.14.0", default-features = false }
 include_dir = { version = "0.7.3", default-features = false }
