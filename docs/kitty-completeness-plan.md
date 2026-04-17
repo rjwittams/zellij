@@ -159,6 +159,12 @@ Why this matters:
 
 Current status:
 - still open
+- smoke probing now suggests region-local scrolling is a real semantic gap for current Zellij kitty image behavior
+- direct-terminal behavior in this area also appears murky enough that it is not currently a strong practical reference point
+
+Current conclusion:
+- worth documenting as incomplete
+- not currently a high-priority completeness blocker absent a real app or stronger practical demand signal
 
 Why this matters:
 - not every app uses them directly for images, but terminals and TUIs can interact with them
@@ -208,10 +214,9 @@ Recommended next sequence:
 1. sync docs/checklists with the now-completed smoke and regression work
 2. decide whether kitty damage-redraw selection should stay as coarse row intersection or evolve into a more explicit redraw-policy layer
 3. use current stability to choose the next capability surface intentionally:
-   - `f=24`
-   - fuller query/response audit
-   - scroll-region / page-margin behavior
-4. optionally add `f=24` first if we want the most self-contained remaining protocol gap
+   - scroll-region / page-margin behavior if a real app or stronger demand signal appears
+   - otherwise other protocol-surface work with clearer practical value
+4. treat scroll-region / page-margin behavior as documented-but-deferred unless a stronger use case appears
 
 This keeps the harness acting as a behavioral checkpoint, rather than guessing completeness priorities from the spec alone.
 
@@ -227,6 +232,8 @@ A reasonable target is that Zellij can credibly claim a modern, useful kitty gra
 - resize / reflow behavior is understood and not obviously Zellij-limiting
 
 This branch is now materially closer to that target than when this document was first drafted; the remaining work is no longer basic completeness scaffolding so much as selecting the next protocol surface and polishing the redraw policy boundary.
+
+One example of a now-better-understood deferred area is scroll-region/page-margin behavior: the exploratory smoke probe found a real current limitation, but also suggested weak practical demand and weak direct-terminal reference behavior, so it should not be treated as a current blocker by default.
 
 That does **not** require complete protocol parity before moving on.
 But it does require enough completeness that Zellij is not the reason an app must avoid kitty graphics support.

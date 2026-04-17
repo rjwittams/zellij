@@ -55,6 +55,8 @@ Scope for now:
 - [x] Basic reflow-stable anchoring improved toward canonical flow
 - [ ] Finish reflow/resize correctness near boundaries
 - [ ] Page-margin / scroll-region clipping semantics
+  - exploratory smoke probing suggests current region-local scroll behavior is incomplete for kitty images
+  - direct-terminal behavior here also appears murky enough that this should not currently be treated as a top-priority blocker without stronger real-app demand
 
 ### 5. Query / response behavior
 - [x] Enough query behavior for real-world autodetection to work (`chafa`, `ratatui-image` / `flotilla` happy in the current proof branch)
@@ -128,7 +130,7 @@ Deferred for now.
 - [ ] keep refining the damage-redraw policy boundary and resize/reflow edge behavior
 
 ### Defer until after stabilization
-- [ ] `f=24`
+- [x] `f=24`
 - [ ] `o=z`
 - [ ] file/shared-memory media (`t=f/t/s`)
 - [ ] richer delete variants beyond current real-app needs
@@ -148,12 +150,14 @@ Deferred for now.
 ### Next target
 - [x] richer spec-driven smoke/example coverage
   - [x] explicit PNG
+  - [x] explicit RGB chunked
   - [x] explicit RGBA chunked
   - [x] Unicode placeholders
   - [x] query
   - [x] multi-placement / targeted delete
   - [x] erase interactions
   - [x] resize / reflow comparative probe
+  - [x] scroll-region exploratory probe
   - [x] delete-all-visible
   - [ ] later: mixed sixel + kitty
   - [ ] capture/record cross-terminal behavior matrix more formally

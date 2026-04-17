@@ -332,6 +332,23 @@ def placeholder_rgba(image_id=103, w=56, h=56, cols=14, rows=7, x=3, y=16):
     flush()
 
 
+def placeholder_rgb(image_id=152, w=40, h=40, cols=10, rows=4, x=20, y=16):
+    chunked_apc(f"q=2,a=T,C=1,U=1,f=24,s={w},v={h},i={image_id},c={cols},r={rows}", rgb_gradient(w, h))
+    low = image_id & 0xFFFFFF
+    r = (low >> 16) & 0xFF
+    g = (low >> 8) & 0xFF
+    b = low & 0xFF
+    high = (image_id >> 24) & 0xFF
+    hi = DIACRITICS[high] if high else ""
+    for row in range(rows):
+        goto(x, y + row)
+        out(f"{CSI}38;2;{r};{g};{b}m")
+        for col in range(cols):
+            out(f"{PLACEHOLDER}{DIACRITICS[row]}{DIACRITICS[col]}{hi}")
+        out(f"{CSI}39m")
+    flush()
+
+
 def divider(title: str):
     clear_screen()
     reset_attrs()
@@ -380,8 +397,31 @@ def wait_for_resize(description: str, predicate) -> tuple[int, int] | None:
                 return None
 
 
+def read_key() -> str:
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        while True:
+            r, _, _ = select.select([fd], [], [], None)
+            if not r:
+                continue
+            data = os_read(fd, 8)
+            if not data:
+                return ""
+            s = data.decode(errors="ignore")
+            if s.startswith("\x1b[A"):
+                return "up"
+            if s.startswith("\x1b[B"):
+                return "down"
+            if s:
+                return s[0]
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
 def stage_detect() -> Caps:
-    divider("Stage 1/11: capability and environment probe")
+    divider("Stage 1/12: capability and environment probe")
     label("Expect: a capability summary only. Later stages use this to set expectations and skips.", 1, 3)
     caps = probe_caps()
     env_rows = [
@@ -422,7 +462,7 @@ def stage_detect() -> Caps:
 
 
 def stage_query_semantics(caps: Caps):
-    divider("Stage 2/11: kitty query / response semantics")
+    divider("Stage 2/12: kitty query / response semantics")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -470,7 +510,7 @@ def stage_query_semantics(caps: Caps):
 
 
 def stage_explicit_png(path: Path, caps: Caps):
-    divider("Stage 3/11: explicit PNG placement")
+    divider("Stage 3/12: explicit PNG placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -480,7 +520,7 @@ def stage_explicit_png(path: Path, caps: Caps):
 
 
 def stage_explicit_rgb(caps: Caps):
-    divider("Stage 4/11: explicit RGB chunked placement")
+    divider("Stage 4/12: explicit RGB chunked placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -490,7 +530,7 @@ def stage_explicit_rgb(caps: Caps):
 
 
 def stage_explicit_rgba(caps: Caps):
-    divider("Stage 5/11: explicit RGBA chunked placement")
+    divider("Stage 5/12: explicit RGBA chunked placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -505,7 +545,7 @@ def stage_explicit_rgba(caps: Caps):
 
 
 def stage_placeholder(caps: Caps):
-    divider("Stage 6/11: Unicode placeholder placement")
+    divider("Stage 6/12: Unicode placeholder placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -515,7 +555,7 @@ def stage_placeholder(caps: Caps):
 
 
 def stage_aspect(path: Path, caps: Caps):
-    divider("Stage 7/11: aspect comparison for explicit placement")
+    divider("Stage 7/12: aspect comparison for explicit placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -531,7 +571,7 @@ def stage_aspect(path: Path, caps: Caps):
 
 
 def stage_multi_delete(path: Path, caps: Caps):
-    divider("Stage 8/11: multi-placement and targeted delete")
+    divider("Stage 8/12: multi-placement and targeted delete")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -549,7 +589,7 @@ def stage_multi_delete(path: Path, caps: Caps):
 
 
 def stage_erase(caps: Caps):
-    divider("Stage 9/11: erase interactions for placeholder flow")
+    divider("Stage 9/12: erase interactions for placeholder flow")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -577,7 +617,7 @@ def stage_erase(caps: Caps):
 
 
 def stage_resize_reflow(path: Path, caps: Caps):
-    divider("Stage 10/11: resize and reflow coherence")
+    divider("Stage 10/12: resize and reflow coherence")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -624,8 +664,121 @@ def stage_resize_reflow(path: Path, caps: Caps):
     wait_for_enter("")
 
 
+def stage_scroll_region(path: Path, caps: Caps):
+    divider("Stage 11/12: scroll-region coherence")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+
+    region_left = 2
+    region_top = 7
+    region_width = 40
+    region_height = 14
+    region_bottom = region_top + region_height - 1
+    scroll_top = region_top + 1
+    scroll_bottom = region_bottom - 1
+    scroll_left = region_left + 1
+    scroll_rows = scroll_bottom - scroll_top + 1
+
+    label("HEADER above scroll region (should remain fixed)", 1, 3)
+    label("FOOTER below scroll region (should remain fixed)", 1, 24)
+    label("+-[scroll region]----------------+", region_left, region_top)
+    label("+--------------------------------+", region_left, region_bottom)
+    label("Use Down/Up or j/k to scroll one line at a time. q finishes this stage.", 1, 5)
+    label("Only the band between the horizontal borders should move.", 1, 6)
+
+    out(f"{CSI}{scroll_top};{scroll_bottom}r")
+
+    # A fixed, bounded scene: short lines that fit the region, with two reserved image lanes.
+    scene_lines = [
+        "L01 top text",
+        "L02 top text",
+        "L03 before img A",
+        "",
+        "",
+        "",
+        "",
+        "L04 between images",
+        "L05 before img B",
+        "",
+        "",
+        "",
+        "",
+        "L06 after img B",
+        "L07 lower text",
+        "L08 lower text",
+        "L09 lower text",
+        "L10 lower text",
+    ]
+    scene_top_index = 0
+
+    def render_scene_window(start_index: int):
+        for row_offset in range(scroll_rows):
+            goto(scroll_left, scroll_top + row_offset)
+            out(" " * region_width)
+            goto(scroll_left, scroll_top + row_offset)
+            line = scene_lines[start_index + row_offset]
+            out(line[:region_width])
+        flush()
+
+    render_scene_window(scene_top_index)
+
+    # Place two explicit images into reserved blank lanes of the fixed scene.
+    explicit_png(path, image_id=150, cols=10, rows=4, x=5, y=11)
+    placeholder_rgb(image_id=152, w=40, h=40, cols=10, rows=4, x=20, y=16)
+
+    status_row = 23
+
+    def set_status(message: str):
+        goto(1, status_row)
+        out(f"{CSI}2K")
+        goto(1, status_row)
+        out(f"{CSI}38;5;45m[status]{CSI}39m {message}")
+        flush()
+
+    set_status("Scroll to bottom, back to top, then down again. Left image is explicit; right image is placeholder-based.")
+
+    max_top_index = max(0, len(scene_lines) - scroll_rows)
+    while True:
+        key = read_key().lower()
+        if key == "q":
+            break
+        if key in {"j", "down"}:
+            if scene_top_index >= max_top_index:
+                set_status("Already at the bottom. Reverse upward or press q.")
+                continue
+            scene_top_index += 1
+            goto(scroll_left, scroll_bottom)
+            out(" " * region_width)
+            goto(scroll_left, scroll_bottom)
+            out(scene_lines[scene_top_index + scroll_rows - 1][:region_width])
+            out("\n")
+            flush()
+            if scene_top_index == max_top_index:
+                set_status("Reached the bottom. Now scroll upward back toward the top.")
+        elif key in {"k", "up"}:
+            if scene_top_index == 0:
+                set_status("Already at the top. Scroll downward or press q.")
+                continue
+            scene_top_index -= 1
+            out("\x1bM")
+            goto(scroll_left, scroll_top)
+            out(" " * region_width)
+            goto(scroll_left, scroll_top)
+            out(scene_lines[scene_top_index][:region_width])
+            flush()
+            if scene_top_index == 0:
+                set_status("Returned to the top. Scroll downward again if you want a second pass.")
+        else:
+            set_status("Use Down/Up or j/k to scroll one line at a time; q finishes this stage.")
+
+    out(f"{CSI}r")
+    flush()
+    set_status("Probe complete. Header/footer and border should have remained fixed.")
+
+
 def stage_delete(caps: Caps):
-    divider("Stage 11/11: delete all visible kitty images")
+    divider("Stage 12/12: delete all visible kitty images")
     label("Expect: all kitty images disappear after delete-all-visible.", 1, 3)
     if caps.kitty_basic_query:
         delete_all()
@@ -652,6 +805,9 @@ def all_stages(path: Path):
     stage_erase(caps)
     wait_for_enter()
     stage_resize_reflow(path, caps)
+    wait_for_enter()
+    stage_scroll_region(path, caps)
+    wait_for_enter()
     stage_delete(caps)
     goto(1, 7)
     out("Done.\n")
@@ -661,7 +817,7 @@ def all_stages(path: Path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("png", nargs="?", default=str(DEFAULT_PNG), help="png path (defaults to assets/logo.png)")
-    p.add_argument("--mode", choices=["all", "detect", "query", "explicit-png", "explicit-rgb", "explicit-rgba", "placeholder", "aspect", "multi-delete", "erase", "resize", "delete"], default="all")
+    p.add_argument("--mode", choices=["all", "detect", "query", "explicit-png", "explicit-rgb", "explicit-rgba", "placeholder", "aspect", "multi-delete", "erase", "resize", "scroll-region", "delete"], default="all")
     args = p.parse_args()
 
     path = Path(args.png)
@@ -694,6 +850,8 @@ def main():
         stage_erase(caps)
     elif args.mode == "resize":
         stage_resize_reflow(path, caps)
+    elif args.mode == "scroll-region":
+        stage_scroll_region(path, caps)
     elif args.mode == "delete":
         stage_delete(caps)
     wait_for_enter("Press Enter to exit...")
