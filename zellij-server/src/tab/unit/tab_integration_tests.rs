@@ -912,9 +912,7 @@ fn take_snapshot(ansi_instructions: &str, rows: usize, columns: usize, palette: 
         explicitly_disable_kitty_keyboard_protocol,
     );
     let mut vte_parser = vte::Parser::new();
-    for &byte in ansi_instructions.as_bytes() {
-        vte_parser.advance(&mut grid, &[byte]);
-    }
+    vte_parser.advance(&mut grid, ansi_instructions.as_bytes());
     format!("{:?}", grid)
 }
 
@@ -951,9 +949,7 @@ fn take_snapshot_with_sixel(
         explicitly_disable_kitty_keyboard_protocol,
     );
     let mut vte_parser = vte::Parser::new();
-    for &byte in ansi_instructions.as_bytes() {
-        vte_parser.advance(&mut grid, &[byte]);
-    }
+    vte_parser.advance(&mut grid, ansi_instructions.as_bytes());
     format!("{:?}", grid)
 }
 
@@ -987,9 +983,7 @@ fn take_snapshot_and_cursor_position(
         explicitly_disable_kitty_keyboard_protocol,
     );
     let mut vte_parser = vte::Parser::new();
-    for &byte in ansi_instructions.as_bytes() {
-        vte_parser.advance(&mut grid, &[byte]);
-    }
+    vte_parser.advance(&mut grid, ansi_instructions.as_bytes());
     let coords = grid
         .cursor_coordinates()
         .and_then(|(x, y, visible)| if visible { Some((x, y)) } else { None });

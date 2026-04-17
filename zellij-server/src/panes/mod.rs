@@ -2,6 +2,7 @@ pub mod alacritty_functions;
 pub mod grid;
 pub mod hyperlink_tracker;
 pub mod kitty;
+pub mod kitty_placeholder;
 pub mod link_handler;
 pub mod pane_image_scene;
 pub mod selection;
