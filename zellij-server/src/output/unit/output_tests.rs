@@ -1,7 +1,8 @@
 use super::super::{
-    CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, Output, OutputBuffer,
-    SixelImageChunk,
+    CharacterChunk, FloatingPanesStack, ImageRenderBundle, KittyImageChunk, KittyImageData, Output,
+    OutputBuffer, SixelImageChunk,
 };
+use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::SixelImageStore;
 use crate::panes::terminal_character::AnsiCode;
 use crate::panes::{LinkHandler, Row, TerminalCharacter};
@@ -53,6 +54,23 @@ fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageC
         y_offset: 0,
         image_data: KittyImageData::Png {
             data: vec![1, 2, 3, 4],
+        },
+    }
+}
+
+fn image_render_bundle_with_sixels(sixel_chunks: Vec<SixelImageChunk>) -> ImageRenderBundle {
+    ImageRenderBundle {
+        sixel_chunks,
+        kitty_render_bundle: KittyRenderBundle::default(),
+    }
+}
+
+fn image_render_bundle_with_kitty(explicit_chunks: Vec<KittyImageChunk>) -> ImageRenderBundle {
+    ImageRenderBundle {
+        sixel_chunks: vec![],
+        kitty_render_bundle: KittyRenderBundle {
+            explicit_chunks,
+            placeholder_renders: vec![],
         },
     }
 }
@@ -169,7 +187,11 @@ fn test_is_dirty_with_sixel_chunks() {
         sixel_image_pixel_height: 100,
         sixel_image_id: 1,
     };
-    output.add_sixel_image_chunks_to_client(1, vec![sixel_chunk], None);
+    output.add_image_render_bundle_to_client(
+        1,
+        image_render_bundle_with_sixels(vec![sixel_chunk]),
+        None,
+    );
 
     assert!(
         output.is_dirty(),
@@ -187,7 +209,11 @@ fn test_is_dirty_with_kitty_scene_diffs() {
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output.add_kitty_image_chunks_to_client(1, vec![base_chunk.clone()], None);
+    output.add_image_render_bundle_to_client(
+        1,
+        image_render_bundle_with_kitty(vec![base_chunk.clone()]),
+        None,
+    );
     assert!(output.is_dirty(), "new kitty scene should be dirty");
     let serialized = output.serialize().unwrap();
     assert!(serialized.get(&1).unwrap().contains(kitty_delete_all));
@@ -199,7 +225,11 @@ fn test_is_dirty_with_kitty_scene_diffs() {
         HashMap::from([(1, vec![base_chunk.clone()])]),
         HashMap::new(),
     );
-    unchanged_output.add_kitty_image_chunks_to_client(1, vec![base_chunk.clone()], None);
+    unchanged_output.add_image_render_bundle_to_client(
+        1,
+        image_render_bundle_with_kitty(vec![base_chunk.clone()]),
+        None,
+    );
     let serialized = unchanged_output.serialize().unwrap();
     assert!(
         !serialized.get(&1).unwrap().contains(kitty_delete_all),
@@ -213,7 +243,11 @@ fn test_is_dirty_with_kitty_scene_diffs() {
         HashMap::from([(1, vec![base_chunk.clone()])]),
         HashMap::new(),
     );
-    changed_output.add_kitty_image_chunks_to_client(1, vec![changed_chunk], None);
+    changed_output.add_image_render_bundle_to_client(
+        1,
+        image_render_bundle_with_kitty(vec![changed_chunk]),
+        None,
+    );
     assert!(
         changed_output.is_dirty(),
         "changed kitty scene should be dirty"
@@ -246,7 +280,11 @@ fn test_serialize_emits_kitty_damage_redraw_without_scene_change() {
         HashMap::from([(1, vec![base_chunk.clone()])]),
         HashMap::new(),
     );
-    output.add_kitty_image_chunks_to_client(1, vec![base_chunk.clone()], None);
+    output.add_image_render_bundle_to_client(
+        1,
+        image_render_bundle_with_kitty(vec![base_chunk.clone()]),
+        None,
+    );
     output.add_damage_redraw_image_render_bundle_to_client(
         1,
         super::super::ImageRenderBundle {
@@ -335,7 +373,11 @@ fn test_has_rendered_assets_with_sixel_chunks() {
         sixel_image_pixel_height: 100,
         sixel_image_id: 1,
     };
-    output.add_sixel_image_chunks_to_client(1, vec![sixel_chunk], None);
+    output.add_image_render_bundle_to_client(
+        1,
+        image_render_bundle_with_sixels(vec![sixel_chunk]),
+        None,
+    );
 
     assert!(
         output.has_rendered_assets(),
@@ -692,8 +734,8 @@ fn test_add_sixel_image_chunks_to_multiple_clients() {
         sixel_image_id: 1,
     };
 
-    output.add_sixel_image_chunks_to_multiple_clients(
-        vec![sixel_chunk],
+    output.add_image_render_bundle_to_multiple_clients(
+        image_render_bundle_with_sixels(vec![sixel_chunk]),
         client_ids.iter().copied(),
         None,
     );

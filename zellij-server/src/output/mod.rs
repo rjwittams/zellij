@@ -6,7 +6,6 @@ use crate::panes::Row;
 
 use crate::panes::Selection;
 use crate::{
-    panes::kitty::KittyImageState,
     panes::sixel::SixelImageStore,
     panes::terminal_character::{AnsiCode, CharacterStyles},
     panes::{LinkHandler, PaneId, TerminalCharacter, DEFAULT_STYLES, EMPTY_TERMINAL_CHARACTER},
@@ -25,21 +24,6 @@ use zellij_utils::pane_size::SizeInPixels;
 
 use self::image_output::ImageOutput;
 use zellij_utils::pane_size::{PaneGeom, Size};
-
-fn vte_goto_instruction(x_coords: usize, y_coords: usize, vte_output: &mut String) -> Result<()> {
-    write!(
-        vte_output,
-        "\u{1b}[{};{}H\u{1b}[m",
-        y_coords + 1, // + 1 because VTE is 1 indexed
-        x_coords + 1,
-    )
-    .with_context(|| {
-        format!(
-            "failed to execute VTE instruction to go to ({}, {})",
-            x_coords, y_coords
-        )
-    })
-}
 
 fn vte_hide_cursor_instruction(vte_output: &mut String) -> Result<()> {
     write!(vte_output, "\u{1b}[?25l").context("failed to execute VTE instruction to hide cursor")
@@ -199,121 +183,6 @@ fn serialize_chunks_with_newlines(
     }
     Ok(vte_output)
 }
-fn serialize_chunks(
-    character_chunks: Vec<CharacterChunk>,
-    sixel_chunks: Option<&Vec<SixelImageChunk>>,
-    kitty_chunks: Option<&Vec<KittyImageChunk>>,
-    kitty_placeholder_renders: Option<&Vec<KittyPlaceholderRender>>,
-    link_handler: Option<&mut Rc<RefCell<LinkHandler>>>,
-    sixel_image_store: Option<&mut SixelImageStore>,
-    styled_underlines: bool,
-    osc8_hyperlinks: bool,
-    max_size: Option<Size>,
-) -> Result<String> {
-    let err_context = || "failed to serialize input chunks".to_string();
-
-    let mut vte_output = String::new();
-    let mut sixel_vte: Option<String> = None;
-    let link_handler = link_handler.map(|l_h| l_h.borrow());
-    for character_chunk in character_chunks {
-        // Skip chunks that are completely outside the size bounds
-        if let Some(size) = max_size {
-            if character_chunk.y >= size.rows {
-                continue; // Chunk is below visible area
-            }
-            if character_chunk.x >= size.cols {
-                continue; // Chunk starts outside visible area
-            }
-        }
-
-        let chunk_changed_colors = character_chunk.changed_colors();
-        let pane_default_fg = character_chunk.pane_default_fg;
-        let pane_default_bg = character_chunk.pane_default_bg;
-        let mut character_styles = DEFAULT_STYLES.enable_styled_underlines(styled_underlines);
-        vte_goto_instruction(character_chunk.x, character_chunk.y, &mut vte_output)
-            .with_context(err_context)?;
-        let mut chunk_width = character_chunk.x;
-        for t_character in character_chunk.terminal_characters.iter() {
-            // Stop rendering if the next character would exceed max_size.cols
-            if let Some(size) = max_size {
-                if chunk_width + t_character.width() > size.cols {
-                    break; // Stop rendering this chunk
-                }
-            }
-
-            let current_character_styles = adjust_styles_for_custom_bg_fg(
-                adjust_styles_for_possible_selection(
-                    character_chunk.selection_and_colors(),
-                    *t_character.styles,
-                    character_chunk.y,
-                    chunk_width,
-                ),
-                pane_default_fg,
-                pane_default_bg,
-            );
-            write_changed_styles(
-                &mut character_styles,
-                current_character_styles,
-                chunk_changed_colors,
-                link_handler.as_ref(),
-                osc8_hyperlinks,
-                &mut vte_output,
-            )
-            .with_context(err_context)?;
-            chunk_width += t_character.width();
-            vte_output.push(t_character.character);
-        }
-    }
-    if let Some(sixel_image_store) = sixel_image_store {
-        if let Some(sixel_chunks) = sixel_chunks {
-            for sixel_chunk in sixel_chunks {
-                // Skip sixel chunks that are completely outside the size bounds
-                if let Some(size) = max_size {
-                    if sixel_chunk.cell_y >= size.rows {
-                        continue; // Sixel chunk is below visible area
-                    }
-                    if sixel_chunk.cell_x >= size.cols {
-                        continue; // Sixel chunk starts outside visible area
-                    }
-                }
-
-                let serialized_sixel_image = sixel_image_store.serialize_image(
-                    sixel_chunk.sixel_image_id,
-                    sixel_chunk.sixel_image_pixel_x,
-                    sixel_chunk.sixel_image_pixel_y,
-                    sixel_chunk.sixel_image_pixel_width,
-                    sixel_chunk.sixel_image_pixel_height,
-                );
-                if let Some(serialized_sixel_image) = serialized_sixel_image {
-                    let sixel_vte = sixel_vte.get_or_insert_with(String::new);
-                    vte_goto_instruction(sixel_chunk.cell_x, sixel_chunk.cell_y, sixel_vte)
-                        .with_context(err_context)?;
-                    sixel_vte.push_str(&serialized_sixel_image);
-                }
-            }
-        }
-    }
-    if let Some(ref sixel_vte) = sixel_vte {
-        // we do this at the end because of the implied z-index,
-        // images should be above text unless the text was explicitly inserted after them (the
-        // latter being a case we handle in our own internal state and not in the output)
-        let save_cursor_position = "\u{1b}[s";
-        let restore_cursor_position = "\u{1b}[u";
-        vte_output.push_str(save_cursor_position);
-        vte_output.push_str(sixel_vte);
-        vte_output.push_str(restore_cursor_position);
-    }
-    if let Some(kitty_chunks) = kitty_chunks {
-        vte_output.push_str(&KittyImageState::serialize_chunks(kitty_chunks));
-    }
-    if let Some(kitty_placeholder_renders) = kitty_placeholder_renders {
-        vte_output.push_str(&KittyImageState::serialize_placeholder_renders(
-            kitty_placeholder_renders,
-        ));
-    }
-    Ok(vte_output)
-}
-
 type AbsoluteMiddleStart = usize;
 type AbsoluteMiddleEnd = usize;
 type PadLeftEndBy = usize;
@@ -537,82 +406,6 @@ impl Output {
             .or_insert_with(Vec::new);
         entry.push(String::from(vte_instruction));
     }
-    pub fn add_sixel_image_chunks_to_client(
-        &mut self,
-        client_id: ClientId,
-        sixel_image_chunks: Vec<SixelImageChunk>,
-        z_index: Option<usize>,
-    ) {
-        self.image_output
-            .add_sixel_image_chunks_to_client(client_id, sixel_image_chunks, z_index);
-    }
-    pub fn add_sixel_image_chunks_to_multiple_clients(
-        &mut self,
-        sixel_image_chunks: Vec<SixelImageChunk>,
-        client_ids: impl Iterator<Item = ClientId>,
-        z_index: Option<usize>,
-    ) {
-        self.image_output
-            .add_sixel_image_chunks_to_multiple_clients(sixel_image_chunks, client_ids, z_index);
-    }
-    pub fn add_kitty_image_chunks_to_client(
-        &mut self,
-        client_id: ClientId,
-        kitty_image_chunks: Vec<KittyImageChunk>,
-        z_index: Option<usize>,
-    ) {
-        self.image_output
-            .add_kitty_image_chunks_to_client(client_id, kitty_image_chunks, z_index);
-    }
-    pub fn add_kitty_image_chunks_to_multiple_clients(
-        &mut self,
-        kitty_image_chunks: Vec<KittyImageChunk>,
-        client_ids: impl Iterator<Item = ClientId>,
-        z_index: Option<usize>,
-    ) {
-        self.image_output
-            .add_kitty_image_chunks_to_multiple_clients(kitty_image_chunks, client_ids, z_index);
-    }
-    pub fn add_kitty_placeholder_renders_to_client(
-        &mut self,
-        client_id: ClientId,
-        kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
-    ) {
-        self.image_output
-            .add_kitty_placeholder_renders_to_client(client_id, kitty_placeholder_renders);
-    }
-    pub fn add_kitty_placeholder_renders_to_multiple_clients(
-        &mut self,
-        kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
-        client_ids: impl Iterator<Item = ClientId>,
-    ) {
-        self.image_output
-            .add_kitty_placeholder_renders_to_multiple_clients(
-                kitty_placeholder_renders,
-                client_ids,
-            );
-    }
-    pub fn add_kitty_render_bundle_to_client(
-        &mut self,
-        client_id: ClientId,
-        kitty_render_bundle: crate::panes::pane_image_scene::KittyRenderBundle,
-        z_index: Option<usize>,
-    ) {
-        self.image_output.add_kitty_render_bundle_to_client(
-            client_id,
-            kitty_render_bundle,
-            z_index,
-        );
-    }
-    pub fn add_kitty_render_bundle_to_multiple_clients(
-        &mut self,
-        kitty_render_bundle: crate::panes::pane_image_scene::KittyRenderBundle,
-        client_ids: impl Iterator<Item = ClientId>,
-        z_index: Option<usize>,
-    ) {
-        self.image_output
-            .add_kitty_render_bundle_to_multiple_clients(kitty_render_bundle, client_ids, z_index);
-    }
     pub fn add_damage_redraw_image_render_bundle_to_client(
         &mut self,
         client_id: ClientId,
@@ -681,37 +474,19 @@ impl Output {
                 }
             }
 
-            let image_output = self
-                .image_output
-                .take_client_output_for_serialization(client_id, pre_vte_clears_display);
-            if image_output.kitty_scene_changed {
-                client_serialized_render_instructions.push_str("\u{1b}[s");
-                client_serialized_render_instructions.push_str(&kitty_delete_all_vte());
-                client_serialized_render_instructions.push_str("\u{1b}[u");
-            }
-
-            // append the actual vte
+            // append the actual text+image output
             client_serialized_render_instructions.push_str(
                 &self
                     .image_output
-                    .with_sixel_image_store(|sixel_image_store| {
-                        serialize_chunks(
-                            client_character_chunks,
-                            (!image_output.sixel_chunks.is_empty())
-                                .then_some(&image_output.sixel_chunks),
-                            (!image_output.kitty_chunks_to_serialize.is_empty())
-                                .then_some(&image_output.kitty_chunks_to_serialize),
-                            (!image_output
-                                .kitty_placeholder_renders_to_serialize
-                                .is_empty())
-                            .then_some(&image_output.kitty_placeholder_renders_to_serialize),
-                            self.link_handler.as_mut(),
-                            Some(sixel_image_store),
-                            self.styled_underlines,
-                            self.osc8_hyperlinks,
-                            None,
-                        )
-                    })
+                    .serialize_client_chunks(
+                        client_id,
+                        pre_vte_clears_display,
+                        client_character_chunks,
+                        self.link_handler.as_mut(),
+                        self.styled_underlines,
+                        self.osc8_hyperlinks,
+                        None,
+                    )
                     .with_context(err_context)?,
             );
 
@@ -723,11 +498,6 @@ impl Output {
                     client_serialized_render_instructions.push_str(&vte_instruction);
                 }
             }
-            self.image_output.finish_client_frame(
-                client_id,
-                image_output.current_kitty_chunks,
-                image_output.current_kitty_placeholder_renders,
-            );
             serialized_render_instructions.insert(client_id, client_serialized_render_instructions);
         }
         Ok(serialized_render_instructions)
@@ -776,36 +546,18 @@ impl Output {
                 }
             }
 
-            let image_output = self
-                .image_output
-                .take_client_output_for_serialization(client_id, pre_vte_clears_display);
-            if image_output.kitty_scene_changed {
-                client_serialized_render_instructions.push_str("\u{1b}[s");
-                client_serialized_render_instructions.push_str(&kitty_delete_all_vte());
-                client_serialized_render_instructions.push_str("\u{1b}[u");
-            }
-
             client_serialized_render_instructions.push_str(
                 &self
                     .image_output
-                    .with_sixel_image_store(|sixel_image_store| {
-                        serialize_chunks(
-                            client_character_chunks,
-                            (!image_output.sixel_chunks.is_empty())
-                                .then_some(&image_output.sixel_chunks),
-                            (!image_output.kitty_chunks_to_serialize.is_empty())
-                                .then_some(&image_output.kitty_chunks_to_serialize),
-                            (!image_output
-                                .kitty_placeholder_renders_to_serialize
-                                .is_empty())
-                            .then_some(&image_output.kitty_placeholder_renders_to_serialize),
-                            self.link_handler.as_mut(),
-                            Some(sixel_image_store),
-                            self.styled_underlines,
-                            self.osc8_hyperlinks,
-                            max_size,
-                        )
-                    })
+                    .serialize_client_chunks(
+                        client_id,
+                        pre_vte_clears_display,
+                        client_character_chunks,
+                        self.link_handler.as_mut(),
+                        self.styled_underlines,
+                        self.osc8_hyperlinks,
+                        max_size,
+                    )
                     .with_context(err_context)?,
             );
 
@@ -827,11 +579,6 @@ impl Output {
                 }
             }
 
-            self.image_output.finish_client_frame(
-                client_id,
-                image_output.current_kitty_chunks,
-                image_output.current_kitty_placeholder_renders,
-            );
             serialized_render_instructions.insert(client_id, client_serialized_render_instructions);
         }
         Ok(serialized_render_instructions)

@@ -1,15 +1,220 @@
 use super::{
-    FloatingPanesStack, ImageRenderBundle, KittyImageChunk, KittyPlaceholderRender, SixelImageChunk,
+    kitty_delete_all_vte, CharacterChunk, FloatingPanesStack, HighlightSelection,
+    ImageRenderBundle, KittyImageChunk, KittyPlaceholderRender, SixelImageChunk,
 };
-use crate::{panes::pane_image_scene::KittyRenderBundle, ClientId};
+use crate::{
+    panes::kitty::KittyImageState,
+    panes::pane_image_scene::KittyRenderBundle,
+    panes::terminal_character::{AnsiCode, CharacterStyles},
+    panes::{LinkHandler, DEFAULT_STYLES},
+    ClientId,
+};
+use std::fmt::Write;
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     rc::Rc,
 };
-use zellij_utils::pane_size::SizeInPixels;
+use zellij_utils::errors::prelude::*;
+use zellij_utils::pane_size::{Size, SizeInPixels};
 
 use crate::panes::sixel::SixelImageStore;
+
+fn vte_goto_instruction(x_coords: usize, y_coords: usize, vte_output: &mut String) -> Result<()> {
+    write!(
+        vte_output,
+        "\u{1b}[{};{}H\u{1b}[m",
+        y_coords + 1,
+        x_coords + 1,
+    )
+    .with_context(|| {
+        format!(
+            "failed to execute VTE instruction to go to ({}, {})",
+            x_coords, y_coords
+        )
+    })
+}
+
+fn adjust_styles_for_possible_selection(
+    chunk_selection_and_colors: &[HighlightSelection],
+    character_styles: CharacterStyles,
+    chunk_y: usize,
+    chunk_width: usize,
+) -> CharacterStyles {
+    chunk_selection_and_colors
+        .iter()
+        .find(|hs| hs.selection.contains(chunk_y, chunk_width))
+        .map(|hs| {
+            let mut styles = character_styles;
+            if let Some(bg) = hs.bg {
+                styles = styles.background(Some(bg));
+            }
+            if let Some(fg) = hs.fg {
+                styles = styles.foreground(Some(fg));
+            }
+            if hs.bold {
+                styles = styles.bold(Some(AnsiCode::On));
+            }
+            if hs.italic {
+                styles = styles.italic(Some(AnsiCode::On));
+            }
+            if hs.underline {
+                styles = styles.underline(Some(AnsiCode::Underline(None)));
+            }
+            styles
+        })
+        .unwrap_or(character_styles)
+}
+
+fn adjust_styles_for_custom_bg_fg(
+    character_styles: CharacterStyles,
+    pane_default_fg: Option<AnsiCode>,
+    pane_default_bg: Option<AnsiCode>,
+) -> CharacterStyles {
+    let mut character_styles = character_styles;
+    if character_styles.foreground.is_none() || character_styles.foreground == Some(AnsiCode::Reset)
+    {
+        if let Some(fg) = pane_default_fg {
+            character_styles.foreground = Some(fg);
+        }
+    }
+    if character_styles.background.is_none() || character_styles.background == Some(AnsiCode::Reset)
+    {
+        if let Some(bg) = pane_default_bg {
+            character_styles.background = Some(bg);
+        }
+    }
+    character_styles
+}
+
+fn write_changed_styles(
+    character_styles: &mut CharacterStyles,
+    current_character_styles: CharacterStyles,
+    chunk_changed_colors: Option<[Option<AnsiCode>; 256]>,
+    link_handler: Option<&std::cell::Ref<LinkHandler>>,
+    osc8_hyperlinks: bool,
+    vte_output: &mut String,
+) -> Result<()> {
+    let err_context = "failed to format changed styles to VTE string";
+
+    if let Some(new_styles) =
+        character_styles.update_and_return_diff(&current_character_styles, chunk_changed_colors)
+    {
+        if osc8_hyperlinks {
+            if let Some(osc8_link) =
+                link_handler.and_then(|l_h| l_h.output_osc8(new_styles.link_anchor))
+            {
+                write!(vte_output, "{}{}", new_styles, osc8_link).context(err_context)?;
+            } else {
+                write!(vte_output, "{}", new_styles).context(err_context)?;
+            }
+        } else {
+            write!(vte_output, "{}", new_styles).context(err_context)?;
+        }
+    }
+    Ok(())
+}
+
+fn serialize_chunks(
+    character_chunks: Vec<CharacterChunk>,
+    sixel_chunks: Option<&Vec<SixelImageChunk>>,
+    kitty_chunks: Option<&Vec<KittyImageChunk>>,
+    kitty_placeholder_renders: Option<&Vec<KittyPlaceholderRender>>,
+    link_handler: Option<&mut Rc<RefCell<LinkHandler>>>,
+    sixel_image_store: Option<&mut SixelImageStore>,
+    styled_underlines: bool,
+    osc8_hyperlinks: bool,
+    max_size: Option<Size>,
+) -> Result<String> {
+    let err_context = || "failed to serialize input chunks".to_string();
+
+    let mut vte_output = String::new();
+    let mut sixel_vte: Option<String> = None;
+    let link_handler = link_handler.map(|l_h| l_h.borrow());
+    for character_chunk in character_chunks {
+        if let Some(size) = max_size {
+            if character_chunk.y >= size.rows || character_chunk.x >= size.cols {
+                continue;
+            }
+        }
+
+        let chunk_changed_colors = character_chunk.changed_colors();
+        let pane_default_fg = character_chunk.pane_default_fg;
+        let pane_default_bg = character_chunk.pane_default_bg;
+        let mut character_styles = DEFAULT_STYLES.enable_styled_underlines(styled_underlines);
+        vte_goto_instruction(character_chunk.x, character_chunk.y, &mut vte_output)
+            .with_context(err_context)?;
+        let mut chunk_width = character_chunk.x;
+        for t_character in character_chunk.terminal_characters.iter() {
+            if let Some(size) = max_size {
+                if chunk_width + t_character.width() > size.cols {
+                    break;
+                }
+            }
+
+            let current_character_styles = adjust_styles_for_custom_bg_fg(
+                adjust_styles_for_possible_selection(
+                    character_chunk.selection_and_colors(),
+                    *t_character.styles,
+                    character_chunk.y,
+                    chunk_width,
+                ),
+                pane_default_fg,
+                pane_default_bg,
+            );
+            write_changed_styles(
+                &mut character_styles,
+                current_character_styles,
+                chunk_changed_colors,
+                link_handler.as_ref(),
+                osc8_hyperlinks,
+                &mut vte_output,
+            )
+            .with_context(err_context)?;
+            chunk_width += t_character.width();
+            vte_output.push(t_character.character);
+        }
+    }
+    if let Some(sixel_image_store) = sixel_image_store {
+        if let Some(sixel_chunks) = sixel_chunks {
+            for sixel_chunk in sixel_chunks {
+                if let Some(size) = max_size {
+                    if sixel_chunk.cell_y >= size.rows || sixel_chunk.cell_x >= size.cols {
+                        continue;
+                    }
+                }
+
+                let serialized_sixel_image = sixel_image_store.serialize_image(
+                    sixel_chunk.sixel_image_id,
+                    sixel_chunk.sixel_image_pixel_x,
+                    sixel_chunk.sixel_image_pixel_y,
+                    sixel_chunk.sixel_image_pixel_width,
+                    sixel_chunk.sixel_image_pixel_height,
+                );
+                if let Some(serialized_sixel_image) = serialized_sixel_image {
+                    let sixel_vte = sixel_vte.get_or_insert_with(String::new);
+                    vte_goto_instruction(sixel_chunk.cell_x, sixel_chunk.cell_y, sixel_vte)
+                        .with_context(err_context)?;
+                    sixel_vte.push_str(&serialized_sixel_image);
+                }
+            }
+        }
+    }
+    if let Some(ref sixel_vte) = sixel_vte {
+        vte_output.push_str("\u{1b}[s");
+        vte_output.push_str(sixel_vte);
+        vte_output.push_str("\u{1b}[u");
+    }
+    if let Some(kitty_chunks) = kitty_chunks {
+        vte_output.push_str(&KittyImageState::serialize_chunks(kitty_chunks));
+    }
+    if let Some(kitty_placeholder_renders) = kitty_placeholder_renders {
+        vte_output.push_str(&KittyImageState::serialize_placeholder_renders(
+            kitty_placeholder_renders,
+        ));
+    }
+    Ok(vte_output)
+}
 
 #[derive(Clone, Default)]
 pub(crate) struct ImageOutput {
@@ -28,13 +233,13 @@ pub(crate) struct ImageOutput {
     floating_panes_stack: Option<FloatingPanesStack>,
 }
 
-pub(crate) struct ClientImageOutput {
-    pub sixel_chunks: Vec<SixelImageChunk>,
-    pub kitty_chunks_to_serialize: Vec<KittyImageChunk>,
-    pub kitty_placeholder_renders_to_serialize: Vec<KittyPlaceholderRender>,
-    pub current_kitty_chunks: Vec<KittyImageChunk>,
-    pub current_kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
-    pub kitty_scene_changed: bool,
+struct ClientImageOutput {
+    sixel_chunks: Vec<SixelImageChunk>,
+    kitty_chunks_to_serialize: Vec<KittyImageChunk>,
+    kitty_placeholder_renders_to_serialize: Vec<KittyPlaceholderRender>,
+    current_kitty_chunks: Vec<KittyImageChunk>,
+    current_kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
+    kitty_scene_changed: bool,
 }
 
 impl ImageOutput {
@@ -103,7 +308,7 @@ impl ImageOutput {
         )
     }
 
-    pub fn add_sixel_image_chunks_to_client(
+    fn add_sixel_image_chunks_to_client(
         &mut self,
         client_id: ClientId,
         sixel_image_chunks: Vec<SixelImageChunk>,
@@ -124,7 +329,7 @@ impl ImageOutput {
         }
     }
 
-    pub fn add_sixel_image_chunks_to_multiple_clients(
+    fn add_sixel_image_chunks_to_multiple_clients(
         &mut self,
         sixel_image_chunks: Vec<SixelImageChunk>,
         client_ids: impl Iterator<Item = ClientId>,
@@ -147,7 +352,7 @@ impl ImageOutput {
         }
     }
 
-    pub fn add_kitty_image_chunks_to_client(
+    fn add_kitty_image_chunks_to_client(
         &mut self,
         client_id: ClientId,
         kitty_image_chunks: Vec<KittyImageChunk>,
@@ -162,7 +367,7 @@ impl ImageOutput {
         entry.append(&mut kitty_chunks);
     }
 
-    pub fn add_kitty_image_chunks_to_multiple_clients(
+    fn add_kitty_image_chunks_to_multiple_clients(
         &mut self,
         kitty_image_chunks: Vec<KittyImageChunk>,
         client_ids: impl Iterator<Item = ClientId>,
@@ -179,7 +384,7 @@ impl ImageOutput {
         }
     }
 
-    pub fn add_kitty_placeholder_renders_to_client(
+    fn add_kitty_placeholder_renders_to_client(
         &mut self,
         client_id: ClientId,
         kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
@@ -188,7 +393,7 @@ impl ImageOutput {
         entry.extend(kitty_placeholder_renders);
     }
 
-    pub fn add_kitty_placeholder_renders_to_multiple_clients(
+    fn add_kitty_placeholder_renders_to_multiple_clients(
         &mut self,
         kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
         client_ids: impl Iterator<Item = ClientId>,
@@ -199,7 +404,7 @@ impl ImageOutput {
         }
     }
 
-    pub fn add_kitty_render_bundle_to_client(
+    fn add_kitty_render_bundle_to_client(
         &mut self,
         client_id: ClientId,
         kitty_render_bundle: KittyRenderBundle,
@@ -216,7 +421,7 @@ impl ImageOutput {
         );
     }
 
-    pub fn add_kitty_render_bundle_to_multiple_clients(
+    fn add_kitty_render_bundle_to_multiple_clients(
         &mut self,
         kitty_render_bundle: KittyRenderBundle,
         client_ids: impl Iterator<Item = ClientId>,
@@ -318,7 +523,7 @@ impl ImageOutput {
         );
     }
 
-    pub fn take_client_output_for_serialization(
+    fn take_client_output_for_serialization(
         &mut self,
         client_id: ClientId,
         pre_vte_clears_display: bool,
@@ -377,7 +582,7 @@ impl ImageOutput {
         }
     }
 
-    pub fn finish_client_frame(
+    fn finish_client_frame(
         &mut self,
         client_id: ClientId,
         current_kitty_chunks: Vec<KittyImageChunk>,
@@ -424,7 +629,50 @@ impl ImageOutput {
                 .any(|c| !c.is_empty())
     }
 
-    pub fn with_sixel_image_store<T>(&mut self, f: impl FnOnce(&mut SixelImageStore) -> T) -> T {
+    fn with_sixel_image_store<T>(&mut self, f: impl FnOnce(&mut SixelImageStore) -> T) -> T {
         f(&mut self.sixel_image_store.borrow_mut())
+    }
+
+    pub fn serialize_client_chunks(
+        &mut self,
+        client_id: ClientId,
+        pre_vte_clears_display: bool,
+        character_chunks: Vec<CharacterChunk>,
+        link_handler: Option<&mut Rc<RefCell<LinkHandler>>>,
+        styled_underlines: bool,
+        osc8_hyperlinks: bool,
+        max_size: Option<Size>,
+    ) -> Result<String> {
+        let image_output =
+            self.take_client_output_for_serialization(client_id, pre_vte_clears_display);
+        let mut serialized = String::new();
+        if image_output.kitty_scene_changed {
+            serialized.push_str("\u{1b}[s");
+            serialized.push_str(&kitty_delete_all_vte());
+            serialized.push_str("\u{1b}[u");
+        }
+        serialized.push_str(&self.with_sixel_image_store(|sixel_image_store| {
+            serialize_chunks(
+                character_chunks,
+                (!image_output.sixel_chunks.is_empty()).then_some(&image_output.sixel_chunks),
+                (!image_output.kitty_chunks_to_serialize.is_empty())
+                    .then_some(&image_output.kitty_chunks_to_serialize),
+                (!image_output
+                    .kitty_placeholder_renders_to_serialize
+                    .is_empty())
+                .then_some(&image_output.kitty_placeholder_renders_to_serialize),
+                link_handler,
+                Some(sixel_image_store),
+                styled_underlines,
+                osc8_hyperlinks,
+                max_size,
+            )
+        })?);
+        self.finish_client_frame(
+            client_id,
+            image_output.current_kitty_chunks,
+            image_output.current_kitty_placeholder_renders,
+        );
+        Ok(serialized)
     }
 }
