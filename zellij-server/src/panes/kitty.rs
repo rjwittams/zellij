@@ -4,6 +4,7 @@ use zellij_utils::pane_size::SizeInPixels;
 use crate::output::{
     KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyPlaceholderRender,
 };
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::kitty_placeholder::{
     kitty_diacritic_to_index, KITTY_ROWCOL_DIACRITICS, KITTY_UNICODE_PLACEHOLDER_CHAR,
 };
@@ -13,36 +14,9 @@ use crate::panes::pane_image_scene::{
     project_placement_to_viewport, FlowAnchor, ImageAssetId, ImagePlacementGeometry,
     PlacementOccupancy,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
-
-#[derive(Clone, Debug)]
-pub struct KittyImage {
-    pub id: u32,
-    pub data: KittyImageData,
-}
-
-impl KittyImage {
-    pub fn width(&self) -> u32 {
-        match &self.data {
-            KittyImageData::Png { width, .. }
-            | KittyImageData::Rgb { width, .. }
-            | KittyImageData::Rgba { width, .. } => *width,
-        }
-    }
-
-    pub fn height(&self) -> u32 {
-        match &self.data {
-            KittyImageData::Png { height, .. }
-            | KittyImageData::Rgb { height, .. }
-            | KittyImageData::Rgba { height, .. } => *height,
-        }
-    }
-
-    pub fn chunk_data(&self) -> KittyImageData {
-        self.data.clone()
-    }
-}
+use std::rc::Rc;
 
 #[derive(Clone, Debug, Default)]
 pub struct PendingKittyPlaceholder {
@@ -195,16 +169,10 @@ enum KittyImageFormat {
 
 #[derive(Clone, Debug, Default)]
 pub struct KittyImageState {
-    images: HashMap<u32, KittyImage>,
+    kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     placements: Vec<KittyPlacement>,
     protocol_image_id_to_internal_id: HashMap<u32, u32>,
     pending_transmit: Option<PendingKittyTransmit>,
-}
-
-static NEXT_GLOBAL_KITTY_IMAGE_ID: AtomicU32 = AtomicU32::new(1);
-
-fn next_global_kitty_image_id() -> u32 {
-    NEXT_GLOBAL_KITTY_IMAGE_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
@@ -225,14 +193,21 @@ pub struct KittyImageInsertion {
 }
 
 impl KittyImageState {
+    pub fn new(kitty_asset_store: Rc<RefCell<KittyAssetStore>>) -> Self {
+        Self {
+            kitty_asset_store,
+            placements: vec![],
+            protocol_image_id_to_internal_id: HashMap::new(),
+            pending_transmit: None,
+        }
+    }
+
     pub fn image_chunk_data(&self, image_id: u32) -> Option<KittyImageData> {
-        self.images.get(&image_id).map(|image| image.chunk_data())
+        self.kitty_asset_store.borrow().image_data(image_id)
     }
 
     pub fn image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
-        self.images
-            .get(&image_id)
-            .map(|image| (image.width(), image.height()))
+        self.kitty_asset_store.borrow().image_dimensions(image_id)
     }
 
     pub fn placement(&self, image_id: u32, placement_id: Option<u32>) -> Option<&KittyPlacement> {
@@ -251,12 +226,16 @@ impl KittyImageState {
         let pending = self.pending_transmit.take()?;
         let protocol_image_id = pending.protocol_image_id;
         let mut placement = pending.placement.clone();
-        let image = pending.into_image()?;
+        let image_id = pending.image_id;
+        let image_data = pending.into_image_data()?;
+        let image_dimensions = kitty_image_dimensions(&image_data);
         if let Some(placement) = placement.as_mut() {
             placement.anchor = anchor;
         }
-        self.images.insert(image.id, image.clone());
-        let asset_id = ImageAssetId(image.id as u64);
+        self.kitty_asset_store
+            .borrow_mut()
+            .insert_asset(image_id, image_data);
+        let asset_id = ImageAssetId(image_id as u64);
         let Some(placement) = placement else {
             return None;
         };
@@ -269,8 +248,12 @@ impl KittyImageState {
         });
         let protocol_placement_id = placement.placement_id;
         let placement_mode = placement.placement_mode;
-        let geometry =
-            placement.geometry_for_image(&image, cursor_x, scrollback_row, character_cell_size);
+        let geometry = placement.geometry_for_image(
+            image_dimensions,
+            cursor_x,
+            scrollback_row,
+            character_cell_size,
+        );
         self.placements.push(placement);
         Some(KittyImageInsertion {
             asset_id,
@@ -301,12 +284,18 @@ impl KittyImageState {
                 payload,
             } => {
                 let image_id = if let Some(protocol_image_id) = protocol_image_id {
-                    *self
-                        .protocol_image_id_to_internal_id
-                        .entry(protocol_image_id)
-                        .or_insert_with(next_global_kitty_image_id)
+                    if let Some(existing_image_id) =
+                        self.protocol_image_id_to_internal_id.get(&protocol_image_id)
+                    {
+                        *existing_image_id
+                    } else {
+                        let image_id = self.kitty_asset_store.borrow_mut().next_asset_id();
+                        self.protocol_image_id_to_internal_id
+                            .insert(protocol_image_id, image_id);
+                        image_id
+                    }
                 } else {
-                    next_global_kitty_image_id()
+                    self.kitty_asset_store.borrow_mut().next_asset_id()
                 };
                 if let Some(placement) = placement.as_mut() {
                     placement.image_id = image_id;
@@ -338,7 +327,7 @@ impl KittyImageState {
                 let image_id = *self
                     .protocol_image_id_to_internal_id
                     .get(&protocol_image_id)?;
-                let image = self.images.get(&image_id)?.clone();
+                let image_dimensions = self.kitty_asset_store.borrow().image_dimensions(image_id)?;
                 placement.image_id = image_id;
                 placement.anchor = anchor;
                 self.placements.retain(|p| {
@@ -350,7 +339,7 @@ impl KittyImageState {
                     }
                 });
                 let geometry = placement.geometry_for_image(
-                    &image,
+                    image_dimensions,
                     cursor_x,
                     scrollback_row,
                     character_cell_size,
@@ -400,18 +389,24 @@ impl KittyImageState {
             return vec![];
         };
         let mut chunks = vec![];
+        let kitty_asset_store = self.kitty_asset_store.borrow();
         for placement in &self.placements {
-            let Some(image) = self.images.get(&placement.image_id) else {
+            let Some((image_width, image_height)) =
+                kitty_asset_store.image_dimensions(placement.image_id)
+            else {
+                continue;
+            };
+            let Some(image_data) = kitty_asset_store.image_data(placement.image_id) else {
                 continue;
             };
             let mut source_x = placement.source_x.unwrap_or(0);
             let mut source_y = placement.source_y.unwrap_or(0);
             let mut source_width = placement
                 .source_width
-                .unwrap_or_else(|| image.width().saturating_sub(source_x));
+                .unwrap_or_else(|| image_width.saturating_sub(source_x));
             let mut source_height = placement
                 .source_height
-                .unwrap_or_else(|| image.height().saturating_sub(source_y));
+                .unwrap_or_else(|| image_height.saturating_sub(source_y));
             let mut columns = placement.columns.unwrap_or_else(|| {
                 ((source_width as usize + cell_size.width.saturating_sub(1)) / cell_size.width)
                     .max(1) as u32
@@ -457,7 +452,7 @@ impl KittyImageState {
             let cell_x = projection.cell_x;
             let cell_y = projection.cell_y;
             chunks.push(KittyImageChunk {
-                image_id: image.id,
+                image_id: placement.image_id,
                 placement_id: placement.placement_id,
                 placement_mode: placement.placement_mode,
                 cell_x,
@@ -471,14 +466,13 @@ impl KittyImageState {
                 z_index: placement.z_index.unwrap_or(0),
                 x_offset: placement.x_offset.unwrap_or(0),
                 y_offset: placement.y_offset.unwrap_or(0),
-                image_data: image.chunk_data(),
+                image_data,
             });
         }
         chunks
     }
 
     pub fn clear(&mut self) {
-        self.images.clear();
         self.placements.clear();
         self.protocol_image_id_to_internal_id.clear();
         self.pending_transmit = None;
@@ -679,19 +673,20 @@ enum ParsedKittyCommand {
 impl KittyPlacement {
     fn geometry_for_image(
         &self,
-        image: &KittyImage,
+        image_dimensions: (u32, u32),
         cursor_x: usize,
         scrollback_row: usize,
         character_cell_size: Option<SizeInPixels>,
     ) -> ImagePlacementGeometry {
+        let (image_width, image_height) = image_dimensions;
         let source_x = self.source_x.unwrap_or(0);
         let source_y = self.source_y.unwrap_or(0);
         let source_width = self
             .source_width
-            .unwrap_or_else(|| image.width().saturating_sub(source_x));
+            .unwrap_or_else(|| image_width.saturating_sub(source_x));
         let source_height = self
             .source_height
-            .unwrap_or_else(|| image.height().saturating_sub(source_y));
+            .unwrap_or_else(|| image_height.saturating_sub(source_y));
         let (columns, rows) = if let Some(cell_size) = character_cell_size {
             let default_columns = || {
                 ((source_width as usize + cell_size.width.saturating_sub(1)) / cell_size.width)
@@ -757,8 +752,8 @@ impl KittyPlacement {
 }
 
 impl PendingKittyTransmit {
-    fn into_image(self) -> Option<KittyImage> {
-        let data = match self.image_format {
+    fn into_image_data(self) -> Option<KittyImageData> {
+        Some(match self.image_format {
             KittyImageFormat::Png => {
                 let (width, height) = parse_png_dimensions(&self.payload)?;
                 KittyImageData::Png {
@@ -777,11 +772,15 @@ impl PendingKittyTransmit {
                 width: self.width,
                 height: self.height,
             },
-        };
-        Some(KittyImage {
-            id: self.image_id,
-            data,
         })
+    }
+}
+
+fn kitty_image_dimensions(image_data: &KittyImageData) -> (u32, u32) {
+    match image_data {
+        KittyImageData::Png { width, height, .. }
+        | KittyImageData::Rgb { width, height, .. }
+        | KittyImageData::Rgba { width, height, .. } => (*width, *height),
     }
 }
 
@@ -1219,15 +1218,8 @@ fn serialize_virtual_placeholder_placement(
 mod tests {
     use super::*;
 
-    fn test_image(width: u32, height: u32) -> KittyImage {
-        KittyImage {
-            id: 1,
-            data: KittyImageData::Rgba {
-                data: vec![0; (width * height * 4) as usize],
-                width,
-                height,
-            },
-        }
+    fn test_image_dimensions(width: u32, height: u32) -> (u32, u32) {
+        (width, height)
     }
 
     #[test]
@@ -1268,7 +1260,7 @@ mod tests {
         assert_eq!(height, 1);
         assert_eq!(parsed_payload, payload);
 
-        let image = PendingKittyTransmit {
+        let image_data = PendingKittyTransmit {
             protocol_image_id: Some(7),
             image_id: 99,
             image_format,
@@ -1277,9 +1269,9 @@ mod tests {
             placement: None,
             payload: payload.clone(),
         }
-        .into_image()
+        .into_image_data()
         .unwrap();
-        match image.data {
+        match image_data {
             KittyImageData::Rgb {
                 data,
                 width,
@@ -1310,7 +1302,7 @@ mod tests {
 
     #[test]
     fn one_dimensional_kitty_sizing_preserves_prediction_and_wire_intent() {
-        let image = test_image(40, 20);
+        let image_dimensions = test_image_dimensions(40, 20);
         let cell_size = Some(SizeInPixels {
             width: 10,
             height: 10,
@@ -1342,7 +1334,7 @@ mod tests {
                 y_offset: None,
                 z_index: None,
             };
-            let geometry = placement.geometry_for_image(&image, 0, 0, cell_size);
+            let geometry = placement.geometry_for_image(image_dimensions, 0, 0, cell_size);
             assert_eq!(geometry.columns, expected_columns);
             assert_eq!(geometry.rows, expected_rows);
             assert_eq!(geometry.columns_specified, expect_c);
@@ -1371,7 +1363,11 @@ mod tests {
                 z_index: geometry.z_index,
                 x_offset: geometry.x_offset,
                 y_offset: geometry.y_offset,
-                image_data: image.chunk_data(),
+                image_data: KittyImageData::Rgba {
+                    data: vec![0; 40 * 20 * 4],
+                    width: 40,
+                    height: 20,
+                },
             };
             let serialized = serialize_display(&chunk, 7);
             assert_eq!(serialized.contains("c="), expect_c);

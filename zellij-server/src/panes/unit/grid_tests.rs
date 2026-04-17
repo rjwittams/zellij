@@ -1,5 +1,6 @@
 use super::super::Grid;
 use crate::panes::grid::SixelImageStore;
+use crate::output::KittyImageData;
 use crate::panes::link_handler::LinkHandler;
 use insta::assert_snapshot;
 use std::cell::RefCell;
@@ -5418,6 +5419,56 @@ fn kitty_images_follow_clear_reset_and_alt_screen_lifecycle() {
 
     grid.reset_terminal_state();
     assert!(grid.visible_kitty_image_chunks(0, 0).is_empty());
+}
+
+#[test]
+fn test_kitty_asset_store_allocates_monotonic_ids() {
+    let mut kitty_asset_store = crate::panes::kitty_asset_store::KittyAssetStore::default();
+
+    let first = kitty_asset_store.next_asset_id();
+    let second = kitty_asset_store.next_asset_id();
+    let third = kitty_asset_store.next_asset_id();
+
+    assert_eq!(second, first + 1);
+    assert_eq!(third, second + 1);
+}
+
+#[test]
+fn test_kitty_asset_store_round_trips_asset_data() {
+    let mut kitty_asset_store = crate::panes::kitty_asset_store::KittyAssetStore::default();
+    let image_id = kitty_asset_store.next_asset_id();
+    let image_data = KittyImageData::Rgba {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+
+    kitty_asset_store.insert_asset(image_id, image_data.clone());
+
+    assert_eq!(kitty_asset_store.image_data(image_id), Some(image_data));
+    assert_eq!(kitty_asset_store.image_dimensions(image_id), Some((1, 1)));
+}
+
+#[test]
+fn test_kitty_asset_store_updates_existing_asset() {
+    let mut kitty_asset_store = crate::panes::kitty_asset_store::KittyAssetStore::default();
+    let image_id = kitty_asset_store.next_asset_id();
+    let original = KittyImageData::Rgb {
+        data: vec![1, 2, 3],
+        width: 1,
+        height: 1,
+    };
+    let updated = KittyImageData::Png {
+        data: vec![9, 8, 7, 6],
+        width: 2,
+        height: 3,
+    };
+
+    kitty_asset_store.insert_asset(image_id, original);
+    kitty_asset_store.insert_asset(image_id, updated.clone());
+
+    assert_eq!(kitty_asset_store.image_data(image_id), Some(updated));
+    assert_eq!(kitty_asset_store.image_dimensions(image_id), Some((2, 3)));
 }
 
 // All tests below use a 10-row, 40-col grid with scroll region 1;8
