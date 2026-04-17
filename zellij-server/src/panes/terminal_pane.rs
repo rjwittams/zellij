@@ -224,7 +224,7 @@ impl Pane for TerminalPane {
         }
         let mut iter = bytes.into_iter();
         while let Some(byte) = iter.next() {
-            self.vte_parser.advance(&mut self.grid, byte);
+            self.vte_parser.advance(&mut self.grid, &[byte]);
             if !self.grid.pending_forwarded_queries.is_empty() {
                 // Grid produced a forward. Stop feeding; queue the
                 // un-fed remainder so Tab can replay it after the

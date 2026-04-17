@@ -913,7 +913,7 @@ fn take_snapshot(ansi_instructions: &str, rows: usize, columns: usize, palette: 
     );
     let mut vte_parser = vte::Parser::new();
     for &byte in ansi_instructions.as_bytes() {
-        vte_parser.advance(&mut grid, byte);
+        vte_parser.advance(&mut grid, &[byte]);
     }
     format!("{:?}", grid)
 }
@@ -952,7 +952,7 @@ fn take_snapshot_with_sixel(
     );
     let mut vte_parser = vte::Parser::new();
     for &byte in ansi_instructions.as_bytes() {
-        vte_parser.advance(&mut grid, byte);
+        vte_parser.advance(&mut grid, &[byte]);
     }
     format!("{:?}", grid)
 }
@@ -988,7 +988,7 @@ fn take_snapshot_and_cursor_position(
     );
     let mut vte_parser = vte::Parser::new();
     for &byte in ansi_instructions.as_bytes() {
-        vte_parser.advance(&mut grid, byte);
+        vte_parser.advance(&mut grid, &[byte]);
     }
     let coords = grid
         .cursor_coordinates()
@@ -14813,7 +14813,7 @@ fn osc99_grid_parses_and_stores_notification() {
     // Feed OSC 99 through vte parser
     let mut vte_parser = vte::Parser::new();
     for &byte in b"\x1b]99;i=gridtest:p=title;Grid notification\x07" {
-        vte_parser.advance(&mut grid, byte);
+        vte_parser.advance(&mut grid, &[byte]);
     }
 
     assert_eq!(

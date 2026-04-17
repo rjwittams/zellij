@@ -58,7 +58,7 @@ fn take_snapshot_and_cursor_coordinates(
 ) -> (Option<(usize, usize)>, String) {
     let mut vte_parser = vte::Parser::new();
     for &byte in ansi_instructions.as_bytes() {
-        vte_parser.advance(grid, byte);
+        vte_parser.advance(grid, &[byte]);
     }
     let coords = grid
         .cursor_coordinates()
