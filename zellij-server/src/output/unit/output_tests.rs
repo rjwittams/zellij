@@ -2,11 +2,16 @@ use super::super::{
     CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, Output, OutputBuffer,
     PaneImageRenderOutput, SixelImageChunk,
 };
+use super::super::image_fragment::{
+    visible_image_fragments, ImageFragment, KittyExplicitFragment, KittyPlaceholderFragment,
+    SixelFragment,
+};
 use crate::panes::pane_image_scene::KittyRenderBundle;
-use crate::panes::sixel::SixelImageStore;
+use crate::panes::sixel::{SixelGrid, SixelImageStore};
 use crate::panes::terminal_character::AnsiCode;
 use crate::panes::{LinkHandler, Row, TerminalCharacter};
 use crate::ClientId;
+use sixel_image::SixelImage;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
@@ -14,6 +19,15 @@ use zellij_utils::pane_size::{Dimension, PaneGeom, Size, SizeInPixels};
 
 /// Helper to create a simple Output instance for testing
 fn create_test_output() -> Output {
+    let (output, _sixel_image_store, _character_cell_size) = create_test_output_with_state();
+    output
+}
+
+fn create_test_output_with_state() -> (
+    Output,
+    Rc<RefCell<SixelImageStore>>,
+    Rc<RefCell<Option<SizeInPixels>>>,
+) {
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         height: 20,
@@ -21,11 +35,15 @@ fn create_test_output() -> Output {
     })));
     let styled_underlines = true;
     let osc8_hyperlinks = true;
-    Output::new(
+    (
+        Output::new(
+            sixel_image_store.clone(),
+            character_cell_size.clone(),
+            styled_underlines,
+            osc8_hyperlinks,
+        ),
         sixel_image_store,
         character_cell_size,
-        styled_underlines,
-        osc8_hyperlinks,
     )
 }
 
@@ -60,6 +78,45 @@ fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageC
     }
 }
 
+fn create_kitty_placeholder_render(image_id: u32) -> crate::output::KittyPlaceholderRender {
+    crate::output::KittyPlaceholderRender {
+        image_id,
+        placement_id: Some(image_id),
+        columns: 1,
+        rows: 1,
+        source_x: 0,
+        source_y: 0,
+        source_width: 10,
+        source_height: 10,
+        x_offset: 0,
+        y_offset: 0,
+        image_data: KittyImageData::Png {
+            data: vec![1, 2, 3, 4],
+            width: 1,
+            height: 1,
+        },
+        cells: vec![crate::output::KittyPlaceholderCellRender {
+            cell_x: 0,
+            cell_y: 0,
+            placeholder_row: 0,
+            placeholder_col: 0,
+        }],
+    }
+}
+
+fn seed_test_sixel_image(
+    sixel_image_store: Rc<RefCell<SixelImageStore>>,
+    character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
+    image_id: usize,
+) {
+    let mut sixel_grid = SixelGrid::new(character_cell_size, sixel_image_store);
+    let sixel_image = SixelImage::new(
+        b"\x1bPq\n#0;2;0;0;0#1;2;100;100;0#2;2;0;100;0\n#1~~@@vv@@~~@@~~$\n#2??}}GG}}??}}??-\n#1!14@\n\x1b\n",
+    )
+    .unwrap();
+    sixel_grid.new_sixel_image(image_id, sixel_image);
+}
+
 fn pane_image_output_with_sixels(sixel_chunks: Vec<SixelImageChunk>) -> PaneImageRenderOutput {
     PaneImageRenderOutput {
         sixel_chunks,
@@ -74,6 +131,18 @@ fn pane_image_output_with_kitty_scene(
         kitty_scene: KittyRenderBundle {
             explicit_chunks,
             placeholder_renders: vec![],
+        },
+        ..Default::default()
+    }
+}
+
+fn pane_image_output_with_kitty_placeholder(
+    placeholder_renders: Vec<crate::output::KittyPlaceholderRender>,
+) -> PaneImageRenderOutput {
+    PaneImageRenderOutput {
+        kitty_scene: KittyRenderBundle {
+            explicit_chunks: vec![],
+            placeholder_renders,
         },
         ..Default::default()
     }
@@ -313,6 +382,281 @@ fn test_serialize_emits_kitty_damage_redraw_without_scene_change() {
         client_output.contains("a=t") && client_output.contains("a=p"),
         "kitty damage redraw should still serialize kitty output when the scene is unchanged"
     );
+}
+
+#[test]
+fn test_prepared_image_output_emits_kitty_clear_before_text_when_scene_changes() {
+    let client_ids = create_test_clients(1);
+    let kitty_delete_all = "\u{1b}_Ga=d,d=A\u{1b}\\";
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![create_kitty_chunk(77, 2, 2)]),
+        None,
+    );
+    let chunk = create_character_chunk_from_str("TEXT-PHASE", 0, 0);
+    output
+        .add_character_chunks_to_client(1, vec![chunk], None)
+        .unwrap();
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    let clear_pos = client_output.find(kitty_delete_all).unwrap();
+    let text_pos = client_output.find("TEXT-PHASE").unwrap();
+
+    assert!(
+        clear_pos < text_pos,
+        "kitty scene clear should happen before text when the scene changes"
+    );
+}
+
+#[test]
+fn test_prepared_image_output_serializes_sixels_after_text() {
+    let client_ids = create_test_clients(1);
+    let (mut output, sixel_image_store, character_cell_size) = create_test_output_with_state();
+    seed_test_sixel_image(sixel_image_store, character_cell_size, 1);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_sixels(vec![SixelImageChunk {
+            cell_x: 0,
+            cell_y: 0,
+            sixel_image_pixel_x: 0,
+            sixel_image_pixel_y: 0,
+            sixel_image_pixel_width: 14,
+            sixel_image_pixel_height: 12,
+            sixel_image_id: 1,
+        }]),
+        None,
+    );
+    let chunk = create_character_chunk_from_str("TEXT-BEFORE-SIXEL", 0, 1);
+    output
+        .add_character_chunks_to_client(1, vec![chunk], None)
+        .unwrap();
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    let text_pos = client_output.find("TEXT-BEFORE-SIXEL").unwrap();
+    let sixel_pos = client_output.find("\u{1b}P").unwrap();
+
+    assert!(
+        text_pos < sixel_pos,
+        "sixel output should be appended after text serialization"
+    );
+}
+
+#[test]
+fn test_prepared_image_output_serializes_kitty_after_text() {
+    let client_ids = create_test_clients(1);
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_placeholder(vec![create_kitty_placeholder_render(88)]),
+        None,
+    );
+    let chunk = create_character_chunk_from_str("TEXT-BEFORE-KITTY", 0, 1);
+    output
+        .add_character_chunks_to_client(1, vec![chunk], None)
+        .unwrap();
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    let text_pos = client_output.find("TEXT-BEFORE-KITTY").unwrap();
+    let kitty_pos = client_output.rfind("\u{1b}_G").unwrap();
+
+    assert!(
+        text_pos < kitty_pos,
+        "kitty image serialization should happen after text serialization"
+    );
+}
+
+#[test]
+fn test_prepare_render_body_derives_sixel_fragments() {
+    let client_ids = create_test_clients(1);
+    let (mut output, sixel_image_store, character_cell_size) = create_test_output_with_state();
+    seed_test_sixel_image(sixel_image_store, character_cell_size, 1);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_sixels(vec![SixelImageChunk {
+            cell_x: 0,
+            cell_y: 0,
+            sixel_image_pixel_x: 0,
+            sixel_image_pixel_y: 0,
+            sixel_image_pixel_width: 14,
+            sixel_image_pixel_height: 12,
+            sixel_image_id: 1,
+        }]),
+        None,
+    );
+
+    let prepared = output.image_output.prepare_render_body_for_client(1, false);
+    assert_eq!(prepared.after_text.fragments.len(), 1);
+    match &prepared.after_text.fragments[0] {
+        ImageFragment::Sixel(fragment) => {
+            assert_eq!(fragment.chunk.sixel_image_id, 1);
+        },
+        other => panic!("expected sixel fragment, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_prepare_render_body_derives_kitty_explicit_fragments() {
+    let client_ids = create_test_clients(1);
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![create_kitty_chunk(91, 2, 2)]),
+        None,
+    );
+
+    let prepared = output.image_output.prepare_render_body_for_client(1, false);
+    assert!(prepared.before_text_vte.is_some());
+    assert_eq!(prepared.after_text.fragments.len(), 1);
+    match &prepared.after_text.fragments[0] {
+        ImageFragment::KittyExplicit(fragment) => {
+            assert_eq!(fragment.chunk.image_id, 91);
+        },
+        other => panic!("expected kitty explicit fragment, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_prepare_render_body_derives_kitty_placeholder_fragments() {
+    let client_ids = create_test_clients(1);
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_placeholder(vec![create_kitty_placeholder_render(92)]),
+        None,
+    );
+
+    let prepared = output.image_output.prepare_render_body_for_client(1, false);
+    assert!(prepared.before_text_vte.is_some());
+    assert_eq!(prepared.after_text.fragments.len(), 1);
+    match &prepared.after_text.fragments[0] {
+        ImageFragment::KittyPlaceholder(fragment) => {
+            assert_eq!(fragment.render.image_id, 92);
+        },
+        other => panic!("expected kitty placeholder fragment, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_clip_kitty_explicit_fragment_against_covering_pane() {
+    let stack = FloatingPanesStack {
+        layers: vec![create_pane_geom(1, 0, 1, 2)],
+    };
+    let chunk = KittyImageChunk {
+        cell_x: 0,
+        cell_y: 0,
+        columns: 2,
+        rows: 2,
+        ..create_kitty_chunk(93, 2, 2)
+    };
+    let fragments = visible_image_fragments(
+        &stack,
+        vec![ImageFragment::KittyExplicit(KittyExplicitFragment {
+            chunk,
+        })],
+        Some(0),
+        None,
+    );
+
+    assert_eq!(fragments.len(), 1);
+    match &fragments[0] {
+        ImageFragment::KittyExplicit(fragment) => {
+            assert_eq!(fragment.chunk.cell_x, 0);
+            assert_eq!(fragment.chunk.columns, 1);
+        },
+        other => panic!("expected kitty explicit fragment, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_clip_sixel_fragment_against_covering_pane() {
+    let stack = FloatingPanesStack {
+        layers: vec![create_pane_geom(0, 0, 3, 3)],
+    };
+    let fragments = visible_image_fragments(
+        &stack,
+        vec![ImageFragment::Sixel(SixelFragment {
+            chunk: SixelImageChunk {
+                cell_x: 0,
+                cell_y: 0,
+                sixel_image_pixel_x: 0,
+                sixel_image_pixel_y: 0,
+                sixel_image_pixel_width: 20,
+                sixel_image_pixel_height: 40,
+                sixel_image_id: 1,
+            },
+        })],
+        Some(0),
+        Some(&SizeInPixels {
+            width: 10,
+            height: 20,
+        }),
+    );
+
+    assert!(
+        fragments.is_empty(),
+        "fully covered sixel fragments should be removed"
+    );
+}
+
+#[test]
+fn test_clip_kitty_placeholder_fragment_against_covering_pane() {
+    let stack = FloatingPanesStack {
+        layers: vec![create_pane_geom(0, 0, 1, 1)],
+    };
+    let mut render = create_kitty_placeholder_render(94);
+    render.cells = vec![
+        crate::output::KittyPlaceholderCellRender {
+            cell_x: 0,
+            cell_y: 0,
+            placeholder_row: 0,
+            placeholder_col: 0,
+        },
+        crate::output::KittyPlaceholderCellRender {
+            cell_x: 1,
+            cell_y: 0,
+            placeholder_row: 0,
+            placeholder_col: 1,
+        },
+    ];
+    let fragments = visible_image_fragments(
+        &stack,
+        vec![ImageFragment::KittyPlaceholder(KittyPlaceholderFragment {
+            render,
+        })],
+        Some(0),
+        None,
+    );
+
+    assert_eq!(fragments.len(), 1);
+    match &fragments[0] {
+        ImageFragment::KittyPlaceholder(fragment) => {
+            assert_eq!(fragment.render.cells.len(), 1);
+            assert_eq!(fragment.render.cells[0].cell_x, 1);
+        },
+        other => panic!("expected kitty placeholder fragment, got {other:?}"),
+    }
 }
 
 #[test]
