@@ -1,4 +1,7 @@
-use super::{FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender, SixelImageChunk};
+use super::{
+    kitty_diff::KittyScenePlan, FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender,
+    SixelImageChunk,
+};
 use crate::ClientId;
 use zellij_utils::pane_size::{PaneGeom, SizeInPixels};
 
@@ -24,12 +27,28 @@ pub enum ImageFragment {
     KittyPlaceholder(KittyPlaceholderFragment),
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub(crate) struct PreparedAfterTextImages {
     pub client_id: ClientId,
     pub fragments: Vec<ImageFragment>,
+    pub kitty_plan: KittyScenePlan,
     pub current_kitty_chunks: Vec<KittyImageChunk>,
     pub current_kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
+}
+
+impl Default for PreparedAfterTextImages {
+    fn default() -> Self {
+        Self {
+            client_id: 0,
+            fragments: vec![],
+            kitty_plan: KittyScenePlan::Diff {
+                asset_ops: vec![],
+                placement_ops: vec![],
+            },
+            current_kitty_chunks: vec![],
+            current_kitty_placeholder_renders: vec![],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -75,9 +94,7 @@ fn clip_kitty_explicit_fragment(
         && pane_top_edge <= chunk_bottom_edge)
         || (pane_bottom_edge >= chunk_top_edge && pane_bottom_edge <= chunk_bottom_edge)
         || (pane_top_edge <= chunk_top_edge && pane_bottom_edge >= chunk_bottom_edge);
-    if pane_top_edge > chunk_top_edge
-        && pane_top_edge <= chunk_bottom_edge
-        && intersects_vertically
+    if pane_top_edge > chunk_top_edge && pane_top_edge <= chunk_bottom_edge && intersects_vertically
     {
         let kept_rows = pane_top_edge - chunk_top_edge;
         uncovered.push(ImageFragment::KittyExplicit(KittyExplicitFragment {
@@ -164,8 +181,8 @@ fn clip_sixel_fragment(
 
     let pane_top_edge = pane_geom.y * character_cell_size.height;
     let pane_left_edge = pane_geom.x * character_cell_size.width;
-    let pane_bottom_edge = (pane_geom.y + pane_geom.rows.as_usize().saturating_sub(1))
-        * character_cell_size.height;
+    let pane_bottom_edge =
+        (pane_geom.y + pane_geom.rows.as_usize().saturating_sub(1)) * character_cell_size.height;
     let pane_right_edge =
         (pane_geom.x + pane_geom.cols.as_usize().saturating_sub(1)) * character_cell_size.width;
     let s_chunk_top_edge = s_chunk.cell_y * character_cell_size.height;
@@ -332,10 +349,10 @@ pub(crate) fn visible_image_fragments(
     let mut fragments_to_check: Vec<ImageFragment> = image_fragments.drain(..).collect();
     let panes_to_check = floating_panes_stack.layers.iter().skip(z_index);
     for pane_geom in panes_to_check {
-        let fragments_against_this_pane: Vec<ImageFragment> = fragments_to_check.drain(..).collect();
+        let fragments_against_this_pane: Vec<ImageFragment> =
+            fragments_to_check.drain(..).collect();
         for fragment in fragments_against_this_pane {
-            let mut unclipped =
-                clip_image_fragment(pane_geom, &fragment, character_cell_size);
+            let mut unclipped = clip_image_fragment(pane_geom, &fragment, character_cell_size);
             fragments_to_check.append(&mut unclipped);
         }
     }

@@ -84,7 +84,8 @@ pub(crate) enum KittyScenePlan {
         placement_ops: Vec<KittyPlacementOp>,
     },
     FullResetAndResend {
-        desired: KittySceneState,
+        explicit_chunks: Vec<KittyImageChunk>,
+        placeholder_renders: Vec<KittyPlaceholderRender>,
     },
 }
 
@@ -95,12 +96,12 @@ pub(crate) fn plan_kitty_scene(
     let changed_asset_ids: BTreeSet<u32> = desired
         .resident_assets
         .iter()
-        .filter_map(|(&image_id, desired_data)| {
-            match assumed.resident_assets.get(&image_id) {
+        .filter_map(
+            |(&image_id, desired_data)| match assumed.resident_assets.get(&image_id) {
                 Some(existing_data) if existing_data == desired_data => None,
                 _ => Some(image_id),
-            }
-        })
+            },
+        )
         .collect();
 
     let mut asset_ops = vec![];
@@ -128,8 +129,8 @@ pub(crate) fn plan_kitty_scene(
     for (key, desired_placement) in &desired.placements {
         let asset_changed = changed_asset_ids.contains(&key.image_id);
         match assumed.placements.get(key) {
-            Some(existing_placement) if !asset_changed && existing_placement == desired_placement => {
-            },
+            Some(existing_placement)
+                if !asset_changed && existing_placement == desired_placement => {},
             Some(_) => {
                 replacement_deletes.push(KittyPlacementOp::Delete { key: *key });
                 placement_creates.push(place_placement_op(desired_placement));

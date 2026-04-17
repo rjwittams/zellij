@@ -521,14 +521,9 @@ impl KittyImageState {
             }
         }
 
-        for (placement_id, chunk) in chunks.iter().enumerate() {
-            let placement_id = placement_id as u32 + 1;
-            let cursor_x = chunk.cell_x + 1;
-            let cursor_y = chunk.cell_y + 1;
-            raw_vte_output.push_str(&format!("\u{1b}[{};{}H", cursor_y, cursor_x));
-            raw_vte_output.push_str("\u{1b}_G");
-            raw_vte_output.push_str(&serialize_display(chunk, placement_id));
-            raw_vte_output.push_str("\u{1b}\\");
+        for (placement_index, chunk) in chunks.iter().enumerate() {
+            let placement_id = chunk.placement_id.unwrap_or(placement_index as u32 + 1);
+            raw_vte_output.push_str(&Self::serialize_explicit_placement(chunk, placement_id));
         }
         raw_vte_output.push_str("\u{1b}[u");
         raw_vte_output
@@ -554,10 +549,42 @@ impl KittyImageState {
 
         for (placement_index, render) in renders.iter().enumerate() {
             let placement_id = render.placement_id.unwrap_or(placement_index as u32 + 1);
-            raw_vte_output.push_str(&serialize_placeholder_render(render, placement_id));
+            raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
         }
         raw_vte_output.push_str("\u{1b}[u");
         raw_vte_output
+    }
+
+    pub fn serialize_image_data(image_id: u32, image_data: &KittyImageData) -> String {
+        let mut raw_vte_output = String::new();
+        for transmit_command in serialize_transmit(image_id, image_data) {
+            raw_vte_output.push_str("\u{1b}_G");
+            raw_vte_output.push_str(&transmit_command);
+            raw_vte_output.push_str("\u{1b}\\");
+        }
+        raw_vte_output
+    }
+
+    pub fn serialize_delete_placement(image_id: u32, placement_id: u32) -> String {
+        format!("\u{1b}_Ga=d,d=i,i={},p={}\u{1b}\\", image_id, placement_id)
+    }
+
+    pub fn serialize_explicit_placement(chunk: &KittyImageChunk, placement_id: u32) -> String {
+        let cursor_x = chunk.cell_x + 1;
+        let cursor_y = chunk.cell_y + 1;
+        let mut raw_vte_output = String::new();
+        raw_vte_output.push_str(&format!("\u{1b}[{};{}H", cursor_y, cursor_x));
+        raw_vte_output.push_str("\u{1b}_G");
+        raw_vte_output.push_str(&serialize_display(chunk, placement_id));
+        raw_vte_output.push_str("\u{1b}\\");
+        raw_vte_output
+    }
+
+    pub fn serialize_placeholder_render(
+        render: &KittyPlaceholderRender,
+        placement_id: u32,
+    ) -> String {
+        serialize_placeholder_render(render, placement_id)
     }
 }
 

@@ -3,6 +3,10 @@ use super::{
         visible_image_fragments, ImageFragment, KittyExplicitFragment, KittyPlaceholderFragment,
         PreparedAfterTextImages, PreparedImageOutput, SixelFragment,
     },
+    kitty_diff::{
+        plan_kitty_scene, KittyAssetOp, KittyPlacementKey, KittyPlacementOp, KittyScenePlan,
+        KittySceneState, PlannedKittyPlacement,
+    },
     vte_goto_instruction, FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender,
     PaneImageRenderOutput, SixelImageChunk,
 };
@@ -10,7 +14,11 @@ use crate::panes::kitty::KittyImageState;
 use crate::panes::pane_image_scene::KittyDamageRedraw;
 use crate::panes::sixel::SixelImageStore;
 use crate::ClientId;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{BTreeSet, HashMap},
+    rc::Rc,
+};
 use zellij_utils::errors::prelude::*;
 use zellij_utils::pane_size::{Size, SizeInPixels};
 
@@ -32,6 +40,7 @@ struct LastRenderedKittyScene {
 struct ClientImageState {
     current: CurrentImageState,
     last_rendered_kitty: LastRenderedKittyScene,
+    resident_kitty_assets: HashMap<u32, crate::output::KittyImageData>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -51,13 +60,12 @@ impl PreparedAfterTextImages {
         let PreparedAfterTextImages {
             client_id,
             fragments,
+            kitty_plan,
             current_kitty_chunks,
             current_kitty_placeholder_renders,
         } = self;
         let err_context = || "failed to serialize image chunks".to_string();
         let mut sixel_vte: Option<String> = None;
-        let mut kitty_chunks = vec![];
-        let mut kitty_placeholder_renders = vec![];
         for fragment in fragments {
             match fragment {
                 ImageFragment::Sixel(sixel_fragment) => {
@@ -87,12 +95,7 @@ impl PreparedAfterTextImages {
                         sixel_vte.push_str(&serialized_sixel_image);
                     }
                 },
-                ImageFragment::KittyExplicit(kitty_explicit_fragment) => {
-                    kitty_chunks.push(kitty_explicit_fragment.chunk);
-                },
-                ImageFragment::KittyPlaceholder(kitty_placeholder_fragment) => {
-                    kitty_placeholder_renders.push(kitty_placeholder_fragment.render);
-                },
+                ImageFragment::KittyExplicit(_) | ImageFragment::KittyPlaceholder(_) => {},
             }
         }
 
@@ -107,15 +110,13 @@ impl PreparedAfterTextImages {
             vte_output.push_str(restore_cursor_position);
         }
 
-        vte_output.push_str(&KittyImageState::serialize_chunks(&kitty_chunks));
-        vte_output.push_str(&KittyImageState::serialize_placeholder_renders(
-            &kitty_placeholder_renders,
-        ));
+        vte_output.push_str(&image_output.serialize_kitty_plan(&kitty_plan));
 
         image_output.finish_render_body_for_client(
             client_id,
             current_kitty_chunks,
             current_kitty_placeholder_renders,
+            &kitty_plan,
         );
         Ok(())
     }
@@ -145,6 +146,135 @@ impl ImageOutput {
         self.client_image_states.entry(client_id).or_default()
     }
 
+    fn kitty_scene_state_from_rendered(
+        resident_kitty_assets: &HashMap<u32, crate::output::KittyImageData>,
+        chunks: &[KittyImageChunk],
+        placeholder_renders: &[KittyPlaceholderRender],
+    ) -> Option<KittySceneState> {
+        let mut scene = KittySceneState {
+            resident_assets: resident_kitty_assets
+                .iter()
+                .map(|(image_id, image_data)| (*image_id, image_data.clone()))
+                .collect(),
+            ..Default::default()
+        };
+        for chunk in chunks {
+            let placement_id = chunk.placement_id?;
+            scene.insert_placement(PlannedKittyPlacement::Explicit {
+                key: KittyPlacementKey {
+                    image_id: chunk.image_id,
+                    placement_id,
+                },
+                chunk: chunk.clone(),
+            });
+        }
+        for render in placeholder_renders {
+            let placement_id = render.placement_id?;
+            scene.insert_placement(PlannedKittyPlacement::Placeholder {
+                key: KittyPlacementKey {
+                    image_id: render.image_id,
+                    placement_id,
+                },
+                render: render.clone(),
+            });
+        }
+        Some(scene)
+    }
+
+    fn placement_intersects_damage(
+        placement: &PlannedKittyPlacement,
+        kitty_damage_redraw: &KittyDamageRedraw,
+    ) -> bool {
+        match placement {
+            PlannedKittyPlacement::Explicit { chunk, .. } => {
+                kitty_damage_redraw.intersects_absolute_rows(0, chunk.cell_y, chunk.rows)
+            },
+            PlannedKittyPlacement::Placeholder { render, .. } => render
+                .cells
+                .iter()
+                .any(|cell| kitty_damage_redraw.intersects_absolute_rows(0, cell.cell_y, 1)),
+        }
+    }
+
+    fn render_full_reset_plan(
+        current_kitty_chunks: &[KittyImageChunk],
+        current_kitty_placeholder_renders: &[KittyPlaceholderRender],
+    ) -> KittyScenePlan {
+        KittyScenePlan::FullResetAndResend {
+            explicit_chunks: current_kitty_chunks.to_vec(),
+            placeholder_renders: current_kitty_placeholder_renders.to_vec(),
+        }
+    }
+
+    fn serialize_kitty_delete_ops(placement_ops: &[KittyPlacementOp]) -> Option<String> {
+        let mut vte_output = String::new();
+        for placement_op in placement_ops {
+            if let KittyPlacementOp::Delete { key } = placement_op {
+                vte_output.push_str(&KittyImageState::serialize_delete_placement(
+                    key.image_id,
+                    key.placement_id,
+                ));
+            }
+        }
+        (!vte_output.is_empty()).then_some(vte_output)
+    }
+
+    fn serialize_kitty_plan(&mut self, kitty_plan: &KittyScenePlan) -> String {
+        match kitty_plan {
+            KittyScenePlan::Diff {
+                asset_ops,
+                placement_ops,
+            } => {
+                let mut vte_output = String::new();
+                if asset_ops.is_empty()
+                    && placement_ops
+                        .iter()
+                        .all(|placement_op| matches!(placement_op, KittyPlacementOp::Delete { .. }))
+                {
+                    return vte_output;
+                }
+                vte_output.push_str("\u{1b}[s");
+                for asset_op in asset_ops {
+                    match asset_op {
+                        KittyAssetOp::EnsureResident {
+                            image_id,
+                            image_data,
+                        } => vte_output.push_str(&KittyImageState::serialize_image_data(
+                            *image_id, image_data,
+                        )),
+                    }
+                }
+                for placement_op in placement_ops {
+                    match placement_op {
+                        KittyPlacementOp::Delete { .. } => {},
+                        KittyPlacementOp::PlaceExplicit { key, chunk } => vte_output.push_str(
+                            &KittyImageState::serialize_explicit_placement(chunk, key.placement_id),
+                        ),
+                        KittyPlacementOp::PlacePlaceholder { key, render } => {
+                            vte_output.push_str(&KittyImageState::serialize_placeholder_render(
+                                render,
+                                key.placement_id,
+                            ))
+                        },
+                    }
+                }
+                vte_output.push_str("\u{1b}[u");
+                vte_output
+            },
+            KittyScenePlan::FullResetAndResend {
+                explicit_chunks,
+                placeholder_renders,
+            } => {
+                let mut vte_output = String::new();
+                vte_output.push_str(&KittyImageState::serialize_chunks(explicit_chunks));
+                vte_output.push_str(&KittyImageState::serialize_placeholder_renders(
+                    placeholder_renders,
+                ));
+                vte_output
+            },
+        }
+    }
+
     fn visible_image_fragments_from_pane_output(
         &self,
         pane_image_output: &PaneImageRenderOutput,
@@ -152,9 +282,13 @@ impl ImageOutput {
         z_index: Option<usize>,
     ) -> Vec<ImageFragment> {
         let mut fragments = vec![];
-        fragments.extend(pane_image_output.sixel_chunks.iter().cloned().map(|chunk| {
-            ImageFragment::Sixel(SixelFragment { chunk })
-        }));
+        fragments.extend(
+            pane_image_output
+                .sixel_chunks
+                .iter()
+                .cloned()
+                .map(|chunk| ImageFragment::Sixel(SixelFragment { chunk })),
+        );
         fragments.extend(
             pane_image_output
                 .kitty_scene
@@ -169,9 +303,7 @@ impl ImageOutput {
                 .placeholder_renders
                 .iter()
                 .cloned()
-                .map(|render| {
-                    ImageFragment::KittyPlaceholder(KittyPlaceholderFragment { render })
-                }),
+                .map(|render| ImageFragment::KittyPlaceholder(KittyPlaceholderFragment { render })),
         );
         if let Some(floating_panes_stack) = floating_panes_stack {
             let character_cell_size = self.character_cell_size.borrow();
@@ -200,14 +332,22 @@ impl ImageOutput {
         last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
     ) {
         for (client_id, chunks) in last_rendered_kitty_chunks {
-            self.client_image_state_mut(client_id)
-                .last_rendered_kitty
-                .chunks = chunks;
+            let client_state = self.client_image_state_mut(client_id);
+            client_state.last_rendered_kitty.chunks = chunks.clone();
+            for chunk in chunks {
+                client_state
+                    .resident_kitty_assets
+                    .insert(chunk.image_id, chunk.image_data);
+            }
         }
         for (client_id, placeholder_renders) in last_rendered_kitty_placeholder_renders {
-            self.client_image_state_mut(client_id)
-                .last_rendered_kitty
-                .placeholder_renders = placeholder_renders;
+            let client_state = self.client_image_state_mut(client_id);
+            client_state.last_rendered_kitty.placeholder_renders = placeholder_renders.clone();
+            for render in placeholder_renders {
+                client_state
+                    .resident_kitty_assets
+                    .insert(render.image_id, render.image_data);
+            }
         }
     }
 
@@ -236,6 +376,7 @@ impl ImageOutput {
                     std::mem::take(&mut client_state.last_rendered_kitty.placeholder_renders),
                 );
             }
+            client_state.resident_kitty_assets.clear();
         }
         (
             last_rendered_kitty_chunks,
@@ -289,9 +430,10 @@ impl ImageOutput {
                 ImageFragment::Sixel(sixel_fragment) => {
                     client_state.current.sixel_chunks.push(sixel_fragment.chunk)
                 },
-                ImageFragment::KittyExplicit(kitty_explicit_fragment) => {
-                    client_state.current.kitty_chunks.push(kitty_explicit_fragment.chunk)
-                },
+                ImageFragment::KittyExplicit(kitty_explicit_fragment) => client_state
+                    .current
+                    .kitty_chunks
+                    .push(kitty_explicit_fragment.chunk),
                 ImageFragment::KittyPlaceholder(kitty_placeholder_fragment) => client_state
                     .current
                     .kitty_placeholder_renders
@@ -321,9 +463,10 @@ impl ImageOutput {
                     ImageFragment::Sixel(sixel_fragment) => {
                         client_state.current.sixel_chunks.push(sixel_fragment.chunk)
                     },
-                    ImageFragment::KittyExplicit(kitty_explicit_fragment) => {
-                        client_state.current.kitty_chunks.push(kitty_explicit_fragment.chunk)
-                    },
+                    ImageFragment::KittyExplicit(kitty_explicit_fragment) => client_state
+                        .current
+                        .kitty_chunks
+                        .push(kitty_explicit_fragment.chunk),
                     ImageFragment::KittyPlaceholder(kitty_placeholder_fragment) => client_state
                         .current
                         .kitty_placeholder_renders
@@ -349,61 +492,98 @@ impl ImageOutput {
             std::mem::take(&mut client_state.current.kitty_placeholder_renders);
         let changed_rects = std::mem::take(&mut client_state.current.changed_rects);
 
-        let previous_kitty_chunks = if pre_vte_clears_display {
-            vec![]
-        } else {
-            client_state.last_rendered_kitty.chunks.clone()
-        };
-        let previous_kitty_placeholder_renders = if pre_vte_clears_display {
-            vec![]
-        } else {
-            client_state.last_rendered_kitty.placeholder_renders.clone()
-        };
-        let kitty_scene_changed = previous_kitty_chunks != current_kitty_chunks
-            || previous_kitty_placeholder_renders != current_kitty_placeholder_renders;
         let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
-        let kitty_chunks = if kitty_scene_changed {
-            current_kitty_chunks.clone()
+        let empty_resident_assets = HashMap::new();
+        let desired_kitty_scene = Self::kitty_scene_state_from_rendered(
+            &empty_resident_assets,
+            &current_kitty_chunks,
+            &current_kitty_placeholder_renders,
+        );
+        let assumed_kitty_scene = if pre_vte_clears_display {
+            Some(KittySceneState {
+                resident_assets: client_state
+                    .resident_kitty_assets
+                    .iter()
+                    .map(|(image_id, image_data)| (*image_id, image_data.clone()))
+                    .collect(),
+                ..Default::default()
+            })
         } else {
-            current_kitty_chunks
-                .iter()
-                .filter(|chunk| {
-                    kitty_damage_redraw.intersects_absolute_rows(0, chunk.cell_y, chunk.rows)
-                })
-                .cloned()
-                .collect()
+            Self::kitty_scene_state_from_rendered(
+                &client_state.resident_kitty_assets,
+                &client_state.last_rendered_kitty.chunks,
+                &client_state.last_rendered_kitty.placeholder_renders,
+            )
         };
-        let kitty_placeholder_renders = if kitty_scene_changed {
-            current_kitty_placeholder_renders.clone()
-        } else {
-            current_kitty_placeholder_renders
-                .iter()
-                .filter(|render| {
-                    render
-                        .cells
+        let kitty_plan = match (assumed_kitty_scene, desired_kitty_scene) {
+            (Some(assumed_kitty_scene), Some(desired_kitty_scene)) => {
+                let mut kitty_plan = plan_kitty_scene(&assumed_kitty_scene, &desired_kitty_scene);
+                if let KittyScenePlan::Diff {
+                    asset_ops: _,
+                    placement_ops,
+                } = &mut kitty_plan
+                {
+                    let place_keys: BTreeSet<KittyPlacementKey> = placement_ops
                         .iter()
-                        .any(|cell| kitty_damage_redraw.intersects_absolute_rows(0, cell.cell_y, 1))
-                })
-                .cloned()
-                .collect()
+                        .filter_map(|placement_op| match placement_op {
+                            KittyPlacementOp::PlaceExplicit { key, .. }
+                            | KittyPlacementOp::PlacePlaceholder { key, .. } => Some(*key),
+                            KittyPlacementOp::Delete { .. } => None,
+                        })
+                        .collect();
+                    for (key, placement) in desired_kitty_scene.placements.iter() {
+                        if place_keys.contains(key)
+                            || !Self::placement_intersects_damage(placement, &kitty_damage_redraw)
+                        {
+                            continue;
+                        }
+                        placement_ops.push(match placement {
+                            PlannedKittyPlacement::Explicit { key, chunk } => {
+                                KittyPlacementOp::PlaceExplicit {
+                                    key: *key,
+                                    chunk: chunk.clone(),
+                                }
+                            },
+                            PlannedKittyPlacement::Placeholder { key, render } => {
+                                KittyPlacementOp::PlacePlaceholder {
+                                    key: *key,
+                                    render: render.clone(),
+                                }
+                            },
+                        });
+                    }
+                }
+                kitty_plan
+            },
+            _ => Self::render_full_reset_plan(
+                &current_kitty_chunks,
+                &current_kitty_placeholder_renders,
+            ),
         };
 
         let mut fragments = vec![];
-        fragments.extend(sixel_chunks.iter().cloned().map(|chunk| {
-            ImageFragment::Sixel(SixelFragment { chunk })
-        }));
-        fragments.extend(kitty_chunks.iter().cloned().map(|chunk| {
-            ImageFragment::KittyExplicit(KittyExplicitFragment { chunk })
-        }));
-        fragments.extend(kitty_placeholder_renders.iter().cloned().map(|render| {
-            ImageFragment::KittyPlaceholder(KittyPlaceholderFragment { render })
-        }));
+        fragments.extend(
+            sixel_chunks
+                .iter()
+                .cloned()
+                .map(|chunk| ImageFragment::Sixel(SixelFragment { chunk })),
+        );
+        let before_text_vte = match &kitty_plan {
+            KittyScenePlan::Diff {
+                asset_ops: _,
+                placement_ops,
+            } => Self::serialize_kitty_delete_ops(placement_ops),
+            KittyScenePlan::FullResetAndResend { .. } => {
+                (!pre_vte_clears_display).then(kitty_clear_before_text_vte)
+            },
+        };
 
         PreparedImageOutput {
-            before_text_vte: kitty_scene_changed.then(kitty_clear_before_text_vte),
+            before_text_vte,
             after_text: PreparedAfterTextImages {
                 client_id,
                 fragments,
+                kitty_plan,
                 current_kitty_chunks,
                 current_kitty_placeholder_renders,
             },
@@ -415,8 +595,44 @@ impl ImageOutput {
         client_id: ClientId,
         current_kitty_chunks: Vec<KittyImageChunk>,
         current_kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
+        kitty_plan: &KittyScenePlan,
     ) {
         let client_state = self.client_image_state_mut(client_id);
+        match kitty_plan {
+            KittyScenePlan::Diff {
+                asset_ops,
+                placement_ops: _,
+            } => {
+                for asset_op in asset_ops {
+                    match asset_op {
+                        KittyAssetOp::EnsureResident {
+                            image_id,
+                            image_data,
+                        } => {
+                            client_state
+                                .resident_kitty_assets
+                                .insert(*image_id, image_data.clone());
+                        },
+                    }
+                }
+            },
+            KittyScenePlan::FullResetAndResend {
+                explicit_chunks,
+                placeholder_renders,
+            } => {
+                client_state.resident_kitty_assets.clear();
+                for chunk in explicit_chunks {
+                    client_state
+                        .resident_kitty_assets
+                        .insert(chunk.image_id, chunk.image_data.clone());
+                }
+                for render in placeholder_renders {
+                    client_state
+                        .resident_kitty_assets
+                        .insert(render.image_id, render.image_data.clone());
+                }
+            },
+        }
         client_state.last_rendered_kitty.chunks = current_kitty_chunks;
         client_state.last_rendered_kitty.placeholder_renders = current_kitty_placeholder_renders;
     }

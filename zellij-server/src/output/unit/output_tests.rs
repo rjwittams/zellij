@@ -1,7 +1,3 @@
-use super::super::{
-    CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, Output, OutputBuffer,
-    PaneImageRenderOutput, SixelImageChunk,
-};
 use super::super::image_fragment::{
     visible_image_fragments, ImageFragment, KittyExplicitFragment, KittyPlaceholderFragment,
     SixelFragment,
@@ -9,6 +5,10 @@ use super::super::image_fragment::{
 use super::super::kitty_diff::{
     plan_kitty_scene, KittyAssetOp, KittyPlacementKey, KittyPlacementOp, KittyScenePlan,
     KittySceneState, PlannedKittyPlacement,
+};
+use super::super::{
+    CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, Output, OutputBuffer,
+    PaneImageRenderOutput, SixelImageChunk,
 };
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::{SixelGrid, SixelImageStore};
@@ -630,7 +630,10 @@ fn test_is_dirty_with_kitty_scene_diffs() {
     );
     assert!(output.is_dirty(), "new kitty scene should be dirty");
     let serialized = output.serialize().unwrap();
-    assert!(serialized.get(&1).unwrap().contains(kitty_delete_all));
+    assert!(
+        !serialized.get(&1).unwrap().contains(kitty_delete_all),
+        "new kitty scene should not require delete-all"
+    );
 
     let mut unchanged_output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
@@ -667,7 +670,10 @@ fn test_is_dirty_with_kitty_scene_diffs() {
         "changed kitty scene should be dirty"
     );
     let serialized = changed_output.serialize().unwrap();
-    assert!(serialized.get(&1).unwrap().contains(kitty_delete_all));
+    assert!(
+        !serialized.get(&1).unwrap().contains(kitty_delete_all),
+        "changed kitty scene should not force a kitty delete-all"
+    );
 
     let mut cleared_output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
@@ -679,7 +685,15 @@ fn test_is_dirty_with_kitty_scene_diffs() {
         "clearing a previously rendered kitty scene should be dirty"
     );
     let serialized = cleared_output.serialize().unwrap();
-    assert!(serialized.get(&1).unwrap().contains(kitty_delete_all));
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        !client_output.contains(kitty_delete_all),
+        "clearing a previously rendered kitty scene should use targeted deletes"
+    );
+    assert!(
+        client_output.contains("a=d,d=i"),
+        "clearing a previously rendered kitty scene should emit placement deletes"
+    );
 }
 
 #[test]
@@ -720,22 +734,326 @@ fn test_serialize_emits_kitty_damage_redraw_without_scene_change() {
         "kitty damage redraw should not force a full-scene clear when the scene is unchanged"
     );
     assert!(
-        client_output.contains("a=t") && client_output.contains("a=p"),
-        "kitty damage redraw should still serialize kitty output when the scene is unchanged"
+        client_output.contains("a=p"),
+        "kitty damage redraw should still place kitty output when the scene is unchanged"
     );
 }
 
 #[test]
-fn test_prepared_image_output_emits_kitty_clear_before_text_when_scene_changes() {
+fn test_image_output_adds_placement_without_full_scene_reset() {
     let client_ids = create_test_clients(1);
-    let kitty_delete_all = "\u{1b}_Ga=d,d=A\u{1b}\\";
+    let mut first_chunk = create_kitty_chunk(1, 2, 2);
+    first_chunk.placement_id = Some(10);
+    let mut second_chunk = create_kitty_chunk(2, 2, 2);
+    second_chunk.placement_id = Some(20);
+    second_chunk.cell_x = 5;
+
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_kitty_chunks(
+        HashMap::from([(1, vec![first_chunk.clone()])]),
+        HashMap::new(),
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![first_chunk, second_chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        !client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "adding a placement should not require a kitty delete-all"
+    );
+}
+
+#[test]
+fn test_image_output_removes_single_placement_without_delete_all() {
+    let client_ids = create_test_clients(1);
+    let mut first_chunk = create_kitty_chunk(1, 2, 2);
+    first_chunk.placement_id = Some(10);
+    let mut second_chunk = create_kitty_chunk(2, 2, 2);
+    second_chunk.placement_id = Some(20);
+    second_chunk.cell_x = 5;
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_kitty_chunks(
+        HashMap::from([(1, vec![first_chunk.clone(), second_chunk])]),
+        HashMap::new(),
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![first_chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        !client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "removing one placement should not require a kitty delete-all"
+    );
+}
+
+#[test]
+fn test_image_output_replaces_changed_geometry_without_resetting_unrelated_placements() {
+    let client_ids = create_test_clients(1);
+    let mut first_chunk = create_kitty_chunk(1, 2, 2);
+    first_chunk.placement_id = Some(10);
+    let mut second_chunk = create_kitty_chunk(2, 2, 2);
+    second_chunk.placement_id = Some(20);
+    second_chunk.cell_x = 5;
+
+    let mut changed_second_chunk = second_chunk.clone();
+    changed_second_chunk.columns = 3;
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_kitty_chunks(
+        HashMap::from([(1, vec![first_chunk.clone(), second_chunk])]),
+        HashMap::new(),
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![first_chunk, changed_second_chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        !client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "changing one placement should not reset unrelated placements"
+    );
+}
+
+#[test]
+fn test_image_output_asset_change_invalidates_all_referencing_placements() {
+    let client_ids = create_test_clients(1);
+    let mut first_chunk = create_kitty_chunk(1, 2, 2);
+    first_chunk.placement_id = Some(10);
+    let mut second_chunk = create_kitty_chunk(1, 2, 2);
+    second_chunk.placement_id = Some(11);
+    second_chunk.cell_x = 5;
+    let mut other_asset_chunk = create_kitty_chunk(2, 2, 2);
+    other_asset_chunk.placement_id = Some(20);
+    other_asset_chunk.cell_x = 10;
+
+    let mut changed_first_chunk = first_chunk.clone();
+    changed_first_chunk.image_data = KittyImageData::Png {
+        data: vec![7, 7, 7, 7],
+        width: 1,
+        height: 1,
+    };
+    let mut changed_second_chunk = second_chunk.clone();
+    changed_second_chunk.image_data = KittyImageData::Png {
+        data: vec![7, 7, 7, 7],
+        width: 1,
+        height: 1,
+    };
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_kitty_chunks(
+        HashMap::from([(
+            1,
+            vec![first_chunk, second_chunk, other_asset_chunk.clone()],
+        )]),
+        HashMap::new(),
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![
+            changed_first_chunk,
+            changed_second_chunk,
+            other_asset_chunk,
+        ]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        !client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "asset changes should not force a kitty delete-all when per-asset updates suffice"
+    );
+}
+
+#[test]
+fn test_image_output_pre_vte_clear_invalidates_assumed_kitty_scene() {
+    let client_ids = create_test_clients(1);
+    let mut chunk = create_kitty_chunk(1, 2, 2);
+    chunk.placement_id = Some(10);
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output
+        .set_last_rendered_kitty_chunks(HashMap::from([(1, vec![chunk.clone()])]), HashMap::new());
+    output.add_pre_vte_instruction_to_client(1, "\u{1b}[2J");
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        !client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "a pre-VTE display clear should invalidate assumed kitty state without emitting a second kitty delete-all"
+    );
+    assert!(
+        client_output.contains("a=p"),
+        "after a pre-VTE clear the kitty scene should still be rebuilt"
+    );
+}
+
+#[test]
+fn test_kitty_diff_serialization_deletes_single_placement_without_delete_all() {
+    let client_ids = create_test_clients(1);
+    let mut first_chunk = create_kitty_chunk(1, 2, 2);
+    first_chunk.placement_id = Some(10);
+    let mut second_chunk = create_kitty_chunk(2, 2, 2);
+    second_chunk.placement_id = Some(20);
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_kitty_chunks(
+        HashMap::from([(1, vec![first_chunk.clone(), second_chunk])]),
+        HashMap::new(),
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![first_chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        !client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "single-placement delete should not use kitty delete-all"
+    );
+    assert!(
+        client_output.contains("\u{1b}_Ga=d,d=i,i=2,p=20\u{1b}\\"),
+        "single-placement delete should target only the removed placement"
+    );
+}
+
+#[test]
+fn test_kitty_diff_serialization_places_resident_asset_without_retransmit() {
+    let client_ids = create_test_clients(1);
+    let mut chunk = create_kitty_chunk(1, 2, 2);
+    chunk.placement_id = Some(10);
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output
+        .set_last_rendered_kitty_chunks(HashMap::from([(1, vec![chunk.clone()])]), HashMap::new());
+    output.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(vec![]), None);
+    output.serialize().unwrap();
+
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+
+    assert!(
+        !client_output.contains("a=t"),
+        "re-placing a resident asset should not retransmit image bytes"
+    );
+    assert!(
+        client_output.contains("a=p"),
+        "re-placing a resident asset should still emit a kitty place op"
+    );
+}
+
+#[test]
+fn test_kitty_diff_serialization_transmits_asset_before_new_placement() {
+    let client_ids = create_test_clients(1);
+    let mut chunk = create_kitty_chunk(1, 2, 2);
+    chunk.placement_id = Some(10);
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    let transmit_pos = client_output.find("a=t").unwrap();
+    let place_pos = client_output.find("a=p").unwrap();
+
+    assert!(
+        transmit_pos < place_pos,
+        "missing assets should be transmitted before their placement commands"
+    );
+}
+
+#[test]
+fn test_kitty_diff_serialization_full_reset_fallback_preserves_existing_behavior() {
+    let client_ids = create_test_clients(1);
+    let mut base_chunk = create_kitty_chunk(1, 2, 2);
+    base_chunk.placement_id = None;
+    let mut changed_chunk = base_chunk.clone();
+    changed_chunk.columns = 3;
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_kitty_chunks(HashMap::from([(1, vec![base_chunk])]), HashMap::new());
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![changed_chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+
+    assert!(
+        client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "unsupported kitty diff cases should still fall back to delete-all"
+    );
+    assert!(
+        client_output.contains("a=t") && client_output.contains("a=p"),
+        "full-reset fallback should still rebuild the scene"
+    );
+}
+
+#[test]
+fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes() {
+    let client_ids = create_test_clients(1);
+    let mut base_chunk = create_kitty_chunk(77, 2, 2);
+    base_chunk.placement_id = Some(10);
+    let mut changed_chunk = base_chunk.clone();
+    changed_chunk.columns = 3;
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_kitty_chunks(HashMap::from([(1, vec![base_chunk])]), HashMap::new());
 
     output.add_pane_image_output_to_client(
         1,
-        pane_image_output_with_kitty_scene(vec![create_kitty_chunk(77, 2, 2)]),
+        pane_image_output_with_kitty_scene(vec![changed_chunk]),
         None,
     );
     let chunk = create_character_chunk_from_str("TEXT-PHASE", 0, 0);
@@ -745,12 +1063,12 @@ fn test_prepared_image_output_emits_kitty_clear_before_text_when_scene_changes()
 
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
-    let clear_pos = client_output.find(kitty_delete_all).unwrap();
+    let delete_pos = client_output.find("a=d,d=i,i=77,p=10").unwrap();
     let text_pos = client_output.find("TEXT-PHASE").unwrap();
 
     assert!(
-        clear_pos < text_pos,
-        "kitty scene clear should happen before text when the scene changes"
+        delete_pos < text_pos,
+        "kitty placement deletes should happen before text when the scene changes"
     );
 }
 
@@ -865,14 +1183,28 @@ fn test_prepare_render_body_derives_kitty_explicit_fragments() {
     );
 
     let prepared = output.image_output.prepare_render_body_for_client(1, false);
-    assert!(prepared.before_text_vte.is_some());
-    assert_eq!(prepared.after_text.fragments.len(), 1);
-    match &prepared.after_text.fragments[0] {
-        ImageFragment::KittyExplicit(fragment) => {
-            assert_eq!(fragment.chunk.image_id, 91);
-        },
-        other => panic!("expected kitty explicit fragment, got {other:?}"),
-    }
+    assert!(prepared.before_text_vte.is_none());
+    assert!(prepared.after_text.fragments.is_empty());
+    assert_eq!(
+        prepared.after_text.kitty_plan,
+        KittyScenePlan::Diff {
+            asset_ops: vec![KittyAssetOp::EnsureResident {
+                image_id: 91,
+                image_data: KittyImageData::Png {
+                    data: vec![1, 2, 3, 4],
+                    width: 1,
+                    height: 1,
+                },
+            }],
+            placement_ops: vec![KittyPlacementOp::PlaceExplicit {
+                key: KittyPlacementKey {
+                    image_id: 91,
+                    placement_id: 91,
+                },
+                chunk: create_kitty_chunk(91, 2, 2),
+            }],
+        }
+    );
 }
 
 #[test]
@@ -889,14 +1221,28 @@ fn test_prepare_render_body_derives_kitty_placeholder_fragments() {
     );
 
     let prepared = output.image_output.prepare_render_body_for_client(1, false);
-    assert!(prepared.before_text_vte.is_some());
-    assert_eq!(prepared.after_text.fragments.len(), 1);
-    match &prepared.after_text.fragments[0] {
-        ImageFragment::KittyPlaceholder(fragment) => {
-            assert_eq!(fragment.render.image_id, 92);
-        },
-        other => panic!("expected kitty placeholder fragment, got {other:?}"),
-    }
+    assert!(prepared.before_text_vte.is_none());
+    assert!(prepared.after_text.fragments.is_empty());
+    assert_eq!(
+        prepared.after_text.kitty_plan,
+        KittyScenePlan::Diff {
+            asset_ops: vec![KittyAssetOp::EnsureResident {
+                image_id: 92,
+                image_data: KittyImageData::Png {
+                    data: vec![1, 2, 3, 4],
+                    width: 1,
+                    height: 1,
+                },
+            }],
+            placement_ops: vec![KittyPlacementOp::PlacePlaceholder {
+                key: KittyPlacementKey {
+                    image_id: 92,
+                    placement_id: 92,
+                },
+                render: create_kitty_placeholder_render(92),
+            }],
+        }
+    );
 }
 
 #[test]
