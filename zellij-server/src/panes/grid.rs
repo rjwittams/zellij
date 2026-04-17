@@ -118,8 +118,8 @@ use vte::{Params, Perform};
 use zellij_utils::{consts::VERSION, shared::version_number};
 
 use crate::output::{
-    CharacterChunk, HighlightSelection, ImageRenderBundle, KittyImageChunk, KittyPlaceholderRender,
-    OutputBuffer, PaneRenderOutput, SixelImageChunk,
+    CharacterChunk, HighlightSelection, KittyImageChunk, KittyPlaceholderRender, OutputBuffer,
+    PaneImageRenderOutput, PaneRenderOutput, SixelImageChunk,
 };
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
@@ -129,8 +129,7 @@ use crate::panes::kitty::{
 };
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::pane_image_scene::{
-    FlowAnchor, ImageContentFlow, KittyDamageRedraw, KittyPlaceholderCell, KittyRenderBundle,
-    PaneImageScene,
+    FlowAnchor, ImageContentFlow, KittyPlaceholderCell, KittyRenderBundle, PaneImageScene,
 };
 use crate::panes::search::SearchResult;
 use crate::panes::terminal_character::{
@@ -1806,32 +1805,20 @@ impl Grid {
                 }
             }
         }
-        let visible_image_render_bundle = ImageRenderBundle {
-            sixel_chunks: vec![],
-            kitty_render_bundle: self.visible_kitty_render_bundle(content_x, content_y),
-        };
-        let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
-        let damage_redraw_image_render_bundle = ImageRenderBundle {
+        let changed_rects = changed_rects
+            .into_iter()
+            .map(|(start_row, line_count)| (content_y + start_row, line_count))
+            .collect();
+        let image_output = PaneImageRenderOutput {
+            kitty_scene: self.visible_kitty_render_bundle(content_x, content_y),
             sixel_chunks: sixel_image_chunks,
-            kitty_render_bundle: self
-                .image_scene
-                .visible_kitty_render_bundle_for_damage_redraw(
-                    &kitty_damage_redraw,
-                    content_x,
-                    content_y,
-                    self.lines_above.len(),
-                    self.width,
-                    self.height,
-                    *self.character_cell_size.borrow(),
-                    |anchor| self.resolve_flow_anchor(anchor),
-                ),
+            changed_rects,
         };
 
         Ok(Some(PaneRenderOutput {
             character_chunks,
             raw_vte_output: Some(raw_vte_output),
-            visible_image_render_bundle,
-            damage_redraw_image_render_bundle,
+            image_output,
         }))
     }
     /// Returns the cursor position and whether it is visible.

@@ -5379,8 +5379,8 @@ fn kitty_placeholder_reflow_emits_changed_placeholder_render_bundle() {
     );
     assert_eq!(
         render_output
-            .damage_redraw_image_render_bundle
-            .kitty_render_bundle
+            .image_output
+            .kitty_scene
             .placeholder_renders
             .len(),
         1,

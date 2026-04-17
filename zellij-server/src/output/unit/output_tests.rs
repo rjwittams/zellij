@@ -1,6 +1,6 @@
 use super::super::{
-    CharacterChunk, FloatingPanesStack, ImageRenderBundle, KittyImageChunk, KittyImageData, Output,
-    OutputBuffer, SixelImageChunk,
+    CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, Output, OutputBuffer,
+    PaneImageRenderOutput, SixelImageChunk,
 };
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::SixelImageStore;
@@ -60,20 +60,22 @@ fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageC
     }
 }
 
-fn image_render_bundle_with_sixels(sixel_chunks: Vec<SixelImageChunk>) -> ImageRenderBundle {
-    ImageRenderBundle {
+fn pane_image_output_with_sixels(sixel_chunks: Vec<SixelImageChunk>) -> PaneImageRenderOutput {
+    PaneImageRenderOutput {
         sixel_chunks,
-        kitty_render_bundle: KittyRenderBundle::default(),
+        ..Default::default()
     }
 }
 
-fn image_render_bundle_with_kitty(explicit_chunks: Vec<KittyImageChunk>) -> ImageRenderBundle {
-    ImageRenderBundle {
-        sixel_chunks: vec![],
-        kitty_render_bundle: KittyRenderBundle {
+fn pane_image_output_with_kitty_scene(
+    explicit_chunks: Vec<KittyImageChunk>,
+) -> PaneImageRenderOutput {
+    PaneImageRenderOutput {
+        kitty_scene: KittyRenderBundle {
             explicit_chunks,
             placeholder_renders: vec![],
         },
+        ..Default::default()
     }
 }
 
@@ -189,9 +191,9 @@ fn test_is_dirty_with_sixel_chunks() {
         sixel_image_pixel_height: 100,
         sixel_image_id: 1,
     };
-    output.add_image_render_bundle_to_client(
+    output.add_pane_image_output_to_client(
         1,
-        image_render_bundle_with_sixels(vec![sixel_chunk]),
+        pane_image_output_with_sixels(vec![sixel_chunk]),
         None,
     );
 
@@ -211,9 +213,9 @@ fn test_is_dirty_with_kitty_scene_diffs() {
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output.add_image_render_bundle_to_client(
+    output.add_pane_image_output_to_client(
         1,
-        image_render_bundle_with_kitty(vec![base_chunk.clone()]),
+        pane_image_output_with_kitty_scene(vec![base_chunk.clone()]),
         None,
     );
     assert!(output.is_dirty(), "new kitty scene should be dirty");
@@ -227,9 +229,9 @@ fn test_is_dirty_with_kitty_scene_diffs() {
         HashMap::from([(1, vec![base_chunk.clone()])]),
         HashMap::new(),
     );
-    unchanged_output.add_image_render_bundle_to_client(
+    unchanged_output.add_pane_image_output_to_client(
         1,
-        image_render_bundle_with_kitty(vec![base_chunk.clone()]),
+        pane_image_output_with_kitty_scene(vec![base_chunk.clone()]),
         None,
     );
     let serialized = unchanged_output.serialize().unwrap();
@@ -245,9 +247,9 @@ fn test_is_dirty_with_kitty_scene_diffs() {
         HashMap::from([(1, vec![base_chunk.clone()])]),
         HashMap::new(),
     );
-    changed_output.add_image_render_bundle_to_client(
+    changed_output.add_pane_image_output_to_client(
         1,
-        image_render_bundle_with_kitty(vec![changed_chunk]),
+        pane_image_output_with_kitty_scene(vec![changed_chunk]),
         None,
     );
     assert!(
@@ -273,7 +275,8 @@ fn test_is_dirty_with_kitty_scene_diffs() {
 #[test]
 fn test_serialize_emits_kitty_damage_redraw_without_scene_change() {
     let client_ids = create_test_clients(1);
-    let base_chunk = create_kitty_chunk(1, 2, 2);
+    let mut base_chunk = create_kitty_chunk(1, 2, 2);
+    base_chunk.cell_y = 4;
 
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
@@ -282,19 +285,15 @@ fn test_serialize_emits_kitty_damage_redraw_without_scene_change() {
         HashMap::from([(1, vec![base_chunk.clone()])]),
         HashMap::new(),
     );
-    output.add_image_render_bundle_to_client(
+    output.add_pane_image_output_to_client(
         1,
-        image_render_bundle_with_kitty(vec![base_chunk.clone()]),
-        None,
-    );
-    output.add_damage_redraw_image_render_bundle_to_client(
-        1,
-        super::super::ImageRenderBundle {
-            sixel_chunks: vec![],
-            kitty_render_bundle: crate::panes::pane_image_scene::KittyRenderBundle {
+        PaneImageRenderOutput {
+            kitty_scene: crate::panes::pane_image_scene::KittyRenderBundle {
                 explicit_chunks: vec![base_chunk],
                 placeholder_renders: vec![],
             },
+            changed_rects: HashMap::from([(4, 2)]),
+            ..Default::default()
         },
         None,
     );
@@ -375,9 +374,9 @@ fn test_has_rendered_assets_with_sixel_chunks() {
         sixel_image_pixel_height: 100,
         sixel_image_id: 1,
     };
-    output.add_image_render_bundle_to_client(
+    output.add_pane_image_output_to_client(
         1,
-        image_render_bundle_with_sixels(vec![sixel_chunk]),
+        pane_image_output_with_sixels(vec![sixel_chunk]),
         None,
     );
 
@@ -736,8 +735,8 @@ fn test_add_sixel_image_chunks_to_multiple_clients() {
         sixel_image_id: 1,
     };
 
-    output.add_image_render_bundle_to_multiple_clients(
-        image_render_bundle_with_sixels(vec![sixel_chunk]),
+    output.add_pane_image_output_to_multiple_clients(
+        pane_image_output_with_sixels(vec![sixel_chunk]),
         client_ids.iter().copied(),
         None,
     );

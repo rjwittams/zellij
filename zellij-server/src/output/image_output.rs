@@ -1,8 +1,9 @@
 use super::{
-    vte_goto_instruction, FloatingPanesStack, ImageRenderBundle, KittyImageChunk,
-    KittyPlaceholderRender, SixelImageChunk,
+    vte_goto_instruction, FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender,
+    PaneImageRenderOutput, SixelImageChunk,
 };
 use crate::panes::kitty::KittyImageState;
+use crate::panes::pane_image_scene::KittyDamageRedraw;
 use crate::panes::sixel::SixelImageStore;
 use crate::{panes::pane_image_scene::KittyRenderBundle, ClientId};
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -129,11 +130,7 @@ struct CurrentImageState {
     sixel_chunks: Vec<SixelImageChunk>,
     kitty_chunks: Vec<KittyImageChunk>,
     kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
-    // Kitty owns a persistent composed scene, but some frames still need a same-frame
-    // restoration pass after text/frame damage. These hold only that per-frame
-    // redraw subset; they do not represent the full visible kitty scene.
-    kitty_damage_redraw_chunks: Vec<KittyImageChunk>,
-    kitty_damage_redraw_placeholder_renders: Vec<KittyPlaceholderRender>,
+    changed_rects: HashMap<usize, usize>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -460,104 +457,79 @@ impl ImageOutput {
         );
     }
 
-    pub fn add_damage_redraw_image_render_bundle_to_client(
+    fn add_changed_rects_to_client(
         &mut self,
         client_id: ClientId,
-        image_render_bundle: ImageRenderBundle,
-        floating_panes_stack: Option<&FloatingPanesStack>,
-        z_index: Option<usize>,
+        changed_rects: HashMap<usize, usize>,
     ) {
-        self.add_sixel_image_chunks_to_client(
-            client_id,
-            image_render_bundle.sixel_chunks,
-            floating_panes_stack,
-            z_index,
-        );
         let client_state = self.client_image_state_mut(client_id);
-        client_state
-            .current
-            .kitty_damage_redraw_chunks
-            .extend(image_render_bundle.kitty_render_bundle.explicit_chunks);
-        client_state
-            .current
-            .kitty_damage_redraw_placeholder_renders
-            .extend(image_render_bundle.kitty_render_bundle.placeholder_renders);
-    }
-
-    pub fn add_damage_redraw_image_render_bundle_to_multiple_clients(
-        &mut self,
-        image_render_bundle: ImageRenderBundle,
-        client_ids: impl Iterator<Item = ClientId>,
-        floating_panes_stack: Option<&FloatingPanesStack>,
-        z_index: Option<usize>,
-    ) {
-        let client_ids: Vec<ClientId> = client_ids.collect();
-        self.add_sixel_image_chunks_to_multiple_clients(
-            image_render_bundle.sixel_chunks,
-            client_ids.iter().copied(),
-            floating_panes_stack,
-            z_index,
-        );
-        for client_id in client_ids {
-            let client_state = self.client_image_state_mut(client_id);
-            client_state.current.kitty_damage_redraw_chunks.extend(
-                image_render_bundle
-                    .kitty_render_bundle
-                    .explicit_chunks
-                    .clone(),
-            );
+        for (start_row, line_count) in changed_rects {
             client_state
                 .current
-                .kitty_damage_redraw_placeholder_renders
-                .extend(
-                    image_render_bundle
-                        .kitty_render_bundle
-                        .placeholder_renders
-                        .clone(),
-                );
+                .changed_rects
+                .entry(start_row)
+                .and_modify(|current_line_count| {
+                    *current_line_count = (*current_line_count).max(line_count);
+                })
+                .or_insert(line_count);
         }
     }
 
-    pub fn add_image_render_bundle_to_client(
+    fn add_changed_rects_to_multiple_clients(
+        &mut self,
+        changed_rects: HashMap<usize, usize>,
+        client_ids: impl Iterator<Item = ClientId>,
+    ) {
+        for client_id in client_ids {
+            self.add_changed_rects_to_client(client_id, changed_rects.clone());
+        }
+    }
+
+    pub fn add_pane_image_output_to_client(
         &mut self,
         client_id: ClientId,
-        image_render_bundle: ImageRenderBundle,
+        pane_image_output: PaneImageRenderOutput,
         floating_panes_stack: Option<&FloatingPanesStack>,
         z_index: Option<usize>,
     ) {
         self.add_sixel_image_chunks_to_client(
             client_id,
-            image_render_bundle.sixel_chunks,
+            pane_image_output.sixel_chunks,
             floating_panes_stack,
             z_index,
         );
         self.add_kitty_render_bundle_to_client(
             client_id,
-            image_render_bundle.kitty_render_bundle,
+            pane_image_output.kitty_scene,
             floating_panes_stack,
             z_index,
         );
+        self.add_changed_rects_to_client(client_id, pane_image_output.changed_rects);
     }
 
-    pub fn add_image_render_bundle_to_multiple_clients(
+    pub fn add_pane_image_output_to_multiple_clients(
         &mut self,
-        image_render_bundle: ImageRenderBundle,
+        pane_image_output: PaneImageRenderOutput,
         client_ids: impl Iterator<Item = ClientId>,
         floating_panes_stack: Option<&FloatingPanesStack>,
         z_index: Option<usize>,
     ) {
         let client_ids: Vec<ClientId> = client_ids.collect();
         self.add_sixel_image_chunks_to_multiple_clients(
-            image_render_bundle.sixel_chunks,
+            pane_image_output.sixel_chunks,
             client_ids.iter().copied(),
             floating_panes_stack,
             z_index,
         );
         self.add_kitty_render_bundle_to_multiple_clients(
-            image_render_bundle.kitty_render_bundle,
+            pane_image_output.kitty_scene,
             client_ids.iter().copied(),
             floating_panes_stack,
             z_index,
+        );
+        self.add_changed_rects_to_multiple_clients(
+            pane_image_output.changed_rects,
+            client_ids.iter().copied(),
         );
     }
 
@@ -571,10 +543,7 @@ impl ImageOutput {
         let current_kitty_chunks = std::mem::take(&mut client_state.current.kitty_chunks);
         let current_kitty_placeholder_renders =
             std::mem::take(&mut client_state.current.kitty_placeholder_renders);
-        let kitty_damage_redraw_chunks =
-            std::mem::take(&mut client_state.current.kitty_damage_redraw_chunks);
-        let kitty_damage_redraw_placeholder_renders =
-            std::mem::take(&mut client_state.current.kitty_damage_redraw_placeholder_renders);
+        let changed_rects = std::mem::take(&mut client_state.current.changed_rects);
 
         let previous_kitty_chunks = if pre_vte_clears_display {
             vec![]
@@ -588,15 +557,31 @@ impl ImageOutput {
         };
         let kitty_scene_changed = previous_kitty_chunks != current_kitty_chunks
             || previous_kitty_placeholder_renders != current_kitty_placeholder_renders;
+        let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
         let kitty_chunks = if kitty_scene_changed {
             current_kitty_chunks.clone()
         } else {
-            kitty_damage_redraw_chunks
+            current_kitty_chunks
+                .iter()
+                .filter(|chunk| {
+                    kitty_damage_redraw.intersects_absolute_rows(0, chunk.cell_y, chunk.rows)
+                })
+                .cloned()
+                .collect()
         };
         let kitty_placeholder_renders = if kitty_scene_changed {
             current_kitty_placeholder_renders.clone()
         } else {
-            kitty_damage_redraw_placeholder_renders
+            current_kitty_placeholder_renders
+                .iter()
+                .filter(|render| {
+                    render
+                        .cells
+                        .iter()
+                        .any(|cell| kitty_damage_redraw.intersects_absolute_rows(0, cell.cell_y, 1))
+                })
+                .cloned()
+                .collect()
         };
 
         PreparedImageOutput {
@@ -625,11 +610,6 @@ impl ImageOutput {
             !client_state.current.sixel_chunks.is_empty()
                 || !client_state.current.kitty_chunks.is_empty()
                 || !client_state.current.kitty_placeholder_renders.is_empty()
-                || !client_state.current.kitty_damage_redraw_chunks.is_empty()
-                || !client_state
-                    .current
-                    .kitty_damage_redraw_placeholder_renders
-                    .is_empty()
         }) || self.kitty_scene_is_dirty()
     }
 
@@ -638,11 +618,6 @@ impl ImageOutput {
             !client_state.current.sixel_chunks.is_empty()
                 || !client_state.current.kitty_chunks.is_empty()
                 || !client_state.current.kitty_placeholder_renders.is_empty()
-                || !client_state.current.kitty_damage_redraw_chunks.is_empty()
-                || !client_state
-                    .current
-                    .kitty_damage_redraw_placeholder_renders
-                    .is_empty()
         })
     }
 }

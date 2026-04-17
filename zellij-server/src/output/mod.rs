@@ -461,60 +461,31 @@ impl Output {
             .or_insert_with(Vec::new);
         entry.push(String::from(vte_instruction));
     }
-    pub fn add_damage_redraw_image_render_bundle_to_client(
+    pub fn add_pane_image_output_to_client(
         &mut self,
         client_id: ClientId,
-        image_render_bundle: ImageRenderBundle,
+        pane_image_output: PaneImageRenderOutput,
         z_index: Option<usize>,
     ) {
-        self.image_output
-            .add_damage_redraw_image_render_bundle_to_client(
-                client_id,
-                image_render_bundle,
-                self.floating_panes_stack.as_ref(),
-                z_index,
-            );
-    }
-    pub fn add_damage_redraw_image_render_bundle_to_multiple_clients(
-        &mut self,
-        image_render_bundle: ImageRenderBundle,
-        client_ids: impl Iterator<Item = ClientId>,
-        z_index: Option<usize>,
-    ) {
-        self.image_output
-            .add_damage_redraw_image_render_bundle_to_multiple_clients(
-                image_render_bundle,
-                client_ids,
-                self.floating_panes_stack.as_ref(),
-                z_index,
-            );
-    }
-    pub fn add_image_render_bundle_to_client(
-        &mut self,
-        client_id: ClientId,
-        image_render_bundle: ImageRenderBundle,
-        z_index: Option<usize>,
-    ) {
-        self.image_output.add_image_render_bundle_to_client(
+        self.image_output.add_pane_image_output_to_client(
             client_id,
-            image_render_bundle,
+            pane_image_output,
             self.floating_panes_stack.as_ref(),
             z_index,
         );
     }
-    pub fn add_image_render_bundle_to_multiple_clients(
+    pub fn add_pane_image_output_to_multiple_clients(
         &mut self,
-        image_render_bundle: ImageRenderBundle,
+        pane_image_output: PaneImageRenderOutput,
         client_ids: impl Iterator<Item = ClientId>,
         z_index: Option<usize>,
     ) {
-        self.image_output
-            .add_image_render_bundle_to_multiple_clients(
-                image_render_bundle,
-                client_ids,
-                self.floating_panes_stack.as_ref(),
-                z_index,
-            );
+        self.image_output.add_pane_image_output_to_multiple_clients(
+            pane_image_output,
+            client_ids,
+            self.floating_panes_stack.as_ref(),
+            z_index,
+        );
     }
     pub fn serialize(&mut self) -> Result<HashMap<ClientId, String>> {
         let err_context = || "failed to serialize output to clients".to_string();
@@ -1100,13 +1071,17 @@ pub struct ImageRenderBundle {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct PaneImageRenderOutput {
+    pub kitty_scene: KittyRenderBundle,
+    pub sixel_chunks: Vec<SixelImageChunk>,
+    pub changed_rects: HashMap<usize, usize>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct PaneRenderOutput {
     pub character_chunks: Vec<CharacterChunk>,
     pub raw_vte_output: Option<String>,
-    pub visible_image_render_bundle: ImageRenderBundle,
-    // Per-render image deltas: sixel uses this as its current redraw path, while kitty uses it
-    // only for damage-triggered restoration on top of its persistent visible scene.
-    pub damage_redraw_image_render_bundle: ImageRenderBundle,
+    pub image_output: PaneImageRenderOutput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

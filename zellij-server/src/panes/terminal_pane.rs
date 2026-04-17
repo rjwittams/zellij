@@ -1,4 +1,4 @@
-use crate::output::{CharacterChunk, PaneRenderOutput};
+use crate::output::{CharacterChunk, PaneImageRenderOutput, PaneRenderOutput};
 use crate::panes::sixel::SixelImageStore;
 use crate::panes::LinkHandler;
 use crate::panes::{
@@ -368,23 +368,17 @@ impl Pane for TerminalPane {
                 e => return e,
             }
         }
-        let visible_image_render_bundle = crate::output::ImageRenderBundle {
-            kitty_render_bundle: self.grid.visible_kitty_render_bundle(content_x, content_y),
+        let image_output = PaneImageRenderOutput {
+            kitty_scene: self.grid.visible_kitty_render_bundle(content_x, content_y),
             ..Default::default()
         };
-        if visible_image_render_bundle
-            .kitty_render_bundle
-            .explicit_chunks
-            .is_empty()
-            && visible_image_render_bundle
-                .kitty_render_bundle
-                .placeholder_renders
-                .is_empty()
+        if image_output.kitty_scene.explicit_chunks.is_empty()
+            && image_output.kitty_scene.placeholder_renders.is_empty()
         {
             Ok(None)
         } else {
             Ok(Some(PaneRenderOutput {
-                visible_image_render_bundle,
+                image_output,
                 ..Default::default()
             }))
         }

@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::time::Instant;
 
-use crate::output::{CharacterChunk, PaneRenderOutput};
+use crate::output::{CharacterChunk, PaneImageRenderOutput, PaneRenderOutput};
 use crate::panes::{
     grid::Grid,
     sixel::SixelImageStore,
@@ -410,27 +410,21 @@ impl Pane for PluginPane {
                 }
             }
         }
-        let visible_image_render_bundle = self
+        let image_output = self
             .grids
             .get(&client_id)
-            .map(|grid| crate::output::ImageRenderBundle {
-                kitty_render_bundle: grid.visible_kitty_render_bundle(content_x, content_y),
+            .map(|grid| PaneImageRenderOutput {
+                kitty_scene: grid.visible_kitty_render_bundle(content_x, content_y),
                 ..Default::default()
             })
             .unwrap_or_default();
-        if visible_image_render_bundle
-            .kitty_render_bundle
-            .explicit_chunks
-            .is_empty()
-            && visible_image_render_bundle
-                .kitty_render_bundle
-                .placeholder_renders
-                .is_empty()
+        if image_output.kitty_scene.explicit_chunks.is_empty()
+            && image_output.kitty_scene.placeholder_renders.is_empty()
         {
             Ok(None)
         } else {
             Ok(Some(PaneRenderOutput {
-                visible_image_render_bundle,
+                image_output,
                 ..Default::default()
             }))
         }

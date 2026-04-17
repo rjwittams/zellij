@@ -78,7 +78,6 @@ impl<'a> PaneContentsAndUi<'a> {
         // and we can clear them from the UI below
         drop(self.pane.drain_fake_cursors());
 
-
         if let Some(render_output) = self.pane.render(None).context(err_context)? {
             let clients: Vec<ClientId> = clients.collect();
             self.output
@@ -88,14 +87,8 @@ impl<'a> PaneContentsAndUi<'a> {
                     self.z_index,
                 )
                 .context(err_context)?;
-            self.output
-                .add_damage_redraw_image_render_bundle_to_multiple_clients(
-                    render_output.damage_redraw_image_render_bundle,
-                    clients.iter().copied(),
-                    self.z_index,
-                );
-            self.output.add_image_render_bundle_to_multiple_clients(
-                render_output.visible_image_render_bundle,
+            self.output.add_pane_image_output_to_multiple_clients(
+                render_output.image_output,
                 clients.iter().copied(),
                 self.z_index,
             );
@@ -130,14 +123,9 @@ impl<'a> PaneContentsAndUi<'a> {
                     self.z_index,
                 )
                 .with_context(err_context)?;
-            self.output.add_damage_redraw_image_render_bundle_to_client(
+            self.output.add_pane_image_output_to_client(
                 client_id,
-                render_output.damage_redraw_image_render_bundle,
-                self.z_index,
-            );
-            self.output.add_image_render_bundle_to_client(
-                client_id,
-                render_output.visible_image_render_bundle,
+                render_output.image_output,
                 self.z_index,
             );
             if let Some(raw_vte_output) = render_output.raw_vte_output {
