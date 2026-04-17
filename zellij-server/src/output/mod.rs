@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
 
+mod image_output;
+
 use crate::panes::Row;
 
 use crate::panes::Selection;
@@ -20,6 +22,8 @@ use std::{
 use zellij_utils::data::{HighlightLayer, PaneContents, PaneRenderReport};
 use zellij_utils::errors::prelude::*;
 use zellij_utils::pane_size::SizeInPixels;
+
+use self::image_output::ImageOutput;
 use zellij_utils::pane_size::{PaneGeom, Size};
 
 fn vte_goto_instruction(x_coords: usize, y_coords: usize, vte_output: &mut String) -> Result<()> {
@@ -373,24 +377,13 @@ fn adjust_middle_segment_for_wide_chars(
     ))
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone)]
 pub struct Output {
     pre_vte_instructions: HashMap<ClientId, Vec<String>>,
     post_vte_instructions: HashMap<ClientId, Vec<String>>,
     client_character_chunks: HashMap<ClientId, Vec<CharacterChunk>>,
-    sixel_chunks: HashMap<ClientId, Vec<SixelImageChunk>>,
-    kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
-    kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
-    // Kitty owns a persistent composed scene, but some frames still need a same-frame
-    // restoration pass after text/frame damage. These maps hold only that per-frame
-    // redraw subset; they do not represent the full visible kitty scene.
-    kitty_damage_redraw_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
-    kitty_damage_redraw_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
-    last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
-    last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
     link_handler: Option<Rc<RefCell<LinkHandler>>>,
-    sixel_image_store: Rc<RefCell<SixelImageStore>>,
-    character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
+    image_output: ImageOutput,
     floating_panes_stack: Option<FloatingPanesStack>,
     styled_underlines: bool,
     osc8_hyperlinks: bool,
@@ -399,35 +392,25 @@ pub struct Output {
     cursor_coordinates: Option<(usize, usize)>,
 }
 
-impl Output {
-    fn kitty_scene_is_dirty(&self) -> bool {
-        let mut client_ids = std::collections::HashSet::new();
-        client_ids.extend(self.kitty_chunks.keys().copied());
-        client_ids.extend(self.kitty_placeholder_renders.keys().copied());
-        client_ids.extend(self.last_rendered_kitty_chunks.keys().copied());
-        client_ids.extend(self.last_rendered_kitty_placeholder_renders.keys().copied());
-        client_ids.into_iter().any(|client_id| {
-            self.kitty_chunks
-                .get(&client_id)
-                .cloned()
-                .unwrap_or_default()
-                != self
-                    .last_rendered_kitty_chunks
-                    .get(&client_id)
-                    .cloned()
-                    .unwrap_or_default()
-                || self
-                    .kitty_placeholder_renders
-                    .get(&client_id)
-                    .cloned()
-                    .unwrap_or_default()
-                    != self
-                        .last_rendered_kitty_placeholder_renders
-                        .get(&client_id)
-                        .cloned()
-                        .unwrap_or_default()
-        })
+impl Default for Output {
+    fn default() -> Self {
+        Self {
+            pre_vte_instructions: Default::default(),
+            post_vte_instructions: Default::default(),
+            client_character_chunks: Default::default(),
+            link_handler: Default::default(),
+            image_output: ImageOutput::default(),
+            floating_panes_stack: Default::default(),
+            styled_underlines: Default::default(),
+            osc8_hyperlinks: Default::default(),
+            pane_render_report: Default::default(),
+            collect_ansi_pane_contents: Default::default(),
+            cursor_coordinates: Default::default(),
+        }
     }
+}
+
+impl Output {
     pub fn new(
         sixel_image_store: Rc<RefCell<SixelImageStore>>,
         character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
@@ -435,8 +418,7 @@ impl Output {
         osc8_hyperlinks: bool,
     ) -> Self {
         Output {
-            sixel_image_store,
-            character_cell_size,
+            image_output: ImageOutput::new(sixel_image_store, character_cell_size),
             styled_underlines,
             osc8_hyperlinks,
             ..Default::default()
@@ -447,8 +429,10 @@ impl Output {
         last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
         last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
     ) {
-        self.last_rendered_kitty_chunks = last_rendered_kitty_chunks;
-        self.last_rendered_kitty_placeholder_renders = last_rendered_kitty_placeholder_renders;
+        self.image_output.set_last_rendered_kitty_chunks(
+            last_rendered_kitty_chunks,
+            last_rendered_kitty_placeholder_renders,
+        );
     }
     pub fn take_last_rendered_kitty_chunks(
         &mut self,
@@ -456,10 +440,7 @@ impl Output {
         HashMap<ClientId, Vec<KittyImageChunk>>,
         HashMap<ClientId, Vec<KittyPlaceholderRender>>,
     ) {
-        (
-            std::mem::take(&mut self.last_rendered_kitty_chunks),
-            std::mem::take(&mut self.last_rendered_kitty_placeholder_renders),
-        )
+        self.image_output.take_last_rendered_kitty_chunks()
     }
     pub fn add_clients(
         &mut self,
@@ -468,7 +449,9 @@ impl Output {
         floating_panes_stack: Option<FloatingPanesStack>,
     ) {
         self.link_handler = Some(link_handler);
-        self.floating_panes_stack = floating_panes_stack;
+        self.floating_panes_stack = floating_panes_stack.clone();
+        self.image_output
+            .set_floating_panes_stack(floating_panes_stack);
         for client_id in client_ids {
             self.client_character_chunks.insert(*client_id, vec![]);
         }
@@ -560,19 +543,8 @@ impl Output {
         sixel_image_chunks: Vec<SixelImageChunk>,
         z_index: Option<usize>,
     ) {
-        if let Some(character_cell_size) = *self.character_cell_size.borrow() {
-            let mut sixel_chunks = if let Some(floating_panes_stack) = &self.floating_panes_stack {
-                floating_panes_stack.visible_sixel_image_chunks(
-                    sixel_image_chunks,
-                    z_index,
-                    &character_cell_size,
-                )
-            } else {
-                sixel_image_chunks
-            };
-            let entry = self.sixel_chunks.entry(client_id).or_insert_with(Vec::new);
-            entry.append(&mut sixel_chunks);
-        }
+        self.image_output
+            .add_sixel_image_chunks_to_client(client_id, sixel_image_chunks, z_index);
     }
     pub fn add_sixel_image_chunks_to_multiple_clients(
         &mut self,
@@ -580,21 +552,8 @@ impl Output {
         client_ids: impl Iterator<Item = ClientId>,
         z_index: Option<usize>,
     ) {
-        if let Some(character_cell_size) = *self.character_cell_size.borrow() {
-            let sixel_chunks = if let Some(floating_panes_stack) = &self.floating_panes_stack {
-                floating_panes_stack.visible_sixel_image_chunks(
-                    sixel_image_chunks,
-                    z_index,
-                    &character_cell_size,
-                )
-            } else {
-                sixel_image_chunks
-            };
-            for client_id in client_ids {
-                let entry = self.sixel_chunks.entry(client_id).or_insert_with(Vec::new);
-                entry.append(&mut sixel_chunks.clone());
-            }
-        }
+        self.image_output
+            .add_sixel_image_chunks_to_multiple_clients(sixel_image_chunks, client_ids, z_index);
     }
     pub fn add_kitty_image_chunks_to_client(
         &mut self,
@@ -602,13 +561,8 @@ impl Output {
         kitty_image_chunks: Vec<KittyImageChunk>,
         z_index: Option<usize>,
     ) {
-        let mut kitty_chunks = if let Some(floating_panes_stack) = &self.floating_panes_stack {
-            floating_panes_stack.visible_kitty_image_chunks(kitty_image_chunks, z_index)
-        } else {
-            kitty_image_chunks
-        };
-        let entry = self.kitty_chunks.entry(client_id).or_insert_with(Vec::new);
-        entry.append(&mut kitty_chunks);
+        self.image_output
+            .add_kitty_image_chunks_to_client(client_id, kitty_image_chunks, z_index);
     }
     pub fn add_kitty_image_chunks_to_multiple_clients(
         &mut self,
@@ -616,39 +570,27 @@ impl Output {
         client_ids: impl Iterator<Item = ClientId>,
         z_index: Option<usize>,
     ) {
-        let kitty_chunks = if let Some(floating_panes_stack) = &self.floating_panes_stack {
-            floating_panes_stack.visible_kitty_image_chunks(kitty_image_chunks, z_index)
-        } else {
-            kitty_image_chunks
-        };
-        for client_id in client_ids {
-            let entry = self.kitty_chunks.entry(client_id).or_insert_with(Vec::new);
-            entry.append(&mut kitty_chunks.clone());
-        }
+        self.image_output
+            .add_kitty_image_chunks_to_multiple_clients(kitty_image_chunks, client_ids, z_index);
     }
     pub fn add_kitty_placeholder_renders_to_client(
         &mut self,
         client_id: ClientId,
         kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
     ) {
-        let entry = self
-            .kitty_placeholder_renders
-            .entry(client_id)
-            .or_insert_with(Vec::new);
-        entry.extend(kitty_placeholder_renders);
+        self.image_output
+            .add_kitty_placeholder_renders_to_client(client_id, kitty_placeholder_renders);
     }
     pub fn add_kitty_placeholder_renders_to_multiple_clients(
         &mut self,
         kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
         client_ids: impl Iterator<Item = ClientId>,
     ) {
-        for client_id in client_ids {
-            let entry = self
-                .kitty_placeholder_renders
-                .entry(client_id)
-                .or_insert_with(Vec::new);
-            entry.extend(kitty_placeholder_renders.clone());
-        }
+        self.image_output
+            .add_kitty_placeholder_renders_to_multiple_clients(
+                kitty_placeholder_renders,
+                client_ids,
+            );
     }
     pub fn add_kitty_render_bundle_to_client(
         &mut self,
@@ -656,14 +598,10 @@ impl Output {
         kitty_render_bundle: crate::panes::pane_image_scene::KittyRenderBundle,
         z_index: Option<usize>,
     ) {
-        self.add_kitty_image_chunks_to_client(
+        self.image_output.add_kitty_render_bundle_to_client(
             client_id,
-            kitty_render_bundle.explicit_chunks,
+            kitty_render_bundle,
             z_index,
-        );
-        self.add_kitty_placeholder_renders_to_client(
-            client_id,
-            kitty_render_bundle.placeholder_renders,
         );
     }
     pub fn add_kitty_render_bundle_to_multiple_clients(
@@ -672,16 +610,8 @@ impl Output {
         client_ids: impl Iterator<Item = ClientId>,
         z_index: Option<usize>,
     ) {
-        let client_ids: Vec<ClientId> = client_ids.collect();
-        self.add_kitty_image_chunks_to_multiple_clients(
-            kitty_render_bundle.explicit_chunks,
-            client_ids.iter().copied(),
-            z_index,
-        );
-        self.add_kitty_placeholder_renders_to_multiple_clients(
-            kitty_render_bundle.placeholder_renders,
-            client_ids.iter().copied(),
-        );
+        self.image_output
+            .add_kitty_render_bundle_to_multiple_clients(kitty_render_bundle, client_ids, z_index);
     }
     pub fn add_damage_redraw_image_render_bundle_to_client(
         &mut self,
@@ -689,17 +619,12 @@ impl Output {
         image_render_bundle: ImageRenderBundle,
         z_index: Option<usize>,
     ) {
-        // Sixel still uses render-time delta output directly. Kitty keeps its persistent
-        // visible scene separately and uses this path only for damage-triggered redraws.
-        self.add_sixel_image_chunks_to_client(client_id, image_render_bundle.sixel_chunks, z_index);
-        self.kitty_damage_redraw_chunks
-            .entry(client_id)
-            .or_insert_with(Vec::new)
-            .extend(image_render_bundle.kitty_render_bundle.explicit_chunks);
-        self.kitty_damage_redraw_placeholder_renders
-            .entry(client_id)
-            .or_insert_with(Vec::new)
-            .extend(image_render_bundle.kitty_render_bundle.placeholder_renders);
+        self.image_output
+            .add_damage_redraw_image_render_bundle_to_client(
+                client_id,
+                image_render_bundle,
+                z_index,
+            );
     }
     pub fn add_damage_redraw_image_render_bundle_to_multiple_clients(
         &mut self,
@@ -707,32 +632,12 @@ impl Output {
         client_ids: impl Iterator<Item = ClientId>,
         z_index: Option<usize>,
     ) {
-        let client_ids: Vec<ClientId> = client_ids.collect();
-        self.add_sixel_image_chunks_to_multiple_clients(
-            image_render_bundle.sixel_chunks,
-            client_ids.iter().copied(),
-            z_index,
-        );
-        for client_id in client_ids {
-            self.kitty_damage_redraw_chunks
-                .entry(client_id)
-                .or_insert_with(Vec::new)
-                .extend(
-                    image_render_bundle
-                        .kitty_render_bundle
-                        .explicit_chunks
-                        .clone(),
-                );
-            self.kitty_damage_redraw_placeholder_renders
-                .entry(client_id)
-                .or_insert_with(Vec::new)
-                .extend(
-                    image_render_bundle
-                        .kitty_render_bundle
-                        .placeholder_renders
-                        .clone(),
-                );
-        }
+        self.image_output
+            .add_damage_redraw_image_render_bundle_to_multiple_clients(
+                image_render_bundle,
+                client_ids,
+                z_index,
+            );
     }
     pub fn add_image_render_bundle_to_client(
         &mut self,
@@ -740,10 +645,9 @@ impl Output {
         image_render_bundle: ImageRenderBundle,
         z_index: Option<usize>,
     ) {
-        self.add_sixel_image_chunks_to_client(client_id, image_render_bundle.sixel_chunks, z_index);
-        self.add_kitty_render_bundle_to_client(
+        self.image_output.add_image_render_bundle_to_client(
             client_id,
-            image_render_bundle.kitty_render_bundle,
+            image_render_bundle,
             z_index,
         );
     }
@@ -753,17 +657,8 @@ impl Output {
         client_ids: impl Iterator<Item = ClientId>,
         z_index: Option<usize>,
     ) {
-        let client_ids: Vec<ClientId> = client_ids.collect();
-        self.add_sixel_image_chunks_to_multiple_clients(
-            image_render_bundle.sixel_chunks,
-            client_ids.iter().copied(),
-            z_index,
-        );
-        self.add_kitty_render_bundle_to_multiple_clients(
-            image_render_bundle.kitty_render_bundle,
-            client_ids.iter().copied(),
-            z_index,
-        );
+        self.image_output
+            .add_image_render_bundle_to_multiple_clients(image_render_bundle, client_ids, z_index);
     }
     pub fn serialize(&mut self) -> Result<HashMap<ClientId, String>> {
         let err_context = || "failed to serialize output to clients".to_string();
@@ -772,19 +667,6 @@ impl Output {
 
         for (client_id, client_character_chunks) in self.client_character_chunks.drain() {
             let mut client_serialized_render_instructions = String::new();
-            let current_kitty_chunks = self.kitty_chunks.remove(&client_id).unwrap_or_default();
-            let current_kitty_placeholder_renders = self
-                .kitty_placeholder_renders
-                .remove(&client_id)
-                .unwrap_or_default();
-            let kitty_damage_redraw_chunks = self
-                .kitty_damage_redraw_chunks
-                .remove(&client_id)
-                .unwrap_or_default();
-            let kitty_damage_redraw_placeholder_renders = self
-                .kitty_damage_redraw_placeholder_renders
-                .remove(&client_id)
-                .unwrap_or_default();
 
             // append pre-vte instructions for this client
             let mut pre_vte_clears_display = false;
@@ -799,25 +681,10 @@ impl Output {
                 }
             }
 
-            let previous_kitty_chunks = if pre_vte_clears_display {
-                vec![]
-            } else {
-                self.last_rendered_kitty_chunks
-                    .get(&client_id)
-                    .cloned()
-                    .unwrap_or_default()
-            };
-            let previous_kitty_placeholder_renders = if pre_vte_clears_display {
-                vec![]
-            } else {
-                self.last_rendered_kitty_placeholder_renders
-                    .get(&client_id)
-                    .cloned()
-                    .unwrap_or_default()
-            };
-            let kitty_scene_changed = previous_kitty_chunks != current_kitty_chunks
-                || previous_kitty_placeholder_renders != current_kitty_placeholder_renders;
-            if kitty_scene_changed {
+            let image_output = self
+                .image_output
+                .take_client_output_for_serialization(client_id, pre_vte_clears_display);
+            if image_output.kitty_scene_changed {
                 client_serialized_render_instructions.push_str("\u{1b}[s");
                 client_serialized_render_instructions.push_str(&kitty_delete_all_vte());
                 client_serialized_render_instructions.push_str("\u{1b}[u");
@@ -825,31 +692,28 @@ impl Output {
 
             // append the actual vte
             client_serialized_render_instructions.push_str(
-                &serialize_chunks(
-                    client_character_chunks,
-                    self.sixel_chunks.get(&client_id),
-                    if kitty_scene_changed {
-                        Some(&current_kitty_chunks)
-                    } else if !kitty_damage_redraw_chunks.is_empty() {
-                        Some(&kitty_damage_redraw_chunks)
-                    } else {
-                        None
-                    },
-                    if kitty_scene_changed {
-                        Some(&current_kitty_placeholder_renders)
-                    } else if !kitty_damage_redraw_placeholder_renders.is_empty() {
-                        Some(&kitty_damage_redraw_placeholder_renders)
-                    } else {
-                        None
-                    },
-                    self.link_handler.as_mut(),
-                    Some(&mut self.sixel_image_store.borrow_mut()),
-                    self.styled_underlines,
-                    self.osc8_hyperlinks,
-                    None, // No size constraints for regular rendering
-                )
-                .with_context(err_context)?,
-            ); // TODO: less allocations?
+                &self
+                    .image_output
+                    .with_sixel_image_store(|sixel_image_store| {
+                        serialize_chunks(
+                            client_character_chunks,
+                            (!image_output.sixel_chunks.is_empty())
+                                .then_some(&image_output.sixel_chunks),
+                            (!image_output.kitty_chunks_to_serialize.is_empty())
+                                .then_some(&image_output.kitty_chunks_to_serialize),
+                            (!image_output
+                                .kitty_placeholder_renders_to_serialize
+                                .is_empty())
+                            .then_some(&image_output.kitty_placeholder_renders_to_serialize),
+                            self.link_handler.as_mut(),
+                            Some(sixel_image_store),
+                            self.styled_underlines,
+                            self.osc8_hyperlinks,
+                            None,
+                        )
+                    })
+                    .with_context(err_context)?,
+            );
 
             // append post-vte instructions for this client
             if let Some(post_vte_instructions_for_client) =
@@ -859,10 +723,11 @@ impl Output {
                     client_serialized_render_instructions.push_str(&vte_instruction);
                 }
             }
-            self.last_rendered_kitty_chunks
-                .insert(client_id, current_kitty_chunks);
-            self.last_rendered_kitty_placeholder_renders
-                .insert(client_id, current_kitty_placeholder_renders);
+            self.image_output.finish_client_frame(
+                client_id,
+                image_output.current_kitty_chunks,
+                image_output.current_kitty_placeholder_renders,
+            );
             serialized_render_instructions.insert(client_id, client_serialized_render_instructions);
         }
         Ok(serialized_render_instructions)
@@ -879,19 +744,6 @@ impl Output {
 
         for (client_id, client_character_chunks) in self.client_character_chunks.drain() {
             let mut client_serialized_render_instructions = String::new();
-            let current_kitty_chunks = self.kitty_chunks.remove(&client_id).unwrap_or_default();
-            let current_kitty_placeholder_renders = self
-                .kitty_placeholder_renders
-                .remove(&client_id)
-                .unwrap_or_default();
-            let kitty_damage_redraw_chunks = self
-                .kitty_damage_redraw_chunks
-                .remove(&client_id)
-                .unwrap_or_default();
-            let kitty_damage_redraw_placeholder_renders = self
-                .kitty_damage_redraw_placeholder_renders
-                .remove(&client_id)
-                .unwrap_or_default();
 
             // append pre-vte instructions for this client
             let mut pre_vte_clears_display = false;
@@ -909,7 +761,6 @@ impl Output {
             // Add padding instructions if max_size is larger than content_size
             if let (Some(max_size), Some(content_size)) = (max_size, content_size) {
                 if max_size.rows > content_size.rows || max_size.cols > content_size.cols {
-                    // Clear each line from the end of rendered content to the end of the watcher's line
                     for y in 0..content_size.rows {
                         let padding_instruction = format!(
                             "\u{1b}[{};{}H\u{1b}[m\u{1b}[K",
@@ -919,66 +770,45 @@ impl Output {
                         client_serialized_render_instructions.push_str(&padding_instruction);
                     }
 
-                    // Clear all content below the last rendered line
                     let clear_below_instruction =
                         format!("\u{1b}[{};{}H\u{1b}[m\u{1b}[J", content_size.rows + 1, 1);
                     client_serialized_render_instructions.push_str(&clear_below_instruction);
                 }
             }
 
-            let previous_kitty_chunks = if pre_vte_clears_display {
-                vec![]
-            } else {
-                self.last_rendered_kitty_chunks
-                    .get(&client_id)
-                    .cloned()
-                    .unwrap_or_default()
-            };
-            let previous_kitty_placeholder_renders = if pre_vte_clears_display {
-                vec![]
-            } else {
-                self.last_rendered_kitty_placeholder_renders
-                    .get(&client_id)
-                    .cloned()
-                    .unwrap_or_default()
-            };
-            let kitty_scene_changed = previous_kitty_chunks != current_kitty_chunks
-                || previous_kitty_placeholder_renders != current_kitty_placeholder_renders;
-            if kitty_scene_changed {
+            let image_output = self
+                .image_output
+                .take_client_output_for_serialization(client_id, pre_vte_clears_display);
+            if image_output.kitty_scene_changed {
                 client_serialized_render_instructions.push_str("\u{1b}[s");
                 client_serialized_render_instructions.push_str(&kitty_delete_all_vte());
                 client_serialized_render_instructions.push_str("\u{1b}[u");
             }
 
-            // append the actual vte with size constraints
             client_serialized_render_instructions.push_str(
-                &serialize_chunks(
-                    client_character_chunks,
-                    self.sixel_chunks.get(&client_id),
-                    if kitty_scene_changed {
-                        Some(&current_kitty_chunks)
-                    } else if !kitty_damage_redraw_chunks.is_empty() {
-                        Some(&kitty_damage_redraw_chunks)
-                    } else {
-                        None
-                    },
-                    if kitty_scene_changed {
-                        Some(&current_kitty_placeholder_renders)
-                    } else if !kitty_damage_redraw_placeholder_renders.is_empty() {
-                        Some(&kitty_damage_redraw_placeholder_renders)
-                    } else {
-                        None
-                    },
-                    self.link_handler.as_mut(),
-                    Some(&mut self.sixel_image_store.borrow_mut()),
-                    self.styled_underlines,
-                    self.osc8_hyperlinks,
-                    max_size,
-                )
-                .with_context(err_context)?,
+                &self
+                    .image_output
+                    .with_sixel_image_store(|sixel_image_store| {
+                        serialize_chunks(
+                            client_character_chunks,
+                            (!image_output.sixel_chunks.is_empty())
+                                .then_some(&image_output.sixel_chunks),
+                            (!image_output.kitty_chunks_to_serialize.is_empty())
+                                .then_some(&image_output.kitty_chunks_to_serialize),
+                            (!image_output
+                                .kitty_placeholder_renders_to_serialize
+                                .is_empty())
+                            .then_some(&image_output.kitty_placeholder_renders_to_serialize),
+                            self.link_handler.as_mut(),
+                            Some(sixel_image_store),
+                            self.styled_underlines,
+                            self.osc8_hyperlinks,
+                            max_size,
+                        )
+                    })
+                    .with_context(err_context)?,
             );
 
-            // append post-vte instructions for this client
             if let Some(post_vte_instructions_for_client) =
                 self.post_vte_instructions.remove(&client_id)
             {
@@ -987,7 +817,6 @@ impl Output {
                 }
             }
 
-            // Check if cursor was cropped and hide it if necessary
             if let (Some(max_size), Some((cursor_x, cursor_y))) =
                 (max_size, self.cursor_coordinates)
             {
@@ -998,10 +827,11 @@ impl Output {
                 }
             }
 
-            self.last_rendered_kitty_chunks
-                .insert(client_id, current_kitty_chunks);
-            self.last_rendered_kitty_placeholder_renders
-                .insert(client_id, current_kitty_placeholder_renders);
+            self.image_output.finish_client_frame(
+                client_id,
+                image_output.current_kitty_chunks,
+                image_output.current_kitty_placeholder_renders,
+            );
             serialized_render_instructions.insert(client_id, client_serialized_render_instructions);
         }
         Ok(serialized_render_instructions)
@@ -1010,39 +840,12 @@ impl Output {
         !self.pre_vte_instructions.is_empty()
             || !self.post_vte_instructions.is_empty()
             || self.client_character_chunks.values().any(|c| !c.is_empty())
-            || self.sixel_chunks.values().any(|c| !c.is_empty())
-            || self.kitty_chunks.values().any(|c| !c.is_empty())
-            || self
-                .kitty_placeholder_renders
-                .values()
-                .any(|c| !c.is_empty())
-            || self
-                .kitty_damage_redraw_chunks
-                .values()
-                .any(|c| !c.is_empty())
-            || self
-                .kitty_damage_redraw_placeholder_renders
-                .values()
-                .any(|c| !c.is_empty())
-            || self.kitty_scene_is_dirty()
+            || self.image_output.is_dirty()
     }
     pub fn has_rendered_assets(&self) -> bool {
         // pre_vte and post_vte are not considered rendered assets as they should not be visible
         self.client_character_chunks.values().any(|c| !c.is_empty())
-            || self.sixel_chunks.values().any(|c| !c.is_empty())
-            || self.kitty_chunks.values().any(|c| !c.is_empty())
-            || self
-                .kitty_placeholder_renders
-                .values()
-                .any(|c| !c.is_empty())
-            || self
-                .kitty_damage_redraw_chunks
-                .values()
-                .any(|c| !c.is_empty())
-            || self
-                .kitty_damage_redraw_placeholder_renders
-                .values()
-                .any(|c| !c.is_empty())
+            || self.image_output.has_rendered_assets()
     }
     pub fn cursor_is_visible(
         &mut self,
