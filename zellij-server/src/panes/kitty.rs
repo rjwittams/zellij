@@ -1,7 +1,9 @@
 use base64;
 use zellij_utils::pane_size::SizeInPixels;
 
-use crate::output::{KittyImageChunk, KittyImageData, KittyImagePlacementMode};
+use crate::output::{
+    KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyPlaceholderRender,
+};
 use crate::panes::kitty_placeholder::{KITTY_ROWCOL_DIACRITICS, KITTY_UNICODE_PLACEHOLDER_CHAR};
 
 use crate::panes::pane_image_scene::{
@@ -12,69 +14,30 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 #[derive(Clone, Debug)]
-pub enum KittyStoredImageData {
-    Png {
-        data: Vec<u8>,
-        width: u32,
-        height: u32,
-    },
-    Rgb {
-        data: Vec<u8>,
-        width: u32,
-        height: u32,
-    },
-    Rgba {
-        data: Vec<u8>,
-        width: u32,
-        height: u32,
-    },
-}
-
-#[derive(Clone, Debug)]
 pub struct KittyImage {
     pub id: u32,
-    pub data: KittyStoredImageData,
+    pub data: KittyImageData,
 }
 
 impl KittyImage {
     pub fn width(&self) -> u32 {
         match &self.data {
-            KittyStoredImageData::Png { width, .. }
-            | KittyStoredImageData::Rgb { width, .. }
-            | KittyStoredImageData::Rgba { width, .. } => *width,
+            KittyImageData::Png { width, .. }
+            | KittyImageData::Rgb { width, .. }
+            | KittyImageData::Rgba { width, .. } => *width,
         }
     }
 
     pub fn height(&self) -> u32 {
         match &self.data {
-            KittyStoredImageData::Png { height, .. }
-            | KittyStoredImageData::Rgb { height, .. }
-            | KittyStoredImageData::Rgba { height, .. } => *height,
+            KittyImageData::Png { height, .. }
+            | KittyImageData::Rgb { height, .. }
+            | KittyImageData::Rgba { height, .. } => *height,
         }
     }
 
     pub fn chunk_data(&self) -> KittyImageData {
-        match &self.data {
-            KittyStoredImageData::Png { data, .. } => KittyImageData::Png { data: data.clone() },
-            KittyStoredImageData::Rgb {
-                data,
-                width,
-                height,
-            } => KittyImageData::Rgb {
-                data: data.clone(),
-                width: *width,
-                height: *height,
-            },
-            KittyStoredImageData::Rgba {
-                data,
-                width,
-                height,
-            } => KittyImageData::Rgba {
-                data: data.clone(),
-                width: *width,
-                height: *height,
-            },
-        }
+        self.data.clone()
     }
 }
 
@@ -481,9 +444,7 @@ impl KittyImageState {
         raw_vte_output
     }
 
-    pub fn serialize_placeholder_renders(
-        renders: &[crate::output::KittyPlaceholderRender],
-    ) -> String {
+    pub fn serialize_placeholder_renders(renders: &[KittyPlaceholderRender]) -> String {
         if renders.is_empty() {
             return String::new();
         }
@@ -683,18 +644,18 @@ impl PendingKittyTransmit {
         let data = match self.image_format {
             KittyImageFormat::Png => {
                 let (width, height) = parse_png_dimensions(&self.payload)?;
-                KittyStoredImageData::Png {
+                KittyImageData::Png {
                     data: self.payload,
                     width,
                     height,
                 }
             },
-            KittyImageFormat::Rgb => KittyStoredImageData::Rgb {
+            KittyImageFormat::Rgb => KittyImageData::Rgb {
                 data: self.payload,
                 width: self.width,
                 height: self.height,
             },
-            KittyImageFormat::Rgba => KittyStoredImageData::Rgba {
+            KittyImageFormat::Rgba => KittyImageData::Rgba {
                 data: self.payload,
                 width: self.width,
                 height: self.height,
@@ -987,7 +948,7 @@ fn serialize_transmit(image_id: u32, image_data: &KittyImageData) -> Vec<String>
         "q=2".to_string(),
     ];
     let payload = match image_data {
-        KittyImageData::Png { data } => {
+        KittyImageData::Png { data, .. } => {
             parts.push("f=100".to_string());
             data
         },
@@ -1067,10 +1028,7 @@ fn serialize_display(chunk: &KittyImageChunk, placement_id: u32) -> String {
     parts.join(",")
 }
 
-fn serialize_placeholder_render(
-    render: &crate::output::KittyPlaceholderRender,
-    placement_id: u32,
-) -> String {
+fn serialize_placeholder_render(render: &KittyPlaceholderRender, placement_id: u32) -> String {
     let mut output = String::new();
     output.push_str("\u{1b}_G");
     output.push_str(&serialize_virtual_placeholder_placement(
@@ -1114,7 +1072,7 @@ fn serialize_placeholder_render(
 }
 
 fn serialize_virtual_placeholder_placement(
-    render: &crate::output::KittyPlaceholderRender,
+    render: &KittyPlaceholderRender,
     placement_id: u32,
 ) -> String {
     let mut parts = vec![
@@ -1147,7 +1105,7 @@ mod tests {
     fn test_image(width: u32, height: u32) -> KittyImage {
         KittyImage {
             id: 1,
-            data: KittyStoredImageData::Rgba {
+            data: KittyImageData::Rgba {
                 data: vec![0; (width * height * 4) as usize],
                 width,
                 height,
@@ -1205,7 +1163,7 @@ mod tests {
         .into_image()
         .unwrap();
         match image.data {
-            KittyStoredImageData::Rgb {
+            KittyImageData::Rgb {
                 data,
                 width,
                 height,

@@ -1,7 +1,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::time::Instant;
 
-use crate::output::CharacterChunk;
+use crate::output::{CharacterChunk, PaneRenderOutput};
+use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::{
     grid::Grid,
     sixel::SixelImageStore,
@@ -388,10 +389,7 @@ impl Pane for PluginPane {
         self.handle_plugin_bytes_for_all_clients(Default::default()); // to trigger the render of
                                                                       // the permission message
     }
-    fn render(
-        &mut self,
-        client_id: Option<ClientId>,
-    ) -> Result<Option<crate::output::PaneRenderOutput>> {
+    fn render(&mut self, client_id: Option<ClientId>) -> Result<Option<PaneRenderOutput>> {
         if client_id.is_none() {
             return Ok(None);
         }
@@ -417,10 +415,7 @@ impl Pane for PluginPane {
         }
         Ok(None)
     }
-    fn visible_kitty_render_bundle(
-        &self,
-        client_id: Option<ClientId>,
-    ) -> crate::panes::pane_image_scene::KittyRenderBundle {
+    fn visible_kitty_render_bundle(&self, client_id: Option<ClientId>) -> KittyRenderBundle {
         client_id
             .and_then(|client_id| self.grids.get(&client_id))
             .map(|grid| {

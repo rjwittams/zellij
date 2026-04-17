@@ -23,6 +23,7 @@ use zellij_utils::errors::prelude::*;
 use zellij_utils::pane_size::SizeInPixels;
 
 use self::image_output::{ImageOutput, PreparedImageOutput};
+use crate::panes::pane_image_scene::KittyRenderBundle;
 use zellij_utils::pane_size::{PaneGeom, Size};
 
 fn vte_goto_instruction(x_coords: usize, y_coords: usize, vte_output: &mut String) -> Result<()> {
@@ -1047,6 +1048,8 @@ pub struct SixelImageChunk {
 pub enum KittyImageData {
     Png {
         data: Vec<u8>,
+        width: u32,
+        height: u32,
     },
     Rgb {
         data: Vec<u8>,
@@ -1093,7 +1096,7 @@ pub struct KittyPlaceholderRender {
 #[derive(Debug, Clone, Default)]
 pub struct ImageRenderBundle {
     pub sixel_chunks: Vec<SixelImageChunk>,
-    pub kitty_render_bundle: crate::panes::pane_image_scene::KittyRenderBundle,
+    pub kitty_render_bundle: KittyRenderBundle,
 }
 
 #[derive(Debug, Clone, Default)]

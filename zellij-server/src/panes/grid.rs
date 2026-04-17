@@ -123,7 +123,8 @@ use vte::{Params, Perform};
 use zellij_utils::{consts::VERSION, shared::version_number};
 
 use crate::output::{
-    CharacterChunk, HighlightSelection, KittyImageChunk, OutputBuffer, SixelImageChunk,
+    CharacterChunk, HighlightSelection, ImageRenderBundle, KittyImageChunk, KittyPlaceholderRender,
+    OutputBuffer, PaneRenderOutput, SixelImageChunk,
 };
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
@@ -132,7 +133,8 @@ use crate::panes::kitty::{
 };
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::pane_image_scene::{
-    FlowAnchor, KittyDamageRedraw, KittyPlaceholderCell, PaneImageScene,
+    FlowAnchor, ImageContentFlow, KittyDamageRedraw, KittyPlaceholderCell, KittyRenderBundle,
+    PaneImageScene,
 };
 use crate::panes::search::SearchResult;
 use crate::panes::terminal_character::{
@@ -1693,7 +1695,7 @@ impl Grid {
         &self,
         content_x: usize,
         content_y: usize,
-    ) -> crate::panes::pane_image_scene::KittyRenderBundle {
+    ) -> KittyRenderBundle {
         self.image_scene.visible_kitty_render_bundle(
             content_x,
             content_y,
@@ -1716,7 +1718,7 @@ impl Grid {
         &self,
         content_x: usize,
         content_y: usize,
-    ) -> Vec<crate::output::KittyPlaceholderRender> {
+    ) -> Vec<KittyPlaceholderRender> {
         self.visible_kitty_render_bundle(content_x, content_y)
             .placeholder_renders
     }
@@ -1725,7 +1727,7 @@ impl Grid {
         content_x: usize,
         content_y: usize,
         style: &Style,
-    ) -> Result<Option<crate::output::PaneRenderOutput>> {
+    ) -> Result<Option<PaneRenderOutput>> {
         if self.lock_renders {
             return Ok(None);
         }
@@ -1823,7 +1825,7 @@ impl Grid {
             }
         }
         let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
-        let image_render_bundle = crate::output::ImageRenderBundle {
+        let image_render_bundle = ImageRenderBundle {
             sixel_chunks: sixel_image_chunks,
             kitty_render_bundle: self
                 .image_scene
@@ -1839,7 +1841,7 @@ impl Grid {
                 ),
         };
 
-        return Ok(Some(crate::output::PaneRenderOutput {
+        return Ok(Some(PaneRenderOutput {
             character_chunks,
             raw_vte_output: Some(raw_vte_output),
             damage_redraw_image_render_bundle: image_render_bundle,
@@ -2052,11 +2054,6 @@ impl Grid {
             &mut self.lines_above,
             &mut self.link_handler.borrow_mut(),
         );
-        // Temporarily disabled while investigating placeholder loss across
-        // scroll / mouse / resize redraw paths. This unconditional deletion is
-        // correct for direct overwrite, but may be too aggressive when later
-        // redraw writes land on anchors that were not semantically intended to
-        // erase placeholder cells.
         // this function assumes the current line has enough room for terminal_character (that its
         // width has been checked beforehand)
         match self.viewport.get_mut(self.cursor.y) {
@@ -3781,10 +3778,8 @@ impl Perform for Grid {
                     character_cell_size,
                 ) {
                     match image_effect.placement.content_flow {
-                        crate::panes::pane_image_scene::ImageContentFlow::NoCursorMovement => {},
-                        crate::panes::pane_image_scene::ImageContentFlow::MoveCursorByCells {
-                            ..
-                        } => {
+                        ImageContentFlow::NoCursorMovement => {},
+                        ImageContentFlow::MoveCursorByCells { .. } => {
                             for _ in 0..image_effect.placement.rows() {
                                 self.add_canonical_line();
                             }

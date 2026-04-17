@@ -54,6 +54,8 @@ fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageC
         y_offset: 0,
         image_data: KittyImageData::Png {
             data: vec![1, 2, 3, 4],
+            width: 1,
+            height: 1,
         },
     }
 }

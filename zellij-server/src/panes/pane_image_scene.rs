@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use zellij_utils::pane_size::SizeInPixels;
 
-use crate::output::{KittyImageChunk, KittyPlaceholderCellRender, KittyPlaceholderRender};
+use crate::output::{
+    KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyPlaceholderCellRender,
+    KittyPlaceholderRender,
+};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KittyRenderBundle {
@@ -402,7 +405,7 @@ impl PaneImageScene {
                 });
                 let logical_placement_id = next_logical_placement_id();
                 let flavor = match insertion.placement_mode {
-                    crate::output::KittyImagePlacementMode::Explicit => {
+                    KittyImagePlacementMode::Explicit => {
                         PlacementFlavor::KittyExplicit(KittyExplicitPlacementFlavor {
                             occupancy: PlacementOccupancy {
                                 columns: geometry.columns,
@@ -419,7 +422,7 @@ impl PaneImageScene {
                             y_offset: geometry.y_offset,
                         })
                     },
-                    crate::output::KittyImagePlacementMode::Placeholder => {
+                    KittyImagePlacementMode::Placeholder => {
                         PlacementFlavor::KittyPlaceholder(KittyVirtualPlacementFlavor {
                             occupancy: PlacementOccupancy {
                                 columns: geometry.columns,
@@ -489,7 +492,7 @@ impl PaneImageScene {
         self.placements.get(&logical_placement_id)
     }
 
-    pub fn kitty_image_chunk_data(&self, image_id: u32) -> Option<crate::output::KittyImageData> {
+    pub fn kitty_image_chunk_data(&self, image_id: u32) -> Option<KittyImageData> {
         self.kitty.image_chunk_data(image_id)
     }
 
@@ -635,7 +638,7 @@ impl PaneImageScene {
             explicit_chunks.push(KittyImageChunk {
                 image_id,
                 placement_id,
-                placement_mode: crate::output::KittyImagePlacementMode::Explicit,
+                placement_mode: KittyImagePlacementMode::Explicit,
                 cell_x: projection.cell_x,
                 cell_y: projection.cell_y,
                 columns: serialized_columns,

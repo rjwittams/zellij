@@ -35,10 +35,14 @@ use layout_applier::LayoutApplier;
 use swap_layouts::SwapLayouts;
 
 use self::clipboard::ClipboardProvider;
+use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::route::NotificationEnd;
 use crate::{
     os_input_output::ServerOsApi,
-    output::{CharacterChunk, Output},
+    output::{
+        CharacterChunk, ImageRenderBundle, KittyImageChunk, KittyPlaceholderRender, Output,
+        PaneRenderOutput,
+    },
     panes::floating_panes::floating_pane_grid::half_size_middle_geom,
     panes::grid::namespace_notification_id,
     panes::sixel::SixelImageStore,
@@ -271,35 +275,23 @@ pub trait Pane {
     fn selectable(&self) -> bool;
     fn set_selectable(&mut self, selectable: bool);
     fn request_permissions_from_user(&mut self, _permissions: Option<PluginPermission>) {}
-    fn render(
-        &mut self,
-        client_id: Option<ClientId>,
-    ) -> Result<Option<crate::output::PaneRenderOutput>>; // TODO: better
-    fn visible_image_render_bundle(
-        &self,
-        client_id: Option<ClientId>,
-    ) -> crate::output::ImageRenderBundle {
-        crate::output::ImageRenderBundle {
+    fn render(&mut self, client_id: Option<ClientId>) -> Result<Option<PaneRenderOutput>>; // TODO: better
+    fn visible_image_render_bundle(&self, client_id: Option<ClientId>) -> ImageRenderBundle {
+        ImageRenderBundle {
             kitty_render_bundle: self.visible_kitty_render_bundle(client_id),
             ..Default::default()
         }
     }
-    fn visible_kitty_render_bundle(
-        &self,
-        _client_id: Option<ClientId>,
-    ) -> crate::panes::pane_image_scene::KittyRenderBundle {
+    fn visible_kitty_render_bundle(&self, _client_id: Option<ClientId>) -> KittyRenderBundle {
         Default::default()
     }
-    fn visible_kitty_image_chunks(
-        &self,
-        client_id: Option<ClientId>,
-    ) -> Vec<crate::output::KittyImageChunk> {
+    fn visible_kitty_image_chunks(&self, client_id: Option<ClientId>) -> Vec<KittyImageChunk> {
         self.visible_kitty_render_bundle(client_id).explicit_chunks
     }
     fn visible_kitty_placeholder_renders(
         &self,
         client_id: Option<ClientId>,
-    ) -> Vec<crate::output::KittyPlaceholderRender> {
+    ) -> Vec<KittyPlaceholderRender> {
         self.visible_kitty_render_bundle(client_id)
             .placeholder_renders
     }

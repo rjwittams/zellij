@@ -1,4 +1,5 @@
-use crate::output::CharacterChunk;
+use crate::output::{CharacterChunk, PaneRenderOutput};
+use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::SixelImageStore;
 use crate::panes::LinkHandler;
 use crate::panes::{
@@ -351,10 +352,7 @@ impl Pane for TerminalPane {
     fn get_pane_default_colors(&self) -> (Option<String>, Option<String>) {
         self.grid.get_pane_default_color_strings()
     }
-    fn render(
-        &mut self,
-        _client_id: Option<ClientId>,
-    ) -> Result<Option<crate::output::PaneRenderOutput>> {
+    fn render(&mut self, _client_id: Option<ClientId>) -> Result<Option<PaneRenderOutput>> {
         if self.should_render() {
             let content_x = self.get_content_x();
             let content_y = self.get_content_y();
@@ -374,10 +372,7 @@ impl Pane for TerminalPane {
             Ok(None)
         }
     }
-    fn visible_kitty_render_bundle(
-        &self,
-        _client_id: Option<ClientId>,
-    ) -> crate::panes::pane_image_scene::KittyRenderBundle {
+    fn visible_kitty_render_bundle(&self, _client_id: Option<ClientId>) -> KittyRenderBundle {
         self.grid
             .visible_kitty_render_bundle(self.get_content_x(), self.get_content_y())
     }
