@@ -174,6 +174,30 @@ def os_read(fd: int, n: int) -> bytes:
     return os.read(fd, n)
 
 
+def run_query(control: str, payload: bytes, timeout: float = 0.5) -> str:
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    chunks: list[str] = []
+    try:
+        tty.setcbreak(fd)
+        chunked_apc(control, payload)
+        flush()
+        end = time.time() + timeout
+        while time.time() < end:
+            remain = max(0.0, end - time.time())
+            r, _, _ = select.select([fd], [], [], remain)
+            if not r:
+                break
+            data = os_read(fd, 4096)
+            if not data:
+                break
+            chunks.append(data.decode(errors="replace"))
+            end = time.time() + 0.05
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return "".join(chunks)
+
+
 def probe_caps() -> Caps:
     caps = Caps()
     # kitty basic graphics query
@@ -357,7 +381,7 @@ def wait_for_resize(description: str, predicate) -> tuple[int, int] | None:
 
 
 def stage_detect() -> Caps:
-    divider("Stage 1/9: capability and environment probe")
+    divider("Stage 1/11: capability and environment probe")
     label("Expect: a capability summary only. Later stages use this to set expectations and skips.", 1, 3)
     caps = probe_caps()
     env_rows = [
@@ -397,8 +421,56 @@ def stage_detect() -> Caps:
     return caps
 
 
+def stage_query_semantics(caps: Caps):
+    divider("Stage 2/11: kitty query / response semantics")
+    if not caps.kitty_basic_query:
+        label("SKIP: kitty graphics query did not succeed.", 1, 4)
+        return
+    label("Expect: query results below showing OK/error behavior, echoed ids, and quiet-mode suppression.", 1, 3)
+    label("The query-only box should remain empty: a=q should not store an image that can later be displayed.", 1, 4)
+
+    valid_payload = rgb_gradient(1, 1)
+
+    success_reply = run_query("q=0,a=q,t=d,f=24,s=1,v=1,i=41", valid_payload)
+    failure_reply = run_query("q=0,a=q,t=d,f=24,s=1,v=1,i=42,I=1", valid_payload)
+    quiet_success_reply = run_query("q=1,a=q,t=d,f=24,s=1,v=1,i=43", valid_payload)
+    quiet_failure_reply = run_query("q=2,a=q,t=d,f=24,s=1,v=1,i=44,I=1", valid_payload)
+
+    success_ok = "OK" in success_reply and "i=41" in success_reply
+    failure_has_error = bool(failure_reply) and "OK" not in failure_reply
+    quiet_success_suppressed = quiet_success_reply == ""
+    quiet_failure_suppressed = quiet_failure_reply == ""
+
+    def verdict(ok: bool) -> str:
+        return "PASS" if ok else "FAIL"
+
+    y = 6
+    label(f"success reply        {success_reply!r}", 1, y)
+    label(f"{verdict(success_ok)}: expect echoed i=41 and OK", 58, y)
+    y += 2
+    label(f"failure reply        {failure_reply!r}", 1, y)
+    label(f"{verdict(failure_has_error)}: expect non-OK error reply for invalid i+I query", 58, y)
+    y += 2
+    label(f"quiet success q=1    {quiet_success_reply!r}", 1, y)
+    label(f"{verdict(quiet_success_suppressed)}: expect success reply suppression", 58, y)
+    y += 2
+    label(f"quiet failure q=2    {quiet_failure_reply!r}", 1, y)
+    label(f"{verdict(quiet_failure_suppressed)}: expect failure reply suppression", 58, y)
+    y += 2
+    draw_box(2, y, 12, 4, "query only")
+    display_png(41, cols=12, rows=4, x=3, y=y + 1, placement_id=1)
+    y += 6
+    label("Visual check: the query-only box above should stay empty if a=q is non-storing.", 1, y)
+    y += 2
+    label(
+        f"Summary: success={verdict(success_ok)}, invalid={verdict(failure_has_error)}, q=1={verdict(quiet_success_suppressed)}, q=2={verdict(quiet_failure_suppressed)}",
+        1,
+        y,
+    )
+
+
 def stage_explicit_png(path: Path, caps: Caps):
-    divider("Stage 2/9: explicit PNG placement")
+    divider("Stage 3/11: explicit PNG placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -408,7 +480,7 @@ def stage_explicit_png(path: Path, caps: Caps):
 
 
 def stage_explicit_rgb(caps: Caps):
-    divider("Stage 3/10: explicit RGB chunked placement")
+    divider("Stage 4/11: explicit RGB chunked placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -418,7 +490,7 @@ def stage_explicit_rgb(caps: Caps):
 
 
 def stage_explicit_rgba(caps: Caps):
-    divider("Stage 4/10: explicit RGBA chunked placement")
+    divider("Stage 5/11: explicit RGBA chunked placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -433,7 +505,7 @@ def stage_explicit_rgba(caps: Caps):
 
 
 def stage_placeholder(caps: Caps):
-    divider("Stage 5/10: Unicode placeholder placement")
+    divider("Stage 6/11: Unicode placeholder placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -443,7 +515,7 @@ def stage_placeholder(caps: Caps):
 
 
 def stage_aspect(path: Path, caps: Caps):
-    divider("Stage 6/10: aspect comparison for explicit placement")
+    divider("Stage 7/11: aspect comparison for explicit placement")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -459,7 +531,7 @@ def stage_aspect(path: Path, caps: Caps):
 
 
 def stage_multi_delete(path: Path, caps: Caps):
-    divider("Stage 7/10: multi-placement and targeted delete")
+    divider("Stage 8/11: multi-placement and targeted delete")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -477,7 +549,7 @@ def stage_multi_delete(path: Path, caps: Caps):
 
 
 def stage_erase(caps: Caps):
-    divider("Stage 8/10: erase interactions for placeholder flow")
+    divider("Stage 9/11: erase interactions for placeholder flow")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -505,7 +577,7 @@ def stage_erase(caps: Caps):
 
 
 def stage_resize_reflow(path: Path, caps: Caps):
-    divider("Stage 9/10: resize and reflow coherence")
+    divider("Stage 10/11: resize and reflow coherence")
     if not caps.kitty_basic_query:
         label("SKIP: kitty graphics query did not succeed.", 1, 4)
         return
@@ -553,7 +625,7 @@ def stage_resize_reflow(path: Path, caps: Caps):
 
 
 def stage_delete(caps: Caps):
-    divider("Stage 10/10: delete all visible kitty images")
+    divider("Stage 11/11: delete all visible kitty images")
     label("Expect: all kitty images disappear after delete-all-visible.", 1, 3)
     if caps.kitty_basic_query:
         delete_all()
@@ -562,6 +634,8 @@ def stage_delete(caps: Caps):
 
 def all_stages(path: Path):
     caps = stage_detect()
+    wait_for_enter()
+    stage_query_semantics(caps)
     wait_for_enter()
     stage_explicit_png(path, caps)
     wait_for_enter()
@@ -587,7 +661,7 @@ def all_stages(path: Path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("png", nargs="?", default=str(DEFAULT_PNG), help="png path (defaults to assets/logo.png)")
-    p.add_argument("--mode", choices=["all", "detect", "explicit-png", "explicit-rgb", "explicit-rgba", "placeholder", "aspect", "multi-delete", "erase", "resize", "delete"], default="all")
+    p.add_argument("--mode", choices=["all", "detect", "query", "explicit-png", "explicit-rgb", "explicit-rgba", "placeholder", "aspect", "multi-delete", "erase", "resize", "delete"], default="all")
     args = p.parse_args()
 
     path = Path(args.png)
@@ -602,7 +676,9 @@ def main():
     if args.mode == "detect":
         return
     wait_for_enter()
-    if args.mode == "explicit-png":
+    if args.mode == "query":
+        stage_query_semantics(caps)
+    elif args.mode == "explicit-png":
         stage_explicit_png(path, caps)
     elif args.mode == "explicit-rgb":
         stage_explicit_rgb(caps)

@@ -814,6 +814,13 @@ pub enum KittyQueryResponse {
     Ok {
         image_id: Option<u32>,
         placement_id: Option<u32>,
+        image_number: Option<u32>,
+    },
+    Error {
+        image_id: Option<u32>,
+        placement_id: Option<u32>,
+        image_number: Option<u32>,
+        message: String,
     },
 }
 
@@ -823,6 +830,7 @@ impl KittyQueryResponse {
             KittyQueryResponse::Ok {
                 image_id,
                 placement_id,
+                image_number,
             } => {
                 let mut control_data = String::new();
                 if let Some(image_id) = image_id {
@@ -830,11 +838,39 @@ impl KittyQueryResponse {
                     if let Some(placement_id) = placement_id {
                         control_data.push_str(&format!(",p={}", placement_id));
                     }
+                    if let Some(image_number) = image_number {
+                        control_data.push_str(&format!(",I={}", image_number));
+                    }
                     control_data.push(';');
+                } else if let Some(image_number) = image_number {
+                    control_data.push_str(&format!("I={};", image_number));
                 } else {
                     control_data.push(';');
                 }
                 format!("\u{1b}_G{}OK\u{1b}\\", control_data)
+            },
+            KittyQueryResponse::Error {
+                image_id,
+                placement_id,
+                image_number,
+                message,
+            } => {
+                let mut control_data = String::new();
+                if let Some(image_id) = image_id {
+                    control_data.push_str(&format!("i={}", image_id));
+                    if let Some(placement_id) = placement_id {
+                        control_data.push_str(&format!(",p={}", placement_id));
+                    }
+                    if let Some(image_number) = image_number {
+                        control_data.push_str(&format!(",I={}", image_number));
+                    }
+                    control_data.push(';');
+                } else if let Some(image_number) = image_number {
+                    control_data.push_str(&format!("I={};", image_number));
+                } else {
+                    control_data.push(';');
+                }
+                format!("\u{1b}_G{}{}\u{1b}\\", control_data, message)
             },
         }
     }
@@ -1026,30 +1062,111 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
         return None;
     }
 
-    let format = kv.get("f").copied().unwrap_or("32");
-    let payload = base64::decode(payload_b64).ok()?;
-    let valid = match format {
-        "24" => {
-            let width = kv.get("s").and_then(|v| v.parse::<usize>().ok())?;
-            let height = kv.get("v").and_then(|v| v.parse::<usize>().ok())?;
-            payload.len() == width * height * 3
-        },
-        "32" => {
-            let width = kv.get("s").and_then(|v| v.parse::<usize>().ok())?;
-            let height = kv.get("v").and_then(|v| v.parse::<usize>().ok())?;
-            payload.len() == width * height * 4
-        },
-        "100" => parse_png_dimensions(&payload).is_some(),
-        _ => false,
-    };
-    if !valid {
-        return None;
-    }
+    let quiet = kv.get("q").and_then(|q| q.parse::<u8>().ok()).unwrap_or(0);
+    let image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
+    let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
+    let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok());
 
-    Some(KittyQueryResponse::Ok {
-        image_id: kv.get("i").and_then(|i| i.parse::<u32>().ok()),
-        placement_id: kv.get("p").and_then(|p| p.parse::<u32>().ok()),
-    })
+    let reply = if image_id.is_some() && image_number.is_some() {
+        KittyQueryResponse::Error {
+            image_id,
+            placement_id,
+            image_number,
+            message: "EINVAL:Must not specify both i and I".to_string(),
+        }
+    } else {
+        let payload = match base64::decode(payload_b64) {
+            Ok(payload) => payload,
+            Err(_) => {
+                let response = KittyQueryResponse::Error {
+                    image_id,
+                    placement_id,
+                    image_number,
+                    message: "EINVAL:Invalid base64 payload".to_string(),
+                };
+                return if quiet == 2 { None } else { Some(response) };
+            },
+        };
+        let format = kv.get("f").copied().unwrap_or("32");
+        let valid = match format {
+            "24" => {
+                let width = match kv.get("s").and_then(|v| v.parse::<usize>().ok()) {
+                    Some(width) => width,
+                    None => {
+                        let response = KittyQueryResponse::Error {
+                            image_id,
+                            placement_id,
+                            image_number,
+                            message: "EINVAL:Missing or invalid s for RGB payload".to_string(),
+                        };
+                        return if quiet == 2 { None } else { Some(response) };
+                    },
+                };
+                let height = match kv.get("v").and_then(|v| v.parse::<usize>().ok()) {
+                    Some(height) => height,
+                    None => {
+                        let response = KittyQueryResponse::Error {
+                            image_id,
+                            placement_id,
+                            image_number,
+                            message: "EINVAL:Missing or invalid v for RGB payload".to_string(),
+                        };
+                        return if quiet == 2 { None } else { Some(response) };
+                    },
+                };
+                payload.len() == width * height * 3
+            },
+            "32" => {
+                let width = match kv.get("s").and_then(|v| v.parse::<usize>().ok()) {
+                    Some(width) => width,
+                    None => {
+                        let response = KittyQueryResponse::Error {
+                            image_id,
+                            placement_id,
+                            image_number,
+                            message: "EINVAL:Missing or invalid s for RGBA payload".to_string(),
+                        };
+                        return if quiet == 2 { None } else { Some(response) };
+                    },
+                };
+                let height = match kv.get("v").and_then(|v| v.parse::<usize>().ok()) {
+                    Some(height) => height,
+                    None => {
+                        let response = KittyQueryResponse::Error {
+                            image_id,
+                            placement_id,
+                            image_number,
+                            message: "EINVAL:Missing or invalid v for RGBA payload".to_string(),
+                        };
+                        return if quiet == 2 { None } else { Some(response) };
+                    },
+                };
+                payload.len() == width * height * 4
+            },
+            "100" => parse_png_dimensions(&payload).is_some(),
+            _ => false,
+        };
+        if valid {
+            KittyQueryResponse::Ok {
+                image_id,
+                placement_id,
+                image_number,
+            }
+        } else {
+            KittyQueryResponse::Error {
+                image_id,
+                placement_id,
+                image_number,
+                message: "EINVAL:Invalid image payload for requested format".to_string(),
+            }
+        }
+    };
+
+    match (&reply, quiet) {
+        (KittyQueryResponse::Ok { .. }, 1) => None,
+        (KittyQueryResponse::Error { .. }, 2) => None,
+        _ => Some(reply),
+    }
 }
 
 impl ParsedKittyCommand {
@@ -1335,6 +1452,23 @@ mod tests {
                 height,
             },
         }
+    }
+
+    #[test]
+    fn kitty_query_response_honors_errors_and_quiet_modes() {
+        let success = kitty_query_response(b"Gq=0,a=q,t=d,f=24,s=1,v=1,i=41;EjRW").unwrap();
+        assert_eq!(success.to_apc_response(), "\u{1b}_Gi=41;OK\u{1b}\\");
+
+        let invalid_both_ids =
+            kitty_query_response(b"Gq=0,a=q,t=d,f=24,s=1,v=1,i=42,I=1;EjRW").unwrap();
+        let invalid_response = invalid_both_ids.to_apc_response();
+        assert!(invalid_response.contains("i=42,I=1;EINVAL:"));
+
+        let quiet_success = kitty_query_response(b"Gq=1,a=q,t=d,f=24,s=1,v=1,i=43;EjRW");
+        assert!(quiet_success.is_none());
+
+        let quiet_failure = kitty_query_response(b"Gq=2,a=q,t=d,f=24,s=1,v=1,i=44,I=1;EjRW");
+        assert!(quiet_failure.is_none());
     }
 
     #[test]
