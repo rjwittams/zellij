@@ -8,6 +8,7 @@ use crate::panes::Row;
 
 use crate::panes::Selection;
 use crate::{
+    panes::kitty_asset_store::KittyAssetStore,
     panes::sixel::SixelImageStore,
     panes::terminal_character::{AnsiCode, CharacterStyles},
     panes::{LinkHandler, PaneId, TerminalCharacter, DEFAULT_STYLES, EMPTY_TERMINAL_CHARACTER},
@@ -348,8 +349,27 @@ impl Output {
         styled_underlines: bool,
         osc8_hyperlinks: bool,
     ) -> Self {
+        Self::new_with_kitty_asset_store(
+            sixel_image_store,
+            Rc::new(RefCell::new(KittyAssetStore::default())),
+            character_cell_size,
+            styled_underlines,
+            osc8_hyperlinks,
+        )
+    }
+    pub fn new_with_kitty_asset_store(
+        sixel_image_store: Rc<RefCell<SixelImageStore>>,
+        kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+        character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
+        styled_underlines: bool,
+        osc8_hyperlinks: bool,
+    ) -> Self {
         Output {
-            image_output: ImageOutput::new(sixel_image_store, character_cell_size),
+            image_output: ImageOutput::new(
+                sixel_image_store,
+                kitty_asset_store,
+                character_cell_size,
+            ),
             styled_underlines,
             osc8_hyperlinks,
             ..Default::default()

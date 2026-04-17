@@ -10,6 +10,7 @@ use super::super::{
     CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, Output, OutputBuffer,
     PaneImageRenderOutput, SixelImageChunk,
 };
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::{SixelGrid, SixelImageStore};
 use crate::panes::terminal_character::AnsiCode;
@@ -33,6 +34,7 @@ fn create_test_output_with_state() -> (
     Rc<RefCell<Option<SizeInPixels>>>,
 ) {
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         height: 20,
         width: 10,
@@ -40,8 +42,9 @@ fn create_test_output_with_state() -> (
     let styled_underlines = true;
     let osc8_hyperlinks = true;
     (
-        Output::new(
+        Output::new_with_kitty_asset_store(
             sixel_image_store.clone(),
+            kitty_asset_store,
             character_cell_size.clone(),
             styled_underlines,
             osc8_hyperlinks,

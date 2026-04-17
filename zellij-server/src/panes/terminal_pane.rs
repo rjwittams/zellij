@@ -1,5 +1,6 @@
 use crate::output::{CharacterChunk, PaneImageRenderOutput, PaneRenderOutput};
 use crate::panes::sixel::SixelImageStore;
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::LinkHandler;
 use crate::panes::{
     grid::Grid,
@@ -1099,11 +1100,56 @@ impl TerminalPane {
         styled_underlines: bool,
         osc8_hyperlinks: bool,
         explicitly_disable_keyboard_protocol: bool,
+        notification_end: Option<NotificationEnd>,
+    ) -> TerminalPane {
+        Self::new_with_kitty_asset_store(
+            pid,
+            position_and_size,
+            style,
+            pane_index,
+            pane_name,
+            link_handler,
+            character_cell_size,
+            sixel_image_store,
+            Rc::new(RefCell::new(KittyAssetStore::default())),
+            terminal_emulator_colors,
+            terminal_emulator_color_codes,
+            initial_pane_title,
+            invoked_with,
+            debug,
+            arrow_fonts,
+            styled_underlines,
+            osc8_hyperlinks,
+            explicitly_disable_keyboard_protocol,
+            notification_end,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_kitty_asset_store(
+        pid: u32,
+        position_and_size: PaneGeom,
+        style: Style,
+        pane_index: usize,
+        pane_name: String,
+        link_handler: Rc<RefCell<LinkHandler>>,
+        character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
+        sixel_image_store: Rc<RefCell<SixelImageStore>>,
+        kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+        terminal_emulator_colors: Rc<RefCell<Palette>>,
+        terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
+        initial_pane_title: Option<String>,
+        invoked_with: Option<Run>,
+        debug: bool,
+        arrow_fonts: bool,
+        styled_underlines: bool,
+        osc8_hyperlinks: bool,
+        explicitly_disable_keyboard_protocol: bool,
         mut notification_end: Option<NotificationEnd>,
     ) -> TerminalPane {
         let initial_pane_title =
             initial_pane_title.unwrap_or_else(|| format!("Pane #{}", pane_index));
-        let grid = Grid::new(
+        let grid = Grid::new_with_kitty_asset_store(
             position_and_size.rows.as_usize(),
             position_and_size.cols.as_usize(),
             terminal_emulator_colors,
@@ -1111,6 +1157,7 @@ impl TerminalPane {
             link_handler,
             character_cell_size,
             sixel_image_store,
+            kitty_asset_store,
             style.clone(),
             debug,
             arrow_fonts,

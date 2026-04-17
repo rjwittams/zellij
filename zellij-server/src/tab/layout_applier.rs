@@ -5,6 +5,7 @@ use crate::tab::{get_next_terminal_position, HoldForCommand, Pane};
 
 use crate::{
     os_input_output::ServerOsApi,
+    panes::kitty_asset_store::KittyAssetStore,
     panes::sixel::SixelImageStore,
     panes::{FloatingPanes, TiledPanes},
     panes::{LinkHandler, PaneId, PluginPane, TerminalPane},
@@ -26,6 +27,7 @@ pub struct LayoutApplier<'a> {
     viewport: Rc<RefCell<Viewport>>, // includes all non-UI panes
     senders: ThreadSenders,
     sixel_image_store: Rc<RefCell<SixelImageStore>>,
+    kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     link_handler: Rc<RefCell<LinkHandler>>,
     terminal_emulator_colors: Rc<RefCell<Palette>>,
     terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
@@ -70,9 +72,61 @@ impl<'a> LayoutApplier<'a> {
         explicitly_disable_kitty_keyboard_protocol: bool,
         blocking_terminal: Option<(u32, NotificationEnd)>,
     ) -> Self {
+        Self::new_with_kitty_asset_store(
+            viewport,
+            senders,
+            sixel_image_store,
+            &Rc::new(RefCell::new(KittyAssetStore::default())),
+            link_handler,
+            terminal_emulator_colors,
+            terminal_emulator_color_codes,
+            character_cell_size,
+            connected_clients,
+            style,
+            display_area,
+            tiled_panes,
+            floating_panes,
+            draw_pane_frames,
+            focus_pane_id,
+            os_api,
+            debug,
+            arrow_fonts,
+            styled_underlines,
+            osc8_hyperlinks,
+            explicitly_disable_kitty_keyboard_protocol,
+            blocking_terminal,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_kitty_asset_store(
+        viewport: &Rc<RefCell<Viewport>>,
+        senders: &ThreadSenders,
+        sixel_image_store: &Rc<RefCell<SixelImageStore>>,
+        kitty_asset_store: &Rc<RefCell<KittyAssetStore>>,
+        link_handler: &Rc<RefCell<LinkHandler>>,
+        terminal_emulator_colors: &Rc<RefCell<Palette>>,
+        terminal_emulator_color_codes: &Rc<RefCell<HashMap<usize, String>>>,
+        character_cell_size: &Rc<RefCell<Option<SizeInPixels>>>,
+        connected_clients: &Rc<RefCell<HashMap<ClientId, bool>>>,
+        style: &Style,
+        display_area: &Rc<RefCell<Size>>, // includes all panes (including eg. the status bar and tab bar in the default layout)
+        tiled_panes: &'a mut TiledPanes,
+        floating_panes: &'a mut FloatingPanes,
+        draw_pane_frames: bool,
+        focus_pane_id: &'a mut Option<PaneId>,
+        os_api: &Box<dyn ServerOsApi>,
+        debug: bool,
+        arrow_fonts: bool,
+        styled_underlines: bool,
+        osc8_hyperlinks: bool,
+        explicitly_disable_kitty_keyboard_protocol: bool,
+        blocking_terminal: Option<(u32, NotificationEnd)>,
+    ) -> Self {
         let viewport = viewport.clone();
         let senders = senders.clone();
         let sixel_image_store = sixel_image_store.clone();
+        let kitty_asset_store = kitty_asset_store.clone();
         let link_handler = link_handler.clone();
         let terminal_emulator_colors = terminal_emulator_colors.clone();
         let terminal_emulator_color_codes = terminal_emulator_color_codes.clone();
@@ -85,6 +139,7 @@ impl<'a> LayoutApplier<'a> {
             viewport,
             senders,
             sixel_image_store,
+            kitty_asset_store,
             link_handler,
             terminal_emulator_colors,
             terminal_emulator_color_codes,
@@ -517,7 +572,7 @@ impl<'a> LayoutApplier<'a> {
             .get_mut(&run)
             .and_then(|ids| ids.pop())
             .with_context(err_context)?;
-        let mut new_plugin = PluginPane::new(
+        let mut new_plugin = PluginPane::new_with_kitty_asset_store(
             pid,
             *position_and_size,
             self.senders
@@ -528,6 +583,7 @@ impl<'a> LayoutApplier<'a> {
             pane_title,
             layout.name.clone().unwrap_or_default(),
             self.sixel_image_store.clone(),
+            self.kitty_asset_store.clone(),
             self.terminal_emulator_colors.clone(),
             self.terminal_emulator_color_codes.clone(),
             self.link_handler.clone(),
@@ -566,7 +622,7 @@ impl<'a> LayoutApplier<'a> {
             .get_mut(&run)
             .and_then(|ids| ids.pop())
             .with_context(err_context)?;
-        let mut new_pane = PluginPane::new(
+        let mut new_pane = PluginPane::new_with_kitty_asset_store(
             pid,
             position_and_size,
             self.senders
@@ -577,6 +633,7 @@ impl<'a> LayoutApplier<'a> {
             pane_title,
             floating_pane_layout.name.clone().unwrap_or_default(),
             self.sixel_image_store.clone(),
+            self.kitty_asset_store.clone(),
             self.terminal_emulator_colors.clone(),
             self.terminal_emulator_color_codes.clone(),
             self.link_handler.clone(),
@@ -624,7 +681,7 @@ impl<'a> LayoutApplier<'a> {
             Some(Run::Command(run_command)) => Some(run_command.to_string()),
             _ => None,
         };
-        let mut new_pane = TerminalPane::new(
+        let mut new_pane = TerminalPane::new_with_kitty_asset_store(
             *pid,
             position_and_size,
             self.style,
@@ -633,6 +690,7 @@ impl<'a> LayoutApplier<'a> {
             self.link_handler.clone(),
             self.character_cell_size.clone(),
             self.sixel_image_store.clone(),
+            self.kitty_asset_store.clone(),
             self.terminal_emulator_colors.clone(),
             self.terminal_emulator_color_codes.clone(),
             initial_title,
@@ -700,7 +758,7 @@ impl<'a> LayoutApplier<'a> {
             None
         };
 
-        let mut new_pane = TerminalPane::new(
+        let mut new_pane = TerminalPane::new_with_kitty_asset_store(
             pid,
             *position_and_size,
             self.style,
@@ -709,6 +767,7 @@ impl<'a> LayoutApplier<'a> {
             self.link_handler.clone(),
             self.character_cell_size.clone(),
             self.sixel_image_store.clone(),
+            self.kitty_asset_store.clone(),
             self.terminal_emulator_colors.clone(),
             self.terminal_emulator_color_codes.clone(),
             initial_title,

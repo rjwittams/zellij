@@ -76,6 +76,7 @@ use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
 
 use crate::{
     output::{KittyImageChunk, KittyPlaceholderRender, Output},
+    panes::kitty_asset_store::KittyAssetStore,
     panes::sixel::SixelImageStore,
     panes::PaneId,
     plugins::{DumpSessionLayoutResponse, PluginId, PluginInstruction, PluginRenderAsset},
@@ -1371,6 +1372,7 @@ pub(crate) struct Screen {
     character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
     stacked_resize: Rc<RefCell<bool>>,
     sixel_image_store: Rc<RefCell<SixelImageStore>>,
+    kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     terminal_emulator_colors: Rc<RefCell<Palette>>,
     terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
     connected_clients: Rc<RefCell<HashMap<ClientId, bool>>>, // bool -> is_web_client
@@ -1565,6 +1567,7 @@ impl Screen {
             character_cell_size: Rc::new(RefCell::new(None)),
             stacked_resize: Rc::new(RefCell::new(stacked_resize)),
             sixel_image_store: Rc::new(RefCell::new(SixelImageStore::default())),
+            kitty_asset_store: Rc::new(RefCell::new(KittyAssetStore::default())),
             style: client_attributes.style,
             connected_clients: Rc::new(RefCell::new(HashMap::new())),
             active_tab_ids: BTreeMap::new(),
@@ -2512,8 +2515,9 @@ impl Screen {
 
         // === PHASE 1: Render for regular clients ===
         if has_regular_clients {
-            let mut output = Output::new(
+            let mut output = Output::new_with_kitty_asset_store(
                 self.sixel_image_store.clone(),
+                self.kitty_asset_store.clone(),
                 self.character_cell_size.clone(),
                 self.styled_underlines,
                 self.osc8_hyperlinks,
@@ -2633,8 +2637,9 @@ impl Screen {
         if has_watchers {
             if let Some(followed_client_id) = self.followed_client_id {
                 // Create fresh output for watchers
-                let mut watcher_output = Output::new(
+                let mut watcher_output = Output::new_with_kitty_asset_store(
                     self.sixel_image_store.clone(),
+                    self.kitty_asset_store.clone(),
                     self.character_cell_size.clone(),
                     self.styled_underlines,
                     self.osc8_hyperlinks,
@@ -2968,7 +2973,7 @@ impl Screen {
         let tab_name = tab_name.unwrap_or_else(|| String::new());
 
         let position = self.tabs.len();
-        let mut tab = Tab::new(
+        let mut tab = Tab::new_with_kitty_asset_store(
             tab_id,
             position,
             tab_name,
@@ -2976,6 +2981,7 @@ impl Screen {
             self.character_cell_size.clone(),
             self.stacked_resize.clone(),
             self.sixel_image_store.clone(),
+            self.kitty_asset_store.clone(),
             self.bus
                 .os_input
                 .as_ref()

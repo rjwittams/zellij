@@ -67,6 +67,9 @@ impl KittyDamageRedraw {
     }
 }
 use crate::panes::kitty::{KittyImageInsertion, KittyImageState};
+use crate::panes::kitty_asset_store::KittyAssetStore;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -364,6 +367,15 @@ pub struct PaneImageScene {
 }
 
 impl PaneImageScene {
+    pub fn new(kitty_asset_store: Rc<RefCell<KittyAssetStore>>) -> Self {
+        Self {
+            kitty: KittyImageState::new(kitty_asset_store),
+            placements: HashMap::new(),
+            kitty_placeholder_cells: vec![],
+            kitty_logical_placement_ids: HashMap::new(),
+        }
+    }
+
     pub fn rows_for_pixel_height(
         pixel_height: usize,
         character_cell_size: Option<SizeInPixels>,

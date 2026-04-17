@@ -11,6 +11,7 @@ use super::{
     PaneImageRenderOutput, SixelImageChunk,
 };
 use crate::panes::kitty::KittyImageState;
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::pane_image_scene::KittyDamageRedraw;
 use crate::panes::sixel::SixelImageStore;
 use crate::ClientId;
@@ -47,6 +48,7 @@ struct ClientImageState {
 pub(crate) struct ImageOutput {
     client_image_states: HashMap<ClientId, ClientImageState>,
     pub(crate) sixel_image_store: Rc<RefCell<SixelImageStore>>,
+    pub(crate) kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
 }
 
@@ -133,10 +135,12 @@ fn kitty_clear_before_text_vte() -> String {
 impl ImageOutput {
     pub fn new(
         sixel_image_store: Rc<RefCell<SixelImageStore>>,
+        kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
         character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
     ) -> Self {
         Self {
             sixel_image_store,
+            kitty_asset_store,
             character_cell_size,
             ..Default::default()
         }

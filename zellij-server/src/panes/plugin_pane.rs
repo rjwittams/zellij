@@ -4,6 +4,7 @@ use std::time::Instant;
 use crate::output::{CharacterChunk, PaneImageRenderOutput, PaneRenderOutput};
 use crate::panes::{
     grid::Grid,
+    kitty_asset_store::KittyAssetStore,
     sixel::SixelImageStore,
     terminal_pane::{BRACKETED_PASTE_BEGIN, BRACKETED_PASTE_END},
     LinkHandler, PaneId,
@@ -52,7 +53,7 @@ macro_rules! get_or_create_grid {
         let explicitly_disable_kitty_keyboard_protocol = false; // N/A for plugins
 
         $self.grids.entry($client_id).or_insert_with(|| {
-            let mut grid = Grid::new(
+            let mut grid = Grid::new_with_kitty_asset_store(
                 rows,
                 cols,
                 $self.terminal_emulator_colors.clone(),
@@ -60,6 +61,7 @@ macro_rules! get_or_create_grid {
                 $self.link_handler.clone(),
                 $self.character_cell_size.clone(),
                 $self.sixel_image_store.clone(),
+                $self.kitty_asset_store.clone(),
                 $self.style.clone(),
                 $self.debug,
                 $self.arrow_fonts,
@@ -86,6 +88,7 @@ pub(crate) struct PluginPane {
     pub pane_name: String,
     pub style: Style,
     sixel_image_store: Rc<RefCell<SixelImageStore>>,
+    kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     terminal_emulator_colors: Rc<RefCell<Palette>>,
     terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
     link_handler: Rc<RefCell<LinkHandler>>,
@@ -128,6 +131,47 @@ impl PluginPane {
         arrow_fonts: bool,
         styled_underlines: bool,
     ) -> Self {
+        Self::new_with_kitty_asset_store(
+            pid,
+            position_and_size,
+            send_plugin_instructions,
+            title,
+            pane_name,
+            sixel_image_store,
+            Rc::new(RefCell::new(KittyAssetStore::default())),
+            terminal_emulator_colors,
+            terminal_emulator_color_codes,
+            link_handler,
+            character_cell_size,
+            currently_connected_clients,
+            style,
+            invoked_with,
+            debug,
+            arrow_fonts,
+            styled_underlines,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_kitty_asset_store(
+        pid: u32,
+        position_and_size: PaneGeom,
+        send_plugin_instructions: SenderWithContext<PluginInstruction>,
+        title: String,
+        pane_name: String,
+        sixel_image_store: Rc<RefCell<SixelImageStore>>,
+        kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+        terminal_emulator_colors: Rc<RefCell<Palette>>,
+        terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
+        link_handler: Rc<RefCell<LinkHandler>>,
+        character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
+        currently_connected_clients: Vec<ClientId>,
+        style: Style,
+        invoked_with: Option<Run>,
+        debug: bool,
+        arrow_fonts: bool,
+        styled_underlines: bool,
+    ) -> Self {
         let loading_indication = LoadingIndication::new(title.clone()).with_colors(style.colors);
         let initial_loading_message = loading_indication.to_string();
         let mut plugin = PluginPane {
@@ -150,6 +194,7 @@ impl PluginPane {
             link_handler,
             character_cell_size,
             sixel_image_store,
+            kitty_asset_store,
             vte_parsers: HashMap::new(),
             grids: HashMap::new(),
             cursor_visibility: HashMap::new(),

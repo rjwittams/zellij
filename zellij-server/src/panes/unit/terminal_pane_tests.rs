@@ -1,4 +1,5 @@
 use super::super::TerminalPane;
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::sixel::SixelImageStore;
 use crate::panes::LinkHandler;
 use crate::tab::Pane;
@@ -34,6 +35,7 @@ pub fn scrolling_inside_a_pane() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
@@ -41,7 +43,7 @@ pub fn scrolling_inside_a_pane() {
     let styled_underlines = true;
     let osc8_hyperlinks = true;
     let explicitly_disable_kitty_keyboard_protocol = false;
-    let mut terminal_pane = TerminalPane::new(
+    let mut terminal_pane = TerminalPane::new_with_kitty_asset_store(
         pid,
         fake_win_size,
         style,
@@ -50,6 +52,7 @@ pub fn scrolling_inside_a_pane() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,

@@ -1,4 +1,5 @@
 use super::kitty_placeholder::KITTY_UNICODE_PLACEHOLDER_CHAR;
+use super::kitty_asset_store::KittyAssetStore;
 use super::sixel::{PixelRect, SixelGrid, SixelImageStore};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -938,6 +939,41 @@ impl Grid {
         osc8_hyperlinks: bool,
         explicitly_disable_kitty_keyboard_protocol: bool,
     ) -> Self {
+        Self::new_with_kitty_asset_store(
+            rows,
+            columns,
+            terminal_emulator_colors,
+            terminal_emulator_color_codes,
+            link_handler,
+            character_cell_size,
+            sixel_image_store,
+            Rc::new(RefCell::new(KittyAssetStore::default())),
+            style,
+            debug,
+            arrow_fonts,
+            styled_underlines,
+            osc8_hyperlinks,
+            explicitly_disable_kitty_keyboard_protocol,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_kitty_asset_store(
+        rows: usize,
+        columns: usize,
+        terminal_emulator_colors: Rc<RefCell<Palette>>,
+        terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
+        link_handler: Rc<RefCell<LinkHandler>>,
+        character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
+        sixel_image_store: Rc<RefCell<SixelImageStore>>,
+        kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+        style: Style, // TODO: consolidate this with terminal_emulator_colors
+        debug: bool,
+        arrow_fonts: bool,
+        styled_underlines: bool,
+        osc8_hyperlinks: bool,
+        explicitly_disable_kitty_keyboard_protocol: bool,
+    ) -> Self {
         let sixel_grid = SixelGrid::new(character_cell_size.clone(), sixel_image_store);
         // make sure this is initialized as it is used internally
         // if it was already initialized (which should happen normally unless this is a test or
@@ -993,7 +1029,7 @@ impl Grid {
             pending_forwarded_queries: Vec::new(),
             ui_component_bytes: None,
             apc_bytes: None,
-            image_scene: PaneImageScene::default(),
+            image_scene: PaneImageScene::new(kitty_asset_store),
             style,
             debug,
             arrow_fonts,
