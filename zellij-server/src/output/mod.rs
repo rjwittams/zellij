@@ -1103,6 +1103,7 @@ pub struct ImageRenderBundle {
 pub struct PaneRenderOutput {
     pub character_chunks: Vec<CharacterChunk>,
     pub raw_vte_output: Option<String>,
+    pub visible_image_render_bundle: ImageRenderBundle,
     // Per-render image deltas: sixel uses this as its current redraw path, while kitty uses it
     // only for damage-triggered restoration on top of its persistent visible scene.
     pub damage_redraw_image_render_bundle: ImageRenderBundle,

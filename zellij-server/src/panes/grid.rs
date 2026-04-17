@@ -1806,8 +1806,12 @@ impl Grid {
                 }
             }
         }
+        let visible_image_render_bundle = ImageRenderBundle {
+            sixel_chunks: vec![],
+            kitty_render_bundle: self.visible_kitty_render_bundle(content_x, content_y),
+        };
         let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
-        let image_render_bundle = ImageRenderBundle {
+        let damage_redraw_image_render_bundle = ImageRenderBundle {
             sixel_chunks: sixel_image_chunks,
             kitty_render_bundle: self
                 .image_scene
@@ -1826,7 +1830,8 @@ impl Grid {
         Ok(Some(PaneRenderOutput {
             character_chunks,
             raw_vte_output: Some(raw_vte_output),
-            damage_redraw_image_render_bundle: image_render_bundle,
+            visible_image_render_bundle,
+            damage_redraw_image_render_bundle,
         }))
     }
     /// Returns the cursor position and whether it is visible.

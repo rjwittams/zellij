@@ -2,7 +2,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::time::Instant;
 
 use crate::output::{CharacterChunk, PaneRenderOutput};
-use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::{
     grid::Grid,
     sixel::SixelImageStore,
@@ -390,38 +389,51 @@ impl Pane for PluginPane {
                                                                       // the permission message
     }
     fn render(&mut self, client_id: Option<ClientId>) -> Result<Option<PaneRenderOutput>> {
-        if client_id.is_none() {
+        let Some(client_id) = client_id else {
+            return Ok(None);
+        };
+        let content_x = self.get_content_x();
+        let content_y = self.get_content_y();
+        let rows = self.get_content_rows();
+        let columns = self.get_content_columns();
+        if rows < 1 || columns < 1 {
             return Ok(None);
         }
-        if let Some(client_id) = client_id {
-            if self.should_render.get(&client_id).copied().unwrap_or(false) {
-                let content_x = self.get_content_x();
-                let content_y = self.get_content_y();
-                let rows = self.get_content_rows();
-                let columns = self.get_content_columns();
-                if rows < 1 || columns < 1 {
-                    return Ok(None);
-                }
-                if let Some(grid) = self.grids.get_mut(&client_id) {
-                    match grid.render(content_x, content_y, &self.style) {
-                        Ok(rendered_assets) => {
-                            self.should_render.insert(client_id, false);
-                            return Ok(rendered_assets);
-                        },
-                        e => return e,
-                    }
+        if self.should_render.get(&client_id).copied().unwrap_or(false) {
+            if let Some(grid) = self.grids.get_mut(&client_id) {
+                match grid.render(content_x, content_y, &self.style) {
+                    Ok(rendered_assets) => {
+                        self.should_render.insert(client_id, false);
+                        return Ok(rendered_assets);
+                    },
+                    e => return e,
                 }
             }
         }
-        Ok(None)
-    }
-    fn visible_kitty_render_bundle(&self, client_id: Option<ClientId>) -> KittyRenderBundle {
-        client_id
-            .and_then(|client_id| self.grids.get(&client_id))
-            .map(|grid| {
-                grid.visible_kitty_render_bundle(self.get_content_x(), self.get_content_y())
+        let visible_image_render_bundle = self
+            .grids
+            .get(&client_id)
+            .map(|grid| crate::output::ImageRenderBundle {
+                kitty_render_bundle: grid.visible_kitty_render_bundle(content_x, content_y),
+                ..Default::default()
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        if visible_image_render_bundle
+            .kitty_render_bundle
+            .explicit_chunks
+            .is_empty()
+            && visible_image_render_bundle
+                .kitty_render_bundle
+                .placeholder_renders
+                .is_empty()
+        {
+            Ok(None)
+        } else {
+            Ok(Some(PaneRenderOutput {
+                visible_image_render_bundle,
+                ..Default::default()
+            }))
+        }
     }
     fn render_frame(
         &mut self,

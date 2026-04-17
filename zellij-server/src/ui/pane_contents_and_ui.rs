@@ -77,9 +77,10 @@ impl<'a> PaneContentsAndUi<'a> {
         // here we drop the fake cursors so that their lines will be updated
         // and we can clear them from the UI below
         drop(self.pane.drain_fake_cursors());
-        let clients: Vec<ClientId> = clients.collect();
+
 
         if let Some(render_output) = self.pane.render(None).context(err_context)? {
+            let clients: Vec<ClientId> = clients.collect();
             self.output
                 .add_character_chunks_to_multiple_clients(
                     render_output.character_chunks,
@@ -93,6 +94,11 @@ impl<'a> PaneContentsAndUi<'a> {
                     clients.iter().copied(),
                     self.z_index,
                 );
+            self.output.add_image_render_bundle_to_multiple_clients(
+                render_output.visible_image_render_bundle,
+                clients.iter().copied(),
+                self.z_index,
+            );
             if let Some(raw_vte_output) = render_output.raw_vte_output {
                 if !raw_vte_output.is_empty() {
                     self.output.add_post_vte_instruction_to_multiple_clients(
@@ -107,11 +113,6 @@ impl<'a> PaneContentsAndUi<'a> {
                 }
             }
         }
-        self.output.add_image_render_bundle_to_multiple_clients(
-            self.pane.visible_image_render_bundle(None),
-            clients.iter().copied(),
-            self.z_index,
-        );
         Ok(())
     }
     pub fn render_pane_contents_for_client(&mut self, client_id: ClientId) -> Result<()> {
@@ -134,6 +135,11 @@ impl<'a> PaneContentsAndUi<'a> {
                 render_output.damage_redraw_image_render_bundle,
                 self.z_index,
             );
+            self.output.add_image_render_bundle_to_client(
+                client_id,
+                render_output.visible_image_render_bundle,
+                self.z_index,
+            );
             if let Some(raw_vte_output) = render_output.raw_vte_output {
                 self.output.add_post_vte_instruction_to_client(
                     client_id,
@@ -146,11 +152,6 @@ impl<'a> PaneContentsAndUi<'a> {
                 );
             }
         }
-        self.output.add_image_render_bundle_to_client(
-            client_id,
-            self.pane.visible_image_render_bundle(Some(client_id)),
-            self.z_index,
-        );
         Ok(())
     }
     pub fn render_fake_cursor_if_needed(&mut self, client_id: ClientId) -> Result<()> {

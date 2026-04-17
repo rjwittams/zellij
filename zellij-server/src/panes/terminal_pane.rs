@@ -1,5 +1,4 @@
 use crate::output::{CharacterChunk, PaneRenderOutput};
-use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::SixelImageStore;
 use crate::panes::LinkHandler;
 use crate::panes::{
@@ -353,14 +352,14 @@ impl Pane for TerminalPane {
         self.grid.get_pane_default_color_strings()
     }
     fn render(&mut self, _client_id: Option<ClientId>) -> Result<Option<PaneRenderOutput>> {
+        let content_x = self.get_content_x();
+        let content_y = self.get_content_y();
+        let rows = self.get_content_rows();
+        let columns = self.get_content_columns();
+        if rows < 1 || columns < 1 {
+            return Ok(None);
+        }
         if self.should_render() {
-            let content_x = self.get_content_x();
-            let content_y = self.get_content_y();
-            let rows = self.get_content_rows();
-            let columns = self.get_content_columns();
-            if rows < 1 || columns < 1 {
-                return Ok(None);
-            }
             match self.grid.render(content_x, content_y, &self.style) {
                 Ok(rendered_assets) => {
                     self.set_should_render(false);
@@ -368,13 +367,27 @@ impl Pane for TerminalPane {
                 },
                 e => return e,
             }
-        } else {
-            Ok(None)
         }
-    }
-    fn visible_kitty_render_bundle(&self, _client_id: Option<ClientId>) -> KittyRenderBundle {
-        self.grid
-            .visible_kitty_render_bundle(self.get_content_x(), self.get_content_y())
+        let visible_image_render_bundle = crate::output::ImageRenderBundle {
+            kitty_render_bundle: self.grid.visible_kitty_render_bundle(content_x, content_y),
+            ..Default::default()
+        };
+        if visible_image_render_bundle
+            .kitty_render_bundle
+            .explicit_chunks
+            .is_empty()
+            && visible_image_render_bundle
+                .kitty_render_bundle
+                .placeholder_renders
+                .is_empty()
+        {
+            Ok(None)
+        } else {
+            Ok(Some(PaneRenderOutput {
+                visible_image_render_bundle,
+                ..Default::default()
+            }))
+        }
     }
     fn render_frame(
         &mut self,
