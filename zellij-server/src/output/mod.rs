@@ -6,6 +6,7 @@ use crate::panes::Row;
 
 use crate::panes::Selection;
 use crate::{
+    panes::kitty::KittyImageState,
     panes::sixel::SixelImageStore,
     panes::terminal_character::{AnsiCode, CharacterStyles},
     panes::{LinkHandler, PaneId, TerminalCharacter, DEFAULT_STYLES, EMPTY_TERMINAL_CHARACTER},
@@ -18,12 +19,28 @@ use std::{
     collections::{HashMap, HashSet},
     str,
 };
+use std::ops::Deref;
 use zellij_utils::data::{HighlightLayer, PaneContents, PaneRenderReport};
 use zellij_utils::errors::prelude::*;
 use zellij_utils::pane_size::SizeInPixels;
 
-use self::image_output::ImageOutput;
+use self::image_output::{ImageOutput, PreparedImageOutput};
 use zellij_utils::pane_size::{PaneGeom, Size};
+
+fn vte_goto_instruction(x_coords: usize, y_coords: usize, vte_output: &mut String) -> Result<()> {
+    write!(
+        vte_output,
+        "\u{1b}[{};{}H\u{1b}[m",
+        y_coords + 1, // + 1 because VTE is 1 indexed
+        x_coords + 1,
+    )
+    .with_context(|| {
+        format!(
+            "failed to execute VTE instruction to go to ({}, {})",
+            x_coords, y_coords
+        )
+    })
+}
 
 fn vte_hide_cursor_instruction(vte_output: &mut String) -> Result<()> {
     write!(vte_output, "\u{1b}[?25l").context("failed to execute VTE instruction to hide cursor")
@@ -183,11 +200,82 @@ fn serialize_chunks_with_newlines(
     }
     Ok(vte_output)
 }
+fn serialize_chunks(
+    character_chunks: Vec<CharacterChunk>,
+    image_output: &mut ImageOutput,
+    prepared_image_output: PreparedImageOutput,
+    link_handler: Option<&mut Rc<RefCell<LinkHandler>>>,
+    styled_underlines: bool,
+    osc8_hyperlinks: bool,
+    max_size: Option<Size>,
+) -> Result<String> {
+    let err_context = || "failed to serialize input chunks".to_string();
+
+    let mut vte_output = String::new();
+
+    if let Some(image_prelude) = prepared_image_output.vte_prelude(){
+        vte_output.push_str(&image_prelude);
+    }
+
+    let link_handler = link_handler.map(|l_h| l_h.borrow());
+    for character_chunk in character_chunks {
+        // Skip chunks that are completely outside the size bounds
+        if let Some(size) = max_size {
+            if character_chunk.y >= size.rows {
+                continue; // Chunk is below visible area
+            }
+            if character_chunk.x >= size.cols {
+                continue; // Chunk starts outside visible area
+            }
+        }
+
+        let chunk_changed_colors = character_chunk.changed_colors();
+        let pane_default_fg = character_chunk.pane_default_fg;
+        let pane_default_bg = character_chunk.pane_default_bg;
+        let mut character_styles = DEFAULT_STYLES.enable_styled_underlines(styled_underlines);
+        vte_goto_instruction(character_chunk.x, character_chunk.y, &mut vte_output)
+            .with_context(err_context)?;
+        let mut chunk_width = character_chunk.x;
+        for t_character in character_chunk.terminal_characters.iter() {
+            // Stop rendering if the next character would exceed max_size.cols
+            if let Some(size) = max_size {
+                if chunk_width + t_character.width() > size.cols {
+                    break; // Stop rendering this chunk
+                }
+            }
+
+            let current_character_styles = adjust_styles_for_custom_bg_fg(
+                adjust_styles_for_possible_selection(
+                    character_chunk.selection_and_colors(),
+                    *t_character.styles,
+                    character_chunk.y,
+                    chunk_width,
+                ),
+                pane_default_fg,
+                pane_default_bg,
+            );
+            write_changed_styles(
+                &mut character_styles,
+                current_character_styles,
+                chunk_changed_colors,
+                link_handler.as_ref(),
+                osc8_hyperlinks,
+                &mut vte_output,
+            )
+            .with_context(err_context)?;
+            chunk_width += t_character.width();
+            vte_output.push(t_character.character);
+        }
+    }
+    prepared_image_output.serialize_image_chunks(image_output, max_size, &mut vte_output)?;
+    Ok(vte_output)
+}
+
+
 type AbsoluteMiddleStart = usize;
 type AbsoluteMiddleEnd = usize;
 type PadLeftEndBy = usize;
 type PadRightStartBy = usize;
-
 fn adjust_middle_segment_for_wide_chars(
     middle_start: usize,
     middle_end: usize,
@@ -235,7 +323,7 @@ fn adjust_middle_segment_for_wide_chars(
     ))
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Default)]
 pub struct Output {
     pre_vte_instructions: HashMap<ClientId, Vec<String>>,
     post_vte_instructions: HashMap<ClientId, Vec<String>>,
@@ -248,24 +336,6 @@ pub struct Output {
     pane_render_report: PaneRenderReport,
     pub collect_ansi_pane_contents: bool,
     cursor_coordinates: Option<(usize, usize)>,
-}
-
-impl Default for Output {
-    fn default() -> Self {
-        Self {
-            pre_vte_instructions: Default::default(),
-            post_vte_instructions: Default::default(),
-            client_character_chunks: Default::default(),
-            link_handler: Default::default(),
-            image_output: ImageOutput::default(),
-            floating_panes_stack: Default::default(),
-            styled_underlines: Default::default(),
-            osc8_hyperlinks: Default::default(),
-            pane_render_report: Default::default(),
-            collect_ansi_pane_contents: Default::default(),
-            cursor_coordinates: Default::default(),
-        }
-    }
 }
 
 impl Output {
@@ -464,19 +534,18 @@ impl Output {
             }
 
             // append the actual text+image output
+            let prepared_image_output = self.image_output.prepare_render_body_for_client(client_id, pre_vte_clears_display);
             client_serialized_render_instructions.push_str(
-                &self
-                    .image_output
-                    .serialize_render_body_for_client(
-                        client_id,
-                        pre_vte_clears_display,
-                        client_character_chunks,
-                        self.link_handler.as_mut(),
-                        self.styled_underlines,
-                        self.osc8_hyperlinks,
-                        None,
-                    )
-                    .with_context(err_context)?,
+                &serialize_chunks(
+                    client_character_chunks,
+                    &mut self.image_output,
+                    prepared_image_output,
+                    self.link_handler.as_mut(),
+                    self.styled_underlines,
+                    self.osc8_hyperlinks,
+                    None,
+                )
+                .with_context(err_context)?,
             );
 
             // append post-vte instructions for this client
@@ -520,6 +589,7 @@ impl Output {
             // Add padding instructions if max_size is larger than content_size
             if let (Some(max_size), Some(content_size)) = (max_size, content_size) {
                 if max_size.rows > content_size.rows || max_size.cols > content_size.cols {
+                    // Clear each line from the end of rendered content to the end of the watcher's line
                     for y in 0..content_size.rows {
                         let padding_instruction = format!(
                             "\u{1b}[{};{}H\u{1b}[m\u{1b}[K",
@@ -529,25 +599,28 @@ impl Output {
                         client_serialized_render_instructions.push_str(&padding_instruction);
                     }
 
+                    // Clear all content below the last rendered line
                     let clear_below_instruction =
                         format!("\u{1b}[{};{}H\u{1b}[m\u{1b}[J", content_size.rows + 1, 1);
                     client_serialized_render_instructions.push_str(&clear_below_instruction);
                 }
             }
 
+            let prepared_image_output = self
+                .image_output
+                .prepare_render_body_for_client(client_id, pre_vte_clears_display);
+            // append the actual vte with size constraints
             client_serialized_render_instructions.push_str(
-                &self
-                    .image_output
-                    .serialize_render_body_for_client(
-                        client_id,
-                        pre_vte_clears_display,
-                        client_character_chunks,
-                        self.link_handler.as_mut(),
-                        self.styled_underlines,
-                        self.osc8_hyperlinks,
-                        max_size,
-                    )
-                    .with_context(err_context)?,
+                &serialize_chunks(
+                    client_character_chunks,
+                    & mut self.image_output,
+                    prepared_image_output,
+                    self.link_handler.as_mut(),
+                    self.styled_underlines,
+                    self.osc8_hyperlinks,
+                    max_size,
+                )
+                .with_context(err_context)?,
             );
 
             if let Some(post_vte_instructions_for_client) =
