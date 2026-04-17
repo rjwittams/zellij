@@ -202,10 +202,6 @@ impl KittyImageState {
         }
     }
 
-    pub fn image_chunk_data(&self, image_id: u32) -> Option<KittyImageData> {
-        self.kitty_asset_store.borrow().image_data(image_id)
-    }
-
     pub fn image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
         self.kitty_asset_store.borrow().image_dimensions(image_id)
     }
@@ -396,9 +392,6 @@ impl KittyImageState {
             else {
                 continue;
             };
-            let Some(image_data) = kitty_asset_store.image_data(placement.image_id) else {
-                continue;
-            };
             let mut source_x = placement.source_x.unwrap_or(0);
             let mut source_y = placement.source_y.unwrap_or(0);
             let mut source_width = placement
@@ -466,7 +459,6 @@ impl KittyImageState {
                 z_index: placement.z_index.unwrap_or(0),
                 x_offset: placement.x_offset.unwrap_or(0),
                 y_offset: placement.y_offset.unwrap_or(0),
-                image_data,
             });
         }
         chunks
@@ -497,7 +489,10 @@ impl KittyImageState {
         });
     }
 
-    pub fn serialize_chunks(chunks: &[KittyImageChunk]) -> String {
+    pub fn serialize_chunks_with_asset_store(
+        chunks: &[KittyImageChunk],
+        kitty_asset_store: &KittyAssetStore,
+    ) -> String {
         if chunks.is_empty() {
             return String::new();
         }
@@ -507,7 +502,10 @@ impl KittyImageState {
         let mut transmitted_image_ids = std::collections::HashSet::new();
         for chunk in chunks {
             if transmitted_image_ids.insert(chunk.image_id) {
-                for transmit_command in serialize_transmit(chunk.image_id, &chunk.image_data) {
+                let Some(image_data) = kitty_asset_store.image_data(chunk.image_id) else {
+                    continue;
+                };
+                for transmit_command in serialize_transmit(chunk.image_id, &image_data) {
                     raw_vte_output.push_str("\u{1b}_G");
                     raw_vte_output.push_str(&transmit_command);
                     raw_vte_output.push_str("\u{1b}\\");
@@ -523,7 +521,10 @@ impl KittyImageState {
         raw_vte_output
     }
 
-    pub fn serialize_placeholder_renders(renders: &[KittyPlaceholderRender]) -> String {
+    pub fn serialize_placeholder_renders_with_asset_store(
+        renders: &[KittyPlaceholderRender],
+        kitty_asset_store: &KittyAssetStore,
+    ) -> String {
         if renders.is_empty() {
             return String::new();
         }
@@ -533,7 +534,10 @@ impl KittyImageState {
         let mut transmitted_image_ids = std::collections::HashSet::new();
         for render in renders {
             if transmitted_image_ids.insert(render.image_id) {
-                for transmit_command in serialize_transmit(render.image_id, &render.image_data) {
+                let Some(image_data) = kitty_asset_store.image_data(render.image_id) else {
+                    continue;
+                };
+                for transmit_command in serialize_transmit(render.image_id, &image_data) {
                     raw_vte_output.push_str("\u{1b}_G");
                     raw_vte_output.push_str(&transmit_command);
                     raw_vte_output.push_str("\u{1b}\\");
@@ -1363,11 +1367,6 @@ mod tests {
                 z_index: geometry.z_index,
                 x_offset: geometry.x_offset,
                 y_offset: geometry.y_offset,
-                image_data: KittyImageData::Rgba {
-                    data: vec![0; 40 * 20 * 4],
-                    width: 40,
-                    height: 20,
-                },
             };
             let serialized = serialize_display(&chunk, 7);
             assert_eq!(serialized.contains("c="), expect_c);

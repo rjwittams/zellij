@@ -24,17 +24,26 @@ use zellij_utils::pane_size::{Dimension, PaneGeom, Size, SizeInPixels};
 
 /// Helper to create a simple Output instance for testing
 fn create_test_output() -> Output {
-    let (output, _sixel_image_store, _character_cell_size) = create_test_output_with_state();
+    let (output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
     output
 }
 
 fn create_test_output_with_state() -> (
     Output,
     Rc<RefCell<SixelImageStore>>,
+    Rc<RefCell<KittyAssetStore>>,
     Rc<RefCell<Option<SizeInPixels>>>,
 ) {
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+    for image_id in 1..=255 {
+        seed_test_kitty_asset(
+            kitty_asset_store.clone(),
+            image_id,
+            create_kitty_image_data(image_id),
+        );
+    }
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         height: 20,
         width: 10,
@@ -44,12 +53,13 @@ fn create_test_output_with_state() -> (
     (
         Output::new_with_kitty_asset_store(
             sixel_image_store.clone(),
-            kitty_asset_store,
+            kitty_asset_store.clone(),
             character_cell_size.clone(),
             styled_underlines,
             osc8_hyperlinks,
         ),
         sixel_image_store,
+        kitty_asset_store,
         character_cell_size,
     )
 }
@@ -77,11 +87,20 @@ fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageC
         z_index: 0,
         x_offset: 0,
         y_offset: 0,
-        image_data: KittyImageData::Png {
-            data: vec![1, 2, 3, 4],
-            width: 1,
-            height: 1,
-        },
+    }
+}
+
+fn create_kitty_image_data(image_id: u32) -> KittyImageData {
+    let byte = image_id as u8;
+    KittyImageData::Png {
+        data: vec![
+            byte,
+            byte.wrapping_add(1),
+            byte.wrapping_add(2),
+            byte.wrapping_add(3),
+        ],
+        width: 1,
+        height: 1,
     }
 }
 
@@ -97,11 +116,6 @@ fn create_kitty_placeholder_render(image_id: u32) -> crate::output::KittyPlaceho
         source_height: 10,
         x_offset: 0,
         y_offset: 0,
-        image_data: KittyImageData::Png {
-            data: vec![1, 2, 3, 4],
-            width: 1,
-            height: 1,
-        },
         cells: vec![crate::output::KittyPlaceholderCellRender {
             cell_x: 0,
             cell_y: 0,
@@ -146,6 +160,8 @@ fn create_kitty_diff_placeholder_placement(
 fn create_kitty_scene_state(placements: Vec<PlannedKittyPlacement>) -> KittySceneState {
     let mut scene = KittySceneState::default();
     for placement in placements {
+        let image_id = placement.key().image_id;
+        scene.insert_asset(image_id, create_kitty_image_data(image_id));
         scene.insert_placement(placement);
     }
     scene
@@ -162,6 +178,16 @@ fn seed_test_sixel_image(
     )
     .unwrap();
     sixel_grid.new_sixel_image(image_id, sixel_image);
+}
+
+fn seed_test_kitty_asset(
+    kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+    image_id: u32,
+    image_data: KittyImageData,
+) {
+    kitty_asset_store
+        .borrow_mut()
+        .insert_asset(image_id, image_data);
 }
 
 fn pane_image_output_with_sixels(sixel_chunks: Vec<SixelImageChunk>) -> PaneImageRenderOutput {
@@ -402,11 +428,7 @@ fn test_kitty_diff_retransmits_missing_asset_before_place() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 1,
-                image_data: KittyImageData::Png {
-                    data: vec![1, 2, 3, 4],
-                    width: 1,
-                    height: 1,
-                },
+                image_data: create_kitty_image_data(1),
             }],
             placement_ops: vec![KittyPlacementOp::PlaceExplicit {
                 key: KittyPlacementKey {
@@ -465,14 +487,9 @@ fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
     ]);
     let mut changed_chunk = create_kitty_chunk(1, 2, 2);
     changed_chunk.placement_id = Some(10);
-    changed_chunk.image_data = KittyImageData::Png {
-        data: vec![9, 9, 9, 9],
-        width: 1,
-        height: 1,
-    };
     let mut changed_chunk_two = changed_chunk.clone();
     changed_chunk_two.placement_id = Some(11);
-    let desired = create_kitty_scene_state(vec![
+    let mut desired = create_kitty_scene_state(vec![
         PlannedKittyPlacement::Explicit {
             key: KittyPlacementKey {
                 image_id: 1,
@@ -488,6 +505,12 @@ fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
             chunk: changed_chunk_two.clone(),
         },
     ]);
+    let changed_asset = KittyImageData::Png {
+        data: vec![9, 9, 9, 9],
+        width: 1,
+        height: 1,
+    };
+    desired.insert_asset(1, changed_asset.clone());
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
@@ -496,11 +519,7 @@ fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 1,
-                image_data: KittyImageData::Png {
-                    data: vec![9, 9, 9, 9],
-                    width: 1,
-                    height: 1,
-                },
+                image_data: changed_asset,
             }],
             placement_ops: vec![
                 KittyPlacementOp::Delete {
@@ -542,19 +561,9 @@ fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
     ]);
     let mut changed_chunk = create_kitty_chunk(1, 2, 2);
     changed_chunk.placement_id = Some(10);
-    changed_chunk.image_data = KittyImageData::Png {
-        data: vec![8, 8, 8, 8],
-        width: 1,
-        height: 1,
-    };
     let mut changed_render = create_kitty_placeholder_render(1);
     changed_render.placement_id = Some(20);
-    changed_render.image_data = KittyImageData::Png {
-        data: vec![8, 8, 8, 8],
-        width: 1,
-        height: 1,
-    };
-    let desired = create_kitty_scene_state(vec![
+    let mut desired = create_kitty_scene_state(vec![
         PlannedKittyPlacement::Explicit {
             key: KittyPlacementKey {
                 image_id: 1,
@@ -570,6 +579,12 @@ fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
             render: changed_render.clone(),
         },
     ]);
+    let changed_asset = KittyImageData::Png {
+        data: vec![8, 8, 8, 8],
+        width: 1,
+        height: 1,
+    };
+    desired.insert_asset(1, changed_asset.clone());
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
@@ -578,11 +593,7 @@ fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 1,
-                image_data: KittyImageData::Png {
-                    data: vec![8, 8, 8, 8],
-                    width: 1,
-                    height: 1,
-                },
+                image_data: changed_asset,
             }],
             placement_ops: vec![
                 KittyPlacementOp::Delete {
@@ -846,21 +857,20 @@ fn test_image_output_asset_change_invalidates_all_referencing_placements() {
     let mut other_asset_chunk = create_kitty_chunk(2, 2, 2);
     other_asset_chunk.placement_id = Some(20);
     other_asset_chunk.cell_x = 10;
+    let changed_first_chunk = first_chunk.clone();
+    let changed_second_chunk = second_chunk.clone();
 
-    let mut changed_first_chunk = first_chunk.clone();
-    changed_first_chunk.image_data = KittyImageData::Png {
-        data: vec![7, 7, 7, 7],
-        width: 1,
-        height: 1,
-    };
-    let mut changed_second_chunk = second_chunk.clone();
-    changed_second_chunk.image_data = KittyImageData::Png {
-        data: vec![7, 7, 7, 7],
-        width: 1,
-        height: 1,
-    };
-
-    let mut output = create_test_output();
+    let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    seed_test_kitty_asset(
+        kitty_asset_store,
+        1,
+        KittyImageData::Png {
+            data: vec![7, 7, 7, 7],
+            width: 1,
+            height: 1,
+        },
+    );
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
     output.set_last_rendered_kitty_chunks(
@@ -1078,7 +1088,8 @@ fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes(
 #[test]
 fn test_prepared_image_output_serializes_sixels_after_text() {
     let client_ids = create_test_clients(1);
-    let (mut output, sixel_image_store, character_cell_size) = create_test_output_with_state();
+    let (mut output, sixel_image_store, _kitty_asset_store, character_cell_size) =
+        create_test_output_with_state();
     seed_test_sixel_image(sixel_image_store, character_cell_size, 1);
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
@@ -1115,7 +1126,9 @@ fn test_prepared_image_output_serializes_sixels_after_text() {
 #[test]
 fn test_prepared_image_output_serializes_kitty_after_text() {
     let client_ids = create_test_clients(1);
-    let mut output = create_test_output();
+    let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    seed_test_kitty_asset(kitty_asset_store, 88, create_kitty_image_data(88));
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
 
@@ -1143,7 +1156,8 @@ fn test_prepared_image_output_serializes_kitty_after_text() {
 #[test]
 fn test_prepare_render_body_derives_sixel_fragments() {
     let client_ids = create_test_clients(1);
-    let (mut output, sixel_image_store, character_cell_size) = create_test_output_with_state();
+    let (mut output, sixel_image_store, _kitty_asset_store, character_cell_size) =
+        create_test_output_with_state();
     seed_test_sixel_image(sixel_image_store, character_cell_size, 1);
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
@@ -1193,11 +1207,7 @@ fn test_prepare_render_body_derives_kitty_explicit_fragments() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 91,
-                image_data: KittyImageData::Png {
-                    data: vec![1, 2, 3, 4],
-                    width: 1,
-                    height: 1,
-                },
+                image_data: create_kitty_image_data(91),
             }],
             placement_ops: vec![KittyPlacementOp::PlaceExplicit {
                 key: KittyPlacementKey {
@@ -1231,11 +1241,7 @@ fn test_prepare_render_body_derives_kitty_placeholder_fragments() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 92,
-                image_data: KittyImageData::Png {
-                    data: vec![1, 2, 3, 4],
-                    width: 1,
-                    height: 1,
-                },
+                image_data: create_kitty_image_data(92),
             }],
             placement_ops: vec![KittyPlacementOp::PlacePlaceholder {
                 key: KittyPlacementKey {

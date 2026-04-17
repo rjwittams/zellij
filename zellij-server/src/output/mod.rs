@@ -908,7 +908,6 @@ pub struct KittyPlaceholderRender {
     pub source_height: u32,
     pub x_offset: u32,
     pub y_offset: u32,
-    pub image_data: KittyImageData,
     pub cells: Vec<KittyPlaceholderCellRender>,
 }
 
@@ -948,7 +947,6 @@ pub struct KittyImageChunk {
     pub z_index: i32,
     pub x_offset: u32,
     pub y_offset: u32,
-    pub image_data: KittyImageData,
 }
 
 impl CharacterChunk {

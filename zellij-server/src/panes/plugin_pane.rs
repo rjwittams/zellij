@@ -113,6 +113,7 @@ pub(crate) struct PluginPane {
 }
 
 impl PluginPane {
+    #[allow(dead_code)]
     pub fn new(
         pid: u32,
         position_and_size: PaneGeom,

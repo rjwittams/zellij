@@ -1,4 +1,5 @@
 use super::{Output, Tab};
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::sixel::SixelImageStore;
 use crate::screen::CopyOptions;
 use crate::Arc;
@@ -779,6 +780,18 @@ fn create_new_tab_with_sixel_support(
     size: Size,
     sixel_image_store: Rc<RefCell<SixelImageStore>>,
 ) -> Tab {
+    create_new_tab_with_image_stores(
+        size,
+        sixel_image_store,
+        Rc::new(RefCell::new(KittyAssetStore::default())),
+    )
+}
+
+fn create_new_tab_with_image_stores(
+    size: Size,
+    sixel_image_store: Rc<RefCell<SixelImageStore>>,
+    kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+) -> Tab {
     // this is like the create_new_tab function but includes stuff needed for sixel,
     // eg. character_cell_size
     set_session_name("test".into());
@@ -816,7 +829,7 @@ fn create_new_tab_with_sixel_support(
     let web_sharing = WebSharing::Off;
     let web_server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
     let web_server_port = 8080;
-    let mut tab = Tab::new(
+    let mut tab = Tab::new_with_kitty_asset_store(
         index,
         position,
         name,
@@ -824,6 +837,7 @@ fn create_new_tab_with_sixel_support(
         character_cell_size,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -1043,11 +1057,16 @@ fn render_after_tiled_pane_resize(mode: KittyResizeRenderMode) -> (String, Strin
     let client_id = 1;
     let new_pane_id = PaneId::Terminal(2);
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
         height: 21,
     })));
-    let mut tab = create_new_tab_with_sixel_support(size, sixel_image_store.clone());
+    let mut tab = create_new_tab_with_image_stores(
+        size,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+    );
 
     tab.vertical_split(new_pane_id, None, client_id, None, None)
         .unwrap();
@@ -1064,7 +1083,13 @@ fn render_after_tiled_pane_resize(mode: KittyResizeRenderMode) -> (String, Strin
     tab.handle_pty_bytes(2, Vec::from("Right pane content".as_bytes()))
         .unwrap();
 
-    let mut output = Output::new(sixel_image_store, character_cell_size, true, true);
+    let mut output = Output::new_with_kitty_asset_store(
+        sixel_image_store,
+        kitty_asset_store,
+        character_cell_size,
+        true,
+        true,
+    );
     tab.render(&mut output, None).unwrap();
     let first_render = output
         .serialize()
@@ -3614,18 +3639,24 @@ fn kitty_placeholder_survives_tab_resize_and_render() {
     let resized = Size { cols: 32, rows: 10 };
     let client_id = 1;
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
         height: 21,
     })));
-    let mut tab = create_new_tab_with_sixel_support(size, sixel_image_store.clone());
+    let mut tab = create_new_tab_with_image_stores(
+        size,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+    );
 
     let mut bytes = kitty_virtual_rgba(77, 32, 16, 4, 2);
     bytes.extend_from_slice(&placeholder_rgba_text(77, 4, 2));
     tab.handle_pty_bytes(1, bytes).unwrap();
 
-    let mut first_output = Output::new(
+    let mut first_output = Output::new_with_kitty_asset_store(
         sixel_image_store.clone(),
+        kitty_asset_store.clone(),
         character_cell_size.clone(),
         true,
         true,
@@ -3638,7 +3669,13 @@ fn kitty_placeholder_survives_tab_resize_and_render() {
 
     tab.resize_whole_tab(resized).unwrap();
 
-    let mut resized_output = Output::new(sixel_image_store, character_cell_size, true, true);
+    let mut resized_output = Output::new_with_kitty_asset_store(
+        sixel_image_store,
+        kitty_asset_store,
+        character_cell_size,
+        true,
+        true,
+    );
     tab.render(&mut resized_output, None).unwrap();
     let resized_render = resized_output.serialize().unwrap();
     let resized_render = resized_render.get(&client_id).unwrap();

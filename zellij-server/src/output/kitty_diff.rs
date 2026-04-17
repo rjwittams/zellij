@@ -26,17 +26,6 @@ impl PlannedKittyPlacement {
             PlannedKittyPlacement::Placeholder { key, .. } => *key,
         }
     }
-
-    pub(crate) fn image_id(&self) -> u32 {
-        self.key().image_id
-    }
-
-    pub(crate) fn image_data(&self) -> &KittyImageData {
-        match self {
-            PlannedKittyPlacement::Explicit { chunk, .. } => &chunk.image_data,
-            PlannedKittyPlacement::Placeholder { render, .. } => &render.image_data,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -47,9 +36,11 @@ pub(crate) struct KittySceneState {
 
 impl KittySceneState {
     pub(crate) fn insert_placement(&mut self, placement: PlannedKittyPlacement) {
-        self.resident_assets
-            .insert(placement.image_id(), placement.image_data().clone());
         self.placements.insert(placement.key(), placement);
+    }
+
+    pub(crate) fn insert_asset(&mut self, image_id: u32, image_data: KittyImageData) {
+        self.resident_assets.insert(image_id, image_data);
     }
 }
 

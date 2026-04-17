@@ -723,6 +723,7 @@ pub fn get_next_terminal_position(
 impl Tab {
     // FIXME: Still too many arguments for clippy to be happy...
     #[allow(clippy::too_many_arguments)]
+    #[allow(dead_code)]
     pub fn new(
         id: usize,
         position: usize,

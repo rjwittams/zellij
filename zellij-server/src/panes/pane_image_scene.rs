@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use zellij_utils::pane_size::SizeInPixels;
 
 use crate::output::{
-    KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyPlaceholderCellRender,
-    KittyPlaceholderRender,
+    KittyImageChunk, KittyImagePlacementMode, KittyPlaceholderCellRender, KittyPlaceholderRender,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -504,10 +503,6 @@ impl PaneImageScene {
         self.placements.get(&logical_placement_id)
     }
 
-    pub fn kitty_image_chunk_data(&self, image_id: u32) -> Option<KittyImageData> {
-        self.kitty.image_chunk_data(image_id)
-    }
-
     pub fn kitty_image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
         self.kitty.image_dimensions(image_id)
     }
@@ -608,9 +603,6 @@ impl PaneImageScene {
                 continue;
             };
             let image_id = placement.kitty_internal_image_id();
-            let Some(image_data) = self.kitty_image_chunk_data(image_id) else {
-                continue;
-            };
             let Some((logical_row, column)) = resolve_anchor(&placement.anchor) else {
                 continue;
             };
@@ -662,7 +654,6 @@ impl PaneImageScene {
                 z_index: flavor.z_index,
                 x_offset: flavor.x_offset,
                 y_offset: flavor.y_offset,
-                image_data,
             });
         }
         let mut placeholder_renders = vec![];
@@ -690,9 +681,6 @@ impl PaneImageScene {
             };
             let image_id = logical_placement.kitty_internal_image_id();
             let Some((image_width, image_height)) = self.kitty_image_dimensions(image_id) else {
-                continue;
-            };
-            let Some(image_data) = self.kitty_image_chunk_data(image_id) else {
                 continue;
             };
             let Some(flavor) = logical_placement.kitty_placeholder_flavor() else {
@@ -829,7 +817,6 @@ impl PaneImageScene {
                 source_height,
                 x_offset: flavor.x_offset,
                 y_offset: flavor.y_offset,
-                image_data,
                 cells,
             });
         }

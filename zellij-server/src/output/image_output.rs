@@ -154,6 +154,7 @@ impl ImageOutput {
         resident_kitty_assets: &HashMap<u32, crate::output::KittyImageData>,
         chunks: &[KittyImageChunk],
         placeholder_renders: &[KittyPlaceholderRender],
+        kitty_asset_store: &KittyAssetStore,
     ) -> Option<KittySceneState> {
         let mut scene = KittySceneState {
             resident_assets: resident_kitty_assets
@@ -162,8 +163,10 @@ impl ImageOutput {
                 .collect(),
             ..Default::default()
         };
+        let mut referenced_asset_ids: BTreeSet<u32> = BTreeSet::new();
         for chunk in chunks {
             let placement_id = chunk.placement_id?;
+            referenced_asset_ids.insert(chunk.image_id);
             scene.insert_placement(PlannedKittyPlacement::Explicit {
                 key: KittyPlacementKey {
                     image_id: chunk.image_id,
@@ -174,6 +177,7 @@ impl ImageOutput {
         }
         for render in placeholder_renders {
             let placement_id = render.placement_id?;
+            referenced_asset_ids.insert(render.image_id);
             scene.insert_placement(PlannedKittyPlacement::Placeholder {
                 key: KittyPlacementKey {
                     image_id: render.image_id,
@@ -181,6 +185,10 @@ impl ImageOutput {
                 },
                 render: render.clone(),
             });
+        }
+        for image_id in referenced_asset_ids {
+            let image_data = kitty_asset_store.image_data(image_id)?;
+            scene.insert_asset(image_id, image_data);
         }
         Some(scene)
     }
@@ -270,10 +278,17 @@ impl ImageOutput {
                 placeholder_renders,
             } => {
                 let mut vte_output = String::new();
-                vte_output.push_str(&KittyImageState::serialize_chunks(explicit_chunks));
-                vte_output.push_str(&KittyImageState::serialize_placeholder_renders(
-                    placeholder_renders,
+                let kitty_asset_store = self.kitty_asset_store.borrow();
+                vte_output.push_str(&KittyImageState::serialize_chunks_with_asset_store(
+                    explicit_chunks,
+                    &kitty_asset_store,
                 ));
+                vte_output.push_str(
+                    &KittyImageState::serialize_placeholder_renders_with_asset_store(
+                        placeholder_renders,
+                        &kitty_asset_store,
+                    ),
+                );
                 vte_output
             },
         }
@@ -335,22 +350,37 @@ impl ImageOutput {
         last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
         last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
     ) {
+        let kitty_asset_store = self.kitty_asset_store.clone();
         for (client_id, chunks) in last_rendered_kitty_chunks {
+            let resident_assets: Vec<_> = chunks
+                .iter()
+                .filter_map(|chunk| {
+                    kitty_asset_store
+                        .borrow()
+                        .image_data(chunk.image_id)
+                        .map(|image_data| (chunk.image_id, image_data))
+                })
+                .collect();
             let client_state = self.client_image_state_mut(client_id);
             client_state.last_rendered_kitty.chunks = chunks.clone();
-            for chunk in chunks {
-                client_state
-                    .resident_kitty_assets
-                    .insert(chunk.image_id, chunk.image_data);
+            for (image_id, image_data) in resident_assets {
+                client_state.resident_kitty_assets.insert(image_id, image_data);
             }
         }
         for (client_id, placeholder_renders) in last_rendered_kitty_placeholder_renders {
+            let resident_assets: Vec<_> = placeholder_renders
+                .iter()
+                .filter_map(|render| {
+                    kitty_asset_store
+                        .borrow()
+                        .image_data(render.image_id)
+                        .map(|image_data| (render.image_id, image_data))
+                })
+                .collect();
             let client_state = self.client_image_state_mut(client_id);
             client_state.last_rendered_kitty.placeholder_renders = placeholder_renders.clone();
-            for render in placeholder_renders {
-                client_state
-                    .resident_kitty_assets
-                    .insert(render.image_id, render.image_data);
+            for (image_id, image_data) in resident_assets {
+                client_state.resident_kitty_assets.insert(image_id, image_data);
             }
         }
     }
@@ -489,24 +519,39 @@ impl ImageOutput {
         client_id: ClientId,
         pre_vte_clears_display: bool,
     ) -> PreparedImageOutput {
-        let client_state = self.client_image_state_mut(client_id);
-        let sixel_chunks = std::mem::take(&mut client_state.current.sixel_chunks);
-        let current_kitty_chunks = std::mem::take(&mut client_state.current.kitty_chunks);
-        let current_kitty_placeholder_renders =
-            std::mem::take(&mut client_state.current.kitty_placeholder_renders);
-        let changed_rects = std::mem::take(&mut client_state.current.changed_rects);
+        let (
+            sixel_chunks,
+            current_kitty_chunks,
+            current_kitty_placeholder_renders,
+            changed_rects,
+            resident_kitty_assets,
+            last_rendered_kitty_chunks,
+            last_rendered_kitty_placeholder_renders,
+        ) = {
+            let client_state = self.client_image_state_mut(client_id);
+            (
+                std::mem::take(&mut client_state.current.sixel_chunks),
+                std::mem::take(&mut client_state.current.kitty_chunks),
+                std::mem::take(&mut client_state.current.kitty_placeholder_renders),
+                std::mem::take(&mut client_state.current.changed_rects),
+                client_state.resident_kitty_assets.clone(),
+                client_state.last_rendered_kitty.chunks.clone(),
+                client_state.last_rendered_kitty.placeholder_renders.clone(),
+            )
+        };
 
         let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
         let empty_resident_assets = HashMap::new();
+        let kitty_asset_store = self.kitty_asset_store.borrow();
         let desired_kitty_scene = Self::kitty_scene_state_from_rendered(
             &empty_resident_assets,
             &current_kitty_chunks,
             &current_kitty_placeholder_renders,
+            &kitty_asset_store,
         );
         let assumed_kitty_scene = if pre_vte_clears_display {
             Some(KittySceneState {
-                resident_assets: client_state
-                    .resident_kitty_assets
+                resident_assets: resident_kitty_assets
                     .iter()
                     .map(|(image_id, image_data)| (*image_id, image_data.clone()))
                     .collect(),
@@ -514,9 +559,10 @@ impl ImageOutput {
             })
         } else {
             Self::kitty_scene_state_from_rendered(
-                &client_state.resident_kitty_assets,
-                &client_state.last_rendered_kitty.chunks,
-                &client_state.last_rendered_kitty.placeholder_renders,
+                &resident_kitty_assets,
+                &last_rendered_kitty_chunks,
+                &last_rendered_kitty_placeholder_renders,
+                &kitty_asset_store,
             )
         };
         let kitty_plan = match (assumed_kitty_scene, desired_kitty_scene) {
@@ -601,21 +647,25 @@ impl ImageOutput {
         current_kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
         kitty_plan: &KittyScenePlan,
     ) {
-        let client_state = self.client_image_state_mut(client_id);
+        let previous_resident_assets = self
+            .client_image_states
+            .get(&client_id)
+            .map(|client_state| client_state.resident_kitty_assets.clone())
+            .unwrap_or_default();
+        let mut next_resident_assets = HashMap::new();
         match kitty_plan {
             KittyScenePlan::Diff {
                 asset_ops,
                 placement_ops: _,
             } => {
+                next_resident_assets = previous_resident_assets;
                 for asset_op in asset_ops {
                     match asset_op {
                         KittyAssetOp::EnsureResident {
                             image_id,
                             image_data,
                         } => {
-                            client_state
-                                .resident_kitty_assets
-                                .insert(*image_id, image_data.clone());
+                            next_resident_assets.insert(*image_id, image_data.clone());
                         },
                     }
                 }
@@ -624,19 +674,21 @@ impl ImageOutput {
                 explicit_chunks,
                 placeholder_renders,
             } => {
-                client_state.resident_kitty_assets.clear();
+                let kitty_asset_store = self.kitty_asset_store.borrow();
                 for chunk in explicit_chunks {
-                    client_state
-                        .resident_kitty_assets
-                        .insert(chunk.image_id, chunk.image_data.clone());
+                    if let Some(image_data) = kitty_asset_store.image_data(chunk.image_id) {
+                        next_resident_assets.insert(chunk.image_id, image_data);
+                    }
                 }
                 for render in placeholder_renders {
-                    client_state
-                        .resident_kitty_assets
-                        .insert(render.image_id, render.image_data.clone());
+                    if let Some(image_data) = kitty_asset_store.image_data(render.image_id) {
+                        next_resident_assets.insert(render.image_id, image_data);
+                    }
                 }
             },
         }
+        let client_state = self.client_image_state_mut(client_id);
+        client_state.resident_kitty_assets = next_resident_assets;
         client_state.last_rendered_kitty.chunks = current_kitty_chunks;
         client_state.last_rendered_kitty.placeholder_renders = current_kitty_placeholder_renders;
     }
