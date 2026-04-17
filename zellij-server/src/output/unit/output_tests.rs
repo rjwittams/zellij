@@ -6,6 +6,10 @@ use super::super::image_fragment::{
     visible_image_fragments, ImageFragment, KittyExplicitFragment, KittyPlaceholderFragment,
     SixelFragment,
 };
+use super::super::kitty_diff::{
+    plan_kitty_scene, KittyAssetOp, KittyPlacementKey, KittyPlacementOp, KittyScenePlan,
+    KittySceneState, PlannedKittyPlacement,
+};
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::{SixelGrid, SixelImageStore};
 use crate::panes::terminal_character::AnsiCode;
@@ -102,6 +106,46 @@ fn create_kitty_placeholder_render(image_id: u32) -> crate::output::KittyPlaceho
             placeholder_col: 0,
         }],
     }
+}
+
+fn create_kitty_diff_explicit_placement(
+    image_id: u32,
+    placement_id: u32,
+    columns: usize,
+    rows: usize,
+) -> PlannedKittyPlacement {
+    let mut chunk = create_kitty_chunk(image_id, columns, rows);
+    chunk.placement_id = Some(placement_id);
+    PlannedKittyPlacement::Explicit {
+        key: KittyPlacementKey {
+            image_id,
+            placement_id,
+        },
+        chunk,
+    }
+}
+
+fn create_kitty_diff_placeholder_placement(
+    image_id: u32,
+    placement_id: u32,
+) -> PlannedKittyPlacement {
+    let mut render = create_kitty_placeholder_render(image_id);
+    render.placement_id = Some(placement_id);
+    PlannedKittyPlacement::Placeholder {
+        key: KittyPlacementKey {
+            image_id,
+            placement_id,
+        },
+        render,
+    }
+}
+
+fn create_kitty_scene_state(placements: Vec<PlannedKittyPlacement>) -> KittySceneState {
+    let mut scene = KittySceneState::default();
+    for placement in placements {
+        scene.insert_placement(placement);
+    }
+    scene
 }
 
 fn seed_test_sixel_image(
@@ -269,6 +313,303 @@ fn test_is_dirty_with_sixel_chunks() {
     assert!(
         output.is_dirty(),
         "Output should be dirty after adding sixel chunks"
+    );
+}
+
+#[test]
+fn test_kitty_diff_ignores_unchanged_placement() {
+    let assumed = create_kitty_scene_state(vec![create_kitty_diff_explicit_placement(1, 10, 2, 2)]);
+    let desired = assumed.clone();
+
+    let plan = plan_kitty_scene(&assumed, &desired);
+
+    assert_eq!(
+        plan,
+        KittyScenePlan::Diff {
+            asset_ops: vec![],
+            placement_ops: vec![],
+        }
+    );
+}
+
+#[test]
+fn test_kitty_diff_deletes_removed_placement() {
+    let assumed = create_kitty_scene_state(vec![create_kitty_diff_explicit_placement(1, 10, 2, 2)]);
+    let desired = KittySceneState::default();
+
+    let plan = plan_kitty_scene(&assumed, &desired);
+
+    assert_eq!(
+        plan,
+        KittyScenePlan::Diff {
+            asset_ops: vec![],
+            placement_ops: vec![KittyPlacementOp::Delete {
+                key: KittyPlacementKey {
+                    image_id: 1,
+                    placement_id: 10,
+                },
+            }],
+        }
+    );
+}
+
+#[test]
+fn test_kitty_diff_places_resident_asset_without_retransmit() {
+    let mut assumed = KittySceneState::default();
+    assumed.resident_assets.insert(
+        1,
+        KittyImageData::Png {
+            data: vec![1, 2, 3, 4],
+            width: 1,
+            height: 1,
+        },
+    );
+    let desired = create_kitty_scene_state(vec![create_kitty_diff_explicit_placement(1, 10, 2, 2)]);
+
+    let plan = plan_kitty_scene(&assumed, &desired);
+
+    assert_eq!(
+        plan,
+        KittyScenePlan::Diff {
+            asset_ops: vec![],
+            placement_ops: vec![KittyPlacementOp::PlaceExplicit {
+                key: KittyPlacementKey {
+                    image_id: 1,
+                    placement_id: 10,
+                },
+                chunk: {
+                    let mut chunk = create_kitty_chunk(1, 2, 2);
+                    chunk.placement_id = Some(10);
+                    chunk
+                },
+            }],
+        }
+    );
+}
+
+#[test]
+fn test_kitty_diff_retransmits_missing_asset_before_place() {
+    let assumed = KittySceneState::default();
+    let desired = create_kitty_scene_state(vec![create_kitty_diff_explicit_placement(1, 10, 2, 2)]);
+
+    let plan = plan_kitty_scene(&assumed, &desired);
+
+    assert_eq!(
+        plan,
+        KittyScenePlan::Diff {
+            asset_ops: vec![KittyAssetOp::EnsureResident {
+                image_id: 1,
+                image_data: KittyImageData::Png {
+                    data: vec![1, 2, 3, 4],
+                    width: 1,
+                    height: 1,
+                },
+            }],
+            placement_ops: vec![KittyPlacementOp::PlaceExplicit {
+                key: KittyPlacementKey {
+                    image_id: 1,
+                    placement_id: 10,
+                },
+                chunk: {
+                    let mut chunk = create_kitty_chunk(1, 2, 2);
+                    chunk.placement_id = Some(10);
+                    chunk
+                },
+            }],
+        }
+    );
+}
+
+#[test]
+fn test_kitty_diff_replaces_geometry_change_with_delete_and_place() {
+    let assumed = create_kitty_scene_state(vec![create_kitty_diff_explicit_placement(1, 10, 2, 2)]);
+    let desired = create_kitty_scene_state(vec![create_kitty_diff_explicit_placement(1, 10, 3, 2)]);
+
+    let plan = plan_kitty_scene(&assumed, &desired);
+
+    assert_eq!(
+        plan,
+        KittyScenePlan::Diff {
+            asset_ops: vec![],
+            placement_ops: vec![
+                KittyPlacementOp::Delete {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 10,
+                    },
+                },
+                KittyPlacementOp::PlaceExplicit {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 10,
+                    },
+                    chunk: {
+                        let mut chunk = create_kitty_chunk(1, 3, 2);
+                        chunk.placement_id = Some(10);
+                        chunk
+                    },
+                },
+            ],
+        }
+    );
+}
+
+#[test]
+fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
+    let assumed = create_kitty_scene_state(vec![
+        create_kitty_diff_explicit_placement(1, 10, 2, 2),
+        create_kitty_diff_explicit_placement(1, 11, 2, 2),
+    ]);
+    let mut changed_chunk = create_kitty_chunk(1, 2, 2);
+    changed_chunk.placement_id = Some(10);
+    changed_chunk.image_data = KittyImageData::Png {
+        data: vec![9, 9, 9, 9],
+        width: 1,
+        height: 1,
+    };
+    let mut changed_chunk_two = changed_chunk.clone();
+    changed_chunk_two.placement_id = Some(11);
+    let desired = create_kitty_scene_state(vec![
+        PlannedKittyPlacement::Explicit {
+            key: KittyPlacementKey {
+                image_id: 1,
+                placement_id: 10,
+            },
+            chunk: changed_chunk.clone(),
+        },
+        PlannedKittyPlacement::Explicit {
+            key: KittyPlacementKey {
+                image_id: 1,
+                placement_id: 11,
+            },
+            chunk: changed_chunk_two.clone(),
+        },
+    ]);
+
+    let plan = plan_kitty_scene(&assumed, &desired);
+
+    assert_eq!(
+        plan,
+        KittyScenePlan::Diff {
+            asset_ops: vec![KittyAssetOp::EnsureResident {
+                image_id: 1,
+                image_data: KittyImageData::Png {
+                    data: vec![9, 9, 9, 9],
+                    width: 1,
+                    height: 1,
+                },
+            }],
+            placement_ops: vec![
+                KittyPlacementOp::Delete {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 10,
+                    },
+                },
+                KittyPlacementOp::Delete {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 11,
+                    },
+                },
+                KittyPlacementOp::PlaceExplicit {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 10,
+                    },
+                    chunk: changed_chunk,
+                },
+                KittyPlacementOp::PlaceExplicit {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 11,
+                    },
+                    chunk: changed_chunk_two,
+                },
+            ],
+        }
+    );
+}
+
+#[test]
+fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
+    let assumed = create_kitty_scene_state(vec![
+        create_kitty_diff_explicit_placement(1, 10, 2, 2),
+        create_kitty_diff_placeholder_placement(1, 20),
+    ]);
+    let mut changed_chunk = create_kitty_chunk(1, 2, 2);
+    changed_chunk.placement_id = Some(10);
+    changed_chunk.image_data = KittyImageData::Png {
+        data: vec![8, 8, 8, 8],
+        width: 1,
+        height: 1,
+    };
+    let mut changed_render = create_kitty_placeholder_render(1);
+    changed_render.placement_id = Some(20);
+    changed_render.image_data = KittyImageData::Png {
+        data: vec![8, 8, 8, 8],
+        width: 1,
+        height: 1,
+    };
+    let desired = create_kitty_scene_state(vec![
+        PlannedKittyPlacement::Explicit {
+            key: KittyPlacementKey {
+                image_id: 1,
+                placement_id: 10,
+            },
+            chunk: changed_chunk.clone(),
+        },
+        PlannedKittyPlacement::Placeholder {
+            key: KittyPlacementKey {
+                image_id: 1,
+                placement_id: 20,
+            },
+            render: changed_render.clone(),
+        },
+    ]);
+
+    let plan = plan_kitty_scene(&assumed, &desired);
+
+    assert_eq!(
+        plan,
+        KittyScenePlan::Diff {
+            asset_ops: vec![KittyAssetOp::EnsureResident {
+                image_id: 1,
+                image_data: KittyImageData::Png {
+                    data: vec![8, 8, 8, 8],
+                    width: 1,
+                    height: 1,
+                },
+            }],
+            placement_ops: vec![
+                KittyPlacementOp::Delete {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 10,
+                    },
+                },
+                KittyPlacementOp::Delete {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 20,
+                    },
+                },
+                KittyPlacementOp::PlaceExplicit {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 10,
+                    },
+                    chunk: changed_chunk,
+                },
+                KittyPlacementOp::PlacePlaceholder {
+                    key: KittyPlacementKey {
+                        image_id: 1,
+                        placement_id: 20,
+                    },
+                    render: changed_render,
+                },
+            ],
+        }
     );
 }
 

@@ -2,6 +2,7 @@ use std::collections::VecDeque;
 
 mod image_fragment;
 mod image_output;
+mod kitty_diff;
 
 use crate::panes::Row;
 
