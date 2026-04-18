@@ -146,6 +146,84 @@ fn send_cli_action_to_server(
     }
 }
 
+fn kitty_virtual_rgba_with_placement_payload(
+    image_id: u32,
+    placement_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+    payload_b64: &str,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id},p={placement_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_retransmit_rgba_with_payload(
+    image_id: u32,
+    width: u32,
+    height: u32,
+    payload_b64: &str,
+) -> Vec<u8> {
+    format!("\u{1b}_Ga=t,f=32,s={width},v={height},i={image_id};{payload_b64}\u{1b}\\")
+        .into_bytes()
+}
+
+fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u32) -> Vec<u8> {
+    format!("\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
+}
+
+fn placeholder_virtual_placement(
+    image_id: u32,
+    placement_id: u32,
+    cols: u32,
+    rows: u32,
+) -> Vec<u8> {
+    format!("\u{1b}_Ga=p,U=1,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\")
+        .into_bytes()
+}
+
+fn placeholder_rgba_text_with_placement(
+    image_id: u32,
+    placement_id: u32,
+    cols: usize,
+    rows: usize,
+) -> Vec<u8> {
+    let image_low = image_id & 0x00FF_FFFF;
+    let image_r = (image_low >> 16) & 0xFF;
+    let image_g = (image_low >> 8) & 0xFF;
+    let image_b = image_low & 0xFF;
+    let placement_low = placement_id & 0x00FF_FFFF;
+    let placement_r = (placement_low >> 16) & 0xFF;
+    let placement_g = (placement_low >> 8) & 0xFF;
+    let placement_b = placement_low & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    let diacritics = [
+        '\u{305}', '\u{30D}', '\u{30E}', '\u{310}', '\u{312}', '\u{33D}', '\u{33E}', '\u{33F}',
+        '\u{346}', '\u{34A}', '\u{34B}', '\u{34C}', '\u{350}', '\u{351}',
+    ];
+    let mut output = String::new();
+    for row in 0..rows {
+        output.push_str(&format!(
+            "\u{1b}[38;2;{image_r};{image_g};{image_b}m\u{1b}[58;2;{placement_r};{placement_g};{placement_b}m"
+        ));
+        let row_diacritic = diacritics[row];
+        for col in 0..cols {
+            let col_diacritic = diacritics[col];
+            output.push(placeholder);
+            output.push(row_diacritic);
+            output.push(col_diacritic);
+        }
+        output.push_str("\u{1b}[39m\u{1b}[59m");
+        if row + 1 < rows {
+            output.push_str("\r\n");
+        }
+    }
+    output.into_bytes()
+}
+
 #[derive(Clone, Default)]
 struct FakeInputOutput {
     fake_filesystem: Arc<Mutex<HashMap<String, String>>>,
@@ -6076,11 +6154,14 @@ fn integration_pty_bytes_not_delivered_when_viewport_unchanged() {
 }
 
 #[test]
-fn screen_stage11_fixture_emits_updated_payloads_for_replace_burst() {
+fn screen_kitty_shared_asset_replace_emits_updated_payloads() {
     let size = Size { cols: 120, rows: 24 };
     let mut mock_screen = MockScreen::new(size);
     mock_screen.drop_all_pty_messages();
     let screen_thread = mock_screen.run(None, vec![]);
+    let image_id = 122;
+    let initial_payload = "AAAAAAAAAAA=";
+    let updated_payload = "/////w==";
 
     let received_server_instructions = Arc::new(Mutex::new(vec![]));
     let server_receiver = mock_screen.server_receiver.take().unwrap();
@@ -6108,21 +6189,26 @@ fn screen_stage11_fixture_emits_updated_payloads_for_replace_burst() {
         }));
     std::thread::sleep(std::time::Duration::from_millis(100));
 
-    let stage11_fixture = include_bytes!("fixtures/stage11-zink-both-bursts.raw");
-    let replace_start = stage11_fixture
-        .windows(b"a=t,".len())
-        .position(|window| window == b"a=t,")
-        .expect("expected stage-11 fixture to contain a kitty replace burst");
-    let (initial_burst, replace_burst) = stage11_fixture.split_at(replace_start);
+    let mut initial_burst =
+        kitty_virtual_rgba_with_placement_payload(image_id, 1, 16, 8, 4, 2, initial_payload);
+    initial_burst.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 4, 2));
+    initial_burst.extend_from_slice(b"\r\n");
+    initial_burst.extend_from_slice(&kitty_display_placement(image_id, 2, 4, 2));
+
+    let mut replace_burst = kitty_retransmit_rgba_with_payload(image_id, 16, 8, updated_payload);
+    replace_burst.extend_from_slice(&placeholder_virtual_placement(image_id, 1, 4, 2));
+    replace_burst.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 4, 2));
+    replace_burst.extend_from_slice(b"\r\n");
+    replace_burst.extend_from_slice(&kitty_display_placement(image_id, 2, 4, 2));
 
     let _ = mock_screen
         .to_screen
-        .send(ScreenInstruction::PtyBytes(0, initial_burst.to_vec()));
+        .send(ScreenInstruction::PtyBytes(0, initial_burst));
     std::thread::sleep(std::time::Duration::from_millis(150));
 
     let _ = mock_screen
         .to_screen
-        .send(ScreenInstruction::PtyBytes(0, replace_burst.to_vec()));
+        .send(ScreenInstruction::PtyBytes(0, replace_burst));
     std::thread::sleep(std::time::Duration::from_millis(150));
 
     mock_screen.teardown(vec![server_thread, plugin_thread, screen_thread]);
@@ -6140,16 +6226,16 @@ fn screen_stage11_fixture_emits_updated_payloads_for_replace_burst() {
         .expect("expected screen test to capture at least one render");
 
     assert!(
-        last_render.contains("PNJu"),
-        "screen-level stage-11 fixture should emit the updated green payload; last render was: {last_render:?}"
+        last_render.contains(updated_payload),
+        "screen-level shared-asset replace should emit the updated payload; last render was: {last_render:?}"
     );
     assert!(
         last_render.contains("\u{1b}_Ga=t,i="),
-        "screen-level stage-11 fixture should retransmit kitty assets in the replace burst"
+        "screen-level shared-asset replace should retransmit kitty assets in the replace burst"
     );
     assert!(
         last_render.contains("\u{1b}_Ga=p,U=1,i="),
-        "screen-level stage-11 fixture should recreate placeholder placements in the replace burst"
+        "screen-level shared-asset replace should recreate placeholder placements in the replace burst"
     );
 }
 

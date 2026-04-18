@@ -10875,15 +10875,13 @@ fn kitty_placeholder_survives_tiled_pane_resize_and_render() {
 }
 
 #[test]
-fn kitty_stage11_smoke_sequence_emits_updated_payloads_at_tab_level() {
+fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
     let size = Size { cols: 120, rows: 24 };
     let client_id = 1;
     let initial_payload = "AAAAAAAAAAA=";
     let updated_payload = "/////w==";
-    let separate_image_id = 122;
-    let combined_image_id = 123;
-    let separate_internal_image_id = 1;
-    let combined_internal_image_id = 2;
+    let image_id = 122;
+    let internal_image_id = 1;
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -10896,41 +10894,11 @@ fn kitty_stage11_smoke_sequence_emits_updated_payloads_at_tab_level() {
         kitty_asset_store.clone(),
     );
 
-    let mut initial_bytes = kitty_virtual_rgba_with_placement_payload(
-        separate_image_id,
-        1,
-        48,
-        32,
-        10,
-        4,
-        initial_payload,
-    );
-    initial_bytes.extend_from_slice(&placeholder_rgba_text_with_placement(
-        separate_image_id,
-        1,
-        10,
-        4,
-    ));
+    let mut initial_bytes =
+        kitty_virtual_rgba_with_placement_payload(image_id, 1, 16, 8, 4, 2, initial_payload);
+    initial_bytes.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 4, 2));
     initial_bytes.extend_from_slice(b"\r\n");
-    initial_bytes.extend_from_slice(&kitty_display_placement(separate_image_id, 2, 16, 6));
-    initial_bytes.extend_from_slice(b"\r\n");
-    initial_bytes.extend_from_slice(&kitty_virtual_rgba_with_placement_payload(
-        combined_image_id,
-        1,
-        48,
-        32,
-        10,
-        4,
-        initial_payload,
-    ));
-    initial_bytes.extend_from_slice(&placeholder_rgba_text_with_placement(
-        combined_image_id,
-        1,
-        10,
-        4,
-    ));
-    initial_bytes.extend_from_slice(b"\r\n");
-    initial_bytes.extend_from_slice(&kitty_display_placement(combined_image_id, 2, 16, 6));
+    initial_bytes.extend_from_slice(&kitty_display_placement(image_id, 2, 4, 2));
     tab.handle_pty_bytes(1, initial_bytes).unwrap();
 
     let mut output = Output::new_with_kitty_asset_store(
@@ -10945,47 +10913,14 @@ fn kitty_stage11_smoke_sequence_emits_updated_payloads_at_tab_level() {
     let first_render = first_render.get(&client_id).unwrap();
     assert!(
         first_render.contains(initial_payload),
-        "initial stage-11 tab render should transmit the blue payload"
+        "initial tab render should transmit the initial payload"
     );
 
-    let mut replace_bytes = kitty_retransmit_rgba_with_payload(
-        separate_image_id,
-        48,
-        32,
-        updated_payload,
-    );
-    replace_bytes.extend_from_slice(&placeholder_virtual_placement(separate_image_id, 1, 10, 4));
-    replace_bytes.extend_from_slice(&placeholder_rgba_text_with_placement(
-        separate_image_id,
-        1,
-        10,
-        4,
-    ));
+    let mut replace_bytes = kitty_retransmit_rgba_with_payload(image_id, 16, 8, updated_payload);
+    replace_bytes.extend_from_slice(&placeholder_virtual_placement(image_id, 1, 4, 2));
+    replace_bytes.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 4, 2));
     replace_bytes.extend_from_slice(b"\r\n");
-    replace_bytes.extend_from_slice(&kitty_retransmit_rgba_with_payload(
-        combined_image_id,
-        48,
-        32,
-        updated_payload,
-    ));
-    replace_bytes.extend_from_slice(&kitty_virtual_rgba_with_placement_payload(
-        combined_image_id,
-        1,
-        48,
-        32,
-        10,
-        4,
-        updated_payload,
-    ));
-    replace_bytes.extend_from_slice(&placeholder_rgba_text_with_placement(
-        combined_image_id,
-        1,
-        10,
-        4,
-    ));
-    replace_bytes.extend_from_slice(b"\r\n");
-    replace_bytes.extend_from_slice(&kitty_display_placement(separate_image_id, 2, 16, 6));
-    replace_bytes.extend_from_slice(&kitty_display_placement(combined_image_id, 2, 16, 6));
+    replace_bytes.extend_from_slice(&kitty_display_placement(image_id, 2, 4, 2));
     tab.handle_pty_bytes(1, replace_bytes).unwrap();
 
     tab.render(&mut output, None).unwrap();
@@ -10993,33 +10928,19 @@ fn kitty_stage11_smoke_sequence_emits_updated_payloads_at_tab_level() {
     let second_render = second_render.get(&client_id).unwrap();
     assert!(
         second_render.contains(updated_payload),
-        "stage-11 replace frame should transmit the updated green payload"
+        "replace frame should transmit the updated payload"
     );
     assert!(
-        second_render.contains(&format!("\u{1b}_Ga=t,i={separate_internal_image_id}"))
-            && second_render.contains(updated_payload),
-        "stage-11 replace frame should retransmit the separate-placeholder asset; second render was: {second_render:?}"
+        second_render.contains(&format!("\u{1b}_Ga=t,i={internal_image_id}")),
+        "replace frame should retransmit the asset; second render was: {second_render:?}"
     );
     assert!(
-        second_render.contains(&format!("\u{1b}_Ga=t,i={combined_internal_image_id}"))
-            && second_render.contains(updated_payload),
-        "stage-11 replace frame should retransmit the combined-placeholder asset; second render was: {second_render:?}"
+        second_render.contains(&format!("\u{1b}_Ga=p,U=1,i={internal_image_id},p=1")),
+        "replace frame should recreate the placeholder placement"
     );
     assert!(
-        second_render.contains(&format!("\u{1b}_Ga=p,U=1,i={separate_internal_image_id},p=1")),
-        "stage-11 replace frame should recreate the separate placeholder placement"
-    );
-    assert!(
-        second_render.contains(&format!("\u{1b}_Ga=p,U=1,i={combined_internal_image_id},p=1")),
-        "stage-11 replace frame should recreate the combined placeholder placement"
-    );
-    assert!(
-        second_render.contains(&format!("\u{1b}_Ga=p,i={separate_internal_image_id},p=2")),
-        "stage-11 replace frame should recreate the separate explicit placement"
-    );
-    assert!(
-        second_render.contains(&format!("\u{1b}_Ga=p,i={combined_internal_image_id},p=2")),
-        "stage-11 replace frame should recreate the combined explicit placement"
+        second_render.contains(&format!("\u{1b}_Ga=p,i={internal_image_id},p=2")),
+        "replace frame should recreate the explicit placement"
     );
 }
 

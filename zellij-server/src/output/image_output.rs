@@ -17,7 +17,7 @@ use crate::panes::sixel::SixelImageStore;
 use crate::ClientId;
 use std::{
     cell::RefCell,
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     rc::Rc,
 };
 use zellij_utils::errors::prelude::*;
@@ -130,121 +130,6 @@ fn kitty_clear_before_text_vte() -> String {
     vte_output.push_str("\u{1b}_Ga=d,d=A\u{1b}\\");
     vte_output.push_str("\u{1b}[u");
     vte_output
-}
-
-fn placeholder_bbox(render: &KittyPlaceholderRender) -> Option<(usize, usize, usize, usize)> {
-    let min_x = render.cells.iter().map(|cell| cell.cell_x).min()?;
-    let max_x = render.cells.iter().map(|cell| cell.cell_x).max()?;
-    let min_y = render.cells.iter().map(|cell| cell.cell_y).min()?;
-    let max_y = render.cells.iter().map(|cell| cell.cell_y).max()?;
-    Some((min_x, min_y, max_x, max_y))
-}
-
-fn kitty_plan_summary(kitty_plan: &KittyScenePlan) -> Vec<String> {
-    match kitty_plan {
-        KittyScenePlan::Diff {
-            asset_ops,
-            placement_ops,
-        } => asset_ops
-            .iter()
-            .map(|asset_op| match asset_op {
-                KittyAssetOp::EnsureResident {
-                    image_id,
-                    generation,
-                } => format!("transmit image {} generation {}", image_id, generation),
-            })
-            .chain(placement_ops.iter().map(|placement_op| match placement_op {
-                KittyPlacementOp::Delete { key } => {
-                    format!("delete placement {}:{}", key.image_id, key.placement_id)
-                },
-                KittyPlacementOp::PlaceExplicit { key, chunk } => format!(
-                    "place explicit {}:{} at ({},{}) cells {}x{} src ({},{}) {}x{} z={} offset=({}, {})",
-                    key.image_id,
-                    key.placement_id,
-                    chunk.cell_x,
-                    chunk.cell_y,
-                    chunk.columns,
-                    chunk.rows,
-                    chunk.source_x,
-                    chunk.source_y,
-                    chunk.source_width,
-                    chunk.source_height,
-                    chunk.z_index,
-                    chunk.x_offset,
-                    chunk.y_offset
-                ),
-                KittyPlacementOp::PlacePlaceholder { key, render } => {
-                    let bbox = placeholder_bbox(render)
-                        .map(|(min_x, min_y, max_x, max_y)| {
-                            format!(" bbox ({min_x},{min_y})-({max_x},{max_y})")
-                        })
-                        .unwrap_or_else(|| " bbox <empty>".to_string());
-                    format!(
-                        "place placeholder {}:{} cells={} grid {}x{} src ({},{}) {}x{} offset=({}, {}){}",
-                        key.image_id,
-                        key.placement_id,
-                        render.cells.len(),
-                        render.columns,
-                        render.rows,
-                        render.source_x,
-                        render.source_y,
-                        render.source_width,
-                        render.source_height,
-                        render.x_offset,
-                        render.y_offset,
-                        bbox
-                    )
-                },
-            }))
-            .collect(),
-        KittyScenePlan::FullResetAndResend {
-            explicit_chunks,
-            placeholder_renders,
-        } => {
-            let mut summary = vec![format!(
-                "full-reset explicit={} placeholder={}",
-                explicit_chunks.len(),
-                placeholder_renders.len()
-            )];
-            summary.extend(explicit_chunks.iter().map(|chunk| {
-                format!(
-                    "reset explicit {}:{:?} at ({},{}) cells {}x{} src ({},{}) {}x{} z={}",
-                    chunk.image_id,
-                    chunk.placement_id,
-                    chunk.cell_x,
-                    chunk.cell_y,
-                    chunk.columns,
-                    chunk.rows,
-                    chunk.source_x,
-                    chunk.source_y,
-                    chunk.source_width,
-                    chunk.source_height,
-                    chunk.z_index
-                )
-            }));
-            summary.extend(placeholder_renders.iter().map(|render| {
-                let bbox = placeholder_bbox(render)
-                    .map(|(min_x, min_y, max_x, max_y)| {
-                        format!(" bbox ({min_x},{min_y})-({max_x},{max_y})")
-                    })
-                    .unwrap_or_else(|| " bbox <empty>".to_string());
-                format!(
-                    "reset placeholder {}:{:?} cells={} grid {}x{} src ({},{}) {}x{}{}",
-                    render.image_id,
-                    render.placement_id,
-                    render.cells.len(),
-                    render.columns,
-                    render.rows,
-                    render.source_x,
-                    render.source_y,
-                    render.source_width,
-                    render.source_height,
-                    bbox
-                )
-            }));
-            summary
-        },
-    }
 }
 
 impl ImageOutput {
@@ -398,41 +283,6 @@ impl ImageOutput {
                     }
                 }
                 vte_output.push_str("\u{1b}[u");
-                let retransmitted_asset_ids: HashSet<u32> = asset_ops
-                    .iter()
-                    .map(|asset_op| match asset_op {
-                        KittyAssetOp::EnsureResident { image_id, .. } => *image_id,
-                    })
-                    .collect();
-                let explicit_asset_ids: HashSet<u32> = placement_ops
-                    .iter()
-                    .filter_map(|placement_op| match placement_op {
-                        KittyPlacementOp::PlaceExplicit { key, .. } => Some(key.image_id),
-                        _ => None,
-                    })
-                    .collect();
-                let placeholder_asset_ids: HashSet<u32> = placement_ops
-                    .iter()
-                    .filter_map(|placement_op| match placement_op {
-                        KittyPlacementOp::PlacePlaceholder { key, .. } => Some(key.image_id),
-                        _ => None,
-                    })
-                    .collect();
-                let suspicious_asset_ids: Vec<u32> = retransmitted_asset_ids
-                    .iter()
-                    .copied()
-                    .filter(|image_id| {
-                        explicit_asset_ids.contains(image_id)
-                            && placeholder_asset_ids.contains(image_id)
-                    })
-                    .collect();
-                if !suspicious_asset_ids.is_empty() {
-                    log::warn!(
-                        "serializing mixed kitty retransmit+recreate diff for assets {:?}: ops={:?}",
-                        suspicious_asset_ids,
-                        kitty_plan_summary(kitty_plan)
-                    );
-                }
                 vte_output
             },
             KittyScenePlan::FullResetAndResend {

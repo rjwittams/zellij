@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use zellij_utils::pane_size::SizeInPixels;
 
@@ -66,70 +66,6 @@ impl KittyDamageRedraw {
     }
 }
 
-fn mixed_kitty_asset_ids(bundle: &KittyRenderBundle) -> Vec<u32> {
-    let explicit_asset_ids: BTreeSet<u32> =
-        bundle.explicit_chunks.iter().map(|chunk| chunk.image_id).collect();
-    let placeholder_asset_ids: BTreeSet<u32> = bundle
-        .placeholder_renders
-        .iter()
-        .map(|render| render.image_id)
-        .collect();
-    explicit_asset_ids
-        .intersection(&placeholder_asset_ids)
-        .copied()
-        .collect()
-}
-
-fn kitty_render_bundle_summary(bundle: &KittyRenderBundle, mixed_asset_ids: &[u32]) -> Vec<String> {
-    let mixed_asset_ids: BTreeSet<u32> = mixed_asset_ids.iter().copied().collect();
-    let mut summary = vec![];
-    summary.extend(bundle.explicit_chunks.iter().filter_map(|chunk| {
-        mixed_asset_ids.contains(&chunk.image_id).then(|| {
-            format!(
-                "explicit {}:{:?} at ({},{}) cells {}x{} src ({},{}) {}x{} z={}",
-                chunk.image_id,
-                chunk.placement_id,
-                chunk.cell_x,
-                chunk.cell_y,
-                chunk.columns,
-                chunk.rows,
-                chunk.source_x,
-                chunk.source_y,
-                chunk.source_width,
-                chunk.source_height,
-                chunk.z_index
-            )
-        })
-    }));
-    summary.extend(bundle.placeholder_renders.iter().filter_map(|render| {
-        mixed_asset_ids.contains(&render.image_id).then(|| {
-            let min_x = render.cells.iter().map(|cell| cell.cell_x).min();
-            let max_x = render.cells.iter().map(|cell| cell.cell_x).max();
-            let min_y = render.cells.iter().map(|cell| cell.cell_y).min();
-            let max_y = render.cells.iter().map(|cell| cell.cell_y).max();
-            let bbox = match (min_x, min_y, max_x, max_y) {
-                (Some(min_x), Some(min_y), Some(max_x), Some(max_y)) => {
-                    format!(" bbox ({min_x},{min_y})-({max_x},{max_y})")
-                },
-                _ => " bbox <empty>".to_string(),
-            };
-            format!(
-                "placeholder {}:{:?} cells={} grid {}x{} src ({},{}) {}x{}{}",
-                render.image_id,
-                render.placement_id,
-                render.cells.len(),
-                render.columns,
-                render.rows,
-                render.source_x,
-                render.source_y,
-                render.source_width,
-                render.source_height,
-                bbox
-            )
-        })
-    }));
-    summary
-}
 use crate::panes::kitty::{KittyApcEffect, KittyImageInsertion, KittyImageState};
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use std::cell::RefCell;
@@ -981,14 +917,6 @@ impl PaneImageScene {
             explicit_chunks,
             placeholder_renders,
         };
-        let mixed_asset_ids = mixed_kitty_asset_ids(&bundle);
-        if !mixed_asset_ids.is_empty() {
-            log::warn!(
-                "visible mixed kitty scene for assets {:?}: {:?}",
-                mixed_asset_ids,
-                kitty_render_bundle_summary(&bundle, &mixed_asset_ids)
-            );
-        }
         bundle
     }
 
