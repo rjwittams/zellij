@@ -385,6 +385,18 @@ impl Output {
             last_rendered_kitty_placeholder_renders,
         );
     }
+    pub fn set_last_rendered_kitty_state(
+        &mut self,
+        last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
+        last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
+        resident_kitty_asset_generations: HashMap<ClientId, HashMap<u32, u64>>,
+    ) {
+        self.image_output.set_last_rendered_kitty_state(
+            last_rendered_kitty_chunks,
+            last_rendered_kitty_placeholder_renders,
+            resident_kitty_asset_generations,
+        );
+    }
     pub fn take_last_rendered_kitty_chunks(
         &mut self,
     ) -> (
@@ -392,6 +404,15 @@ impl Output {
         HashMap<ClientId, Vec<KittyPlaceholderRender>>,
     ) {
         self.image_output.take_last_rendered_kitty_chunks()
+    }
+    pub fn take_last_rendered_kitty_state(
+        &mut self,
+    ) -> (
+        HashMap<ClientId, Vec<KittyImageChunk>>,
+        HashMap<ClientId, Vec<KittyPlaceholderRender>>,
+        HashMap<ClientId, HashMap<u32, u64>>,
+    ) {
+        self.image_output.take_last_rendered_kitty_state()
     }
     pub fn add_clients(
         &mut self,
@@ -444,6 +465,7 @@ impl Output {
         vte_instruction: &str,
     ) {
         for client_id in client_ids {
+            self.client_character_chunks.entry(client_id).or_default();
             let entry = self
                 .post_vte_instructions
                 .entry(client_id)
@@ -457,6 +479,7 @@ impl Output {
         vte_instruction: &str,
     ) {
         for client_id in client_ids {
+            self.client_character_chunks.entry(client_id).or_default();
             let entry = self
                 .pre_vte_instructions
                 .entry(client_id)
@@ -469,6 +492,7 @@ impl Output {
         client_id: ClientId,
         vte_instruction: &str,
     ) {
+        self.client_character_chunks.entry(client_id).or_default();
         let entry = self
             .post_vte_instructions
             .entry(client_id)
@@ -480,6 +504,7 @@ impl Output {
         client_id: ClientId,
         vte_instruction: &str,
     ) {
+        self.client_character_chunks.entry(client_id).or_default();
         let entry = self
             .pre_vte_instructions
             .entry(client_id)
@@ -492,6 +517,7 @@ impl Output {
         pane_image_output: PaneImageRenderOutput,
         z_index: Option<usize>,
     ) {
+        self.client_character_chunks.entry(client_id).or_default();
         self.image_output.add_pane_image_output_to_client(
             client_id,
             pane_image_output,

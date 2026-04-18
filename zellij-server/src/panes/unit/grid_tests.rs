@@ -1,10 +1,12 @@
 use super::super::Grid;
+use crate::output::Output;
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::grid::SixelImageStore;
 use crate::output::KittyImageData;
 use crate::panes::link_handler::LinkHandler;
 use insta::assert_snapshot;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use vte;
 use zellij_utils::{
@@ -5199,6 +5201,53 @@ fn kitty_virtual_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u
     .into_bytes()
 }
 
+fn kitty_virtual_rgba_with_placement(
+    image_id: u32,
+    placement_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id},p={placement_id};AAAAAAAAAAA=\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_virtual_rgba_with_placement_payload(
+    image_id: u32,
+    placement_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+    payload_b64: &str,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id},p={placement_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_retransmit_rgba(image_id: u32, width: u32, height: u32) -> Vec<u8> {
+    format!("\u{1b}_Ga=t,f=32,s={width},v={height},i={image_id};AAAAAA==\u{1b}\\").into_bytes()
+}
+
+fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u32) -> Vec<u8> {
+    format!("\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
+}
+
+fn placeholder_virtual_placement(
+    image_id: u32,
+    placement_id: u32,
+    cols: u32,
+    rows: u32,
+) -> Vec<u8> {
+    format!("\u{1b}_Ga=p,U=1,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\")
+        .into_bytes()
+}
+
 fn kitty_placeholder_text(image_id: u32) -> Vec<u8> {
     let image_id_b = image_id & 0xFF;
     let placeholder = '\u{10EEEE}';
@@ -5239,6 +5288,42 @@ fn placeholder_rgba_text(image_id: u32, cols: usize, rows: usize) -> Vec<u8> {
     output.into_bytes()
 }
 
+fn placeholder_rgba_text_with_placement(
+    image_id: u32,
+    placement_id: u32,
+    cols: usize,
+    rows: usize,
+) -> Vec<u8> {
+    let image_low = image_id & 0x00FF_FFFF;
+    let image_r = (image_low >> 16) & 0xFF;
+    let image_g = (image_low >> 8) & 0xFF;
+    let image_b = image_low & 0xFF;
+    let placement_low = placement_id & 0x00FF_FFFF;
+    let placement_r = (placement_low >> 16) & 0xFF;
+    let placement_g = (placement_low >> 8) & 0xFF;
+    let placement_b = placement_low & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    let diacritics = [
+        '\u{305}', '\u{30D}', '\u{30E}', '\u{310}', '\u{312}', '\u{33D}', '\u{33E}', '\u{33F}',
+        '\u{346}', '\u{34A}', '\u{34B}', '\u{34C}', '\u{350}', '\u{351}',
+    ];
+    let mut output = String::new();
+    for row in 0..rows {
+        output.push_str(&format!(
+            "\u{1b}[38;2;{image_r};{image_g};{image_b}m\u{1b}[58;2;{placement_r};{placement_g};{placement_b}m"
+        ));
+        let row_diacritic = diacritics[row];
+        for col in 0..cols {
+            let col_diacritic = diacritics[col];
+            output.push(placeholder);
+            output.push(row_diacritic);
+            output.push(col_diacritic);
+        }
+        output.push_str("\u{1b}[39m\u{1b}[59m");
+    }
+    output.into_bytes()
+}
+
 fn create_grid_with_size_and_raw(rows: usize, cols: usize, content: &[u8]) -> Grid {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
@@ -5260,6 +5345,46 @@ fn create_grid_with_size_and_raw(rows: usize, cols: usize, content: &[u8]) -> Gr
     );
     vte_parser.advance(&mut grid, &content);
     grid
+}
+
+fn create_grid_with_shared_stores(
+    rows: usize,
+    cols: usize,
+) -> (
+    Grid,
+    Rc<RefCell<SixelImageStore>>,
+    Rc<RefCell<KittyAssetStore>>,
+    Rc<RefCell<Option<SizeInPixels>>>,
+) {
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+    let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
+        width: 10,
+        height: 20,
+    })));
+    let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
+    let grid = Grid::new_with_kitty_asset_store(
+        rows,
+        cols,
+        Rc::new(RefCell::new(Palette::default())),
+        terminal_emulator_color_codes,
+        Rc::new(RefCell::new(LinkHandler::new())),
+        character_cell_size.clone(),
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+        Style::default(),
+        false,
+        true,
+        true,
+        true,
+        false,
+    );
+    (
+        grid,
+        sixel_image_store,
+        kitty_asset_store,
+        character_cell_size,
+    )
 }
 
 fn feed_bytes(grid: &mut Grid, bytes: &[u8]) {
@@ -5419,6 +5544,408 @@ fn kitty_images_follow_clear_reset_and_alt_screen_lifecycle() {
 
     grid.reset_terminal_state();
     assert!(grid.visible_kitty_image_chunks(0, 0).is_empty());
+}
+
+#[test]
+fn kitty_retransmit_without_new_placement_marks_grid_for_rerender() {
+    let mut grid = create_grid_with_size_and_raw(5, 10, &kitty_explicit_rgba(21, 1, 1, 1, 1));
+    grid.should_render = false;
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(21, 1, 1));
+
+    assert!(
+        grid.should_render,
+        "retransmitting bytes for an existing kitty image id should mark the grid dirty"
+    );
+}
+
+#[test]
+fn kitty_retransmit_clears_existing_placements_until_recreated() {
+    let mut grid = create_grid_with_size_and_raw(
+        6,
+        20,
+        &kitty_virtual_rgba_with_placement(22, 1, 16, 8, 4, 2),
+    );
+    feed_bytes(&mut grid, &placeholder_rgba_text_with_placement(22, 1, 4, 2));
+    feed_bytes(&mut grid, &kitty_display_placement(22, 2, 4, 2));
+
+    assert_eq!(grid.visible_kitty_placeholder_renders(0, 0).len(), 1);
+    assert_eq!(grid.visible_kitty_image_chunks(0, 0).len(), 1);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(22, 16, 8));
+
+    assert!(
+        grid.visible_kitty_placeholder_renders(0, 0).is_empty(),
+        "retransmitting a kitty asset should remove existing placeholder placements until recreated"
+    );
+    assert!(
+        grid.visible_kitty_image_chunks(0, 0).is_empty(),
+        "retransmitting a kitty asset should remove existing explicit placements until recreated"
+    );
+}
+
+#[test]
+fn kitty_retransmit_clearing_placeholder_marks_underlying_rows_dirty_for_text_repaint() {
+    let mut grid = create_grid_with_size_and_raw(
+        6,
+        20,
+        &kitty_virtual_rgba_with_placement(25, 1, 16, 8, 4, 2),
+    );
+    feed_bytes(&mut grid, &placeholder_rgba_text_with_placement(25, 1, 4, 2));
+
+    let initial_render = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected initial placeholder render");
+    let expected_rows: Vec<_> = initial_render
+        .image_output
+        .kitty_scene
+        .placeholder_renders
+        .iter()
+        .flat_map(|render| render.cells.iter().map(|cell| cell.cell_y))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(25, 16, 8));
+
+    let render_output = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected render output after placeholder removal");
+
+    let changed_rows: Vec<_> = render_output.character_chunks.iter().map(|chunk| chunk.y).collect();
+    assert!(
+        changed_rows == expected_rows,
+        "clearing placeholder-backed placements should force character repaint only for the affected rows, got {changed_rows:?}"
+    );
+    assert!(
+        render_output
+            .image_output
+            .kitty_scene
+            .placeholder_renders
+            .is_empty(),
+        "placeholder render bundle should be empty after retransmit clears the placement"
+    );
+}
+
+#[test]
+fn kitty_retransmit_then_recreate_restores_shared_placeholder_and_explicit_placements() {
+    let mut grid = create_grid_with_size_and_raw(
+        6,
+        20,
+        &kitty_virtual_rgba_with_placement(23, 1, 16, 8, 4, 2),
+    );
+    feed_bytes(&mut grid, &placeholder_rgba_text_with_placement(23, 1, 4, 2));
+    feed_bytes(&mut grid, &kitty_display_placement(23, 2, 4, 2));
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(23, 16, 8));
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement(23, 1, 16, 8, 4, 2),
+    );
+    feed_bytes(&mut grid, &placeholder_rgba_text_with_placement(23, 1, 4, 2));
+    feed_bytes(&mut grid, &kitty_display_placement(23, 2, 4, 2));
+
+    let placeholder_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    let explicit_chunks = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(placeholder_renders.len(), 1);
+    assert_eq!(explicit_chunks.len(), 1);
+    assert_eq!(placeholder_renders[0].placement_id, Some(1));
+    assert_eq!(explicit_chunks[0].placement_id, Some(2));
+}
+
+#[test]
+fn kitty_retransmit_then_recreate_emits_both_recreated_placements_to_output() {
+    let (mut grid, sixel_image_store, kitty_asset_store, character_cell_size) =
+        create_grid_with_shared_stores(6, 20);
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement(24, 1, 16, 8, 4, 2),
+    );
+    feed_bytes(&mut grid, &placeholder_rgba_text_with_placement(24, 1, 4, 2));
+    feed_bytes(&mut grid, &kitty_display_placement(24, 2, 4, 2));
+
+    let mut output = Output::new_with_kitty_asset_store(
+        sixel_image_store,
+        kitty_asset_store,
+        character_cell_size,
+        true,
+        true,
+    );
+    let client_ids = HashSet::from([1]);
+    output.add_clients(&client_ids, Rc::new(RefCell::new(LinkHandler::new())), None);
+
+    let first_render = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected initial render");
+    output
+        .add_character_chunks_to_client(1, first_render.character_chunks, None)
+        .unwrap();
+    output.add_pane_image_output_to_client(1, first_render.image_output, None);
+    let _ = output.serialize().unwrap();
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(24, 16, 8));
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement_payload(24, 1, 16, 8, 4, 2, "AAAAAA=="),
+    );
+    feed_bytes(&mut grid, &placeholder_rgba_text_with_placement(24, 1, 4, 2));
+    feed_bytes(&mut grid, &kitty_display_placement(24, 2, 4, 2));
+
+    let second_render = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected recreate render");
+    let recreated_image_id = second_render
+        .image_output
+        .kitty_scene
+        .explicit_chunks
+        .first()
+        .map(|chunk| chunk.image_id)
+        .or_else(|| {
+            second_render
+                .image_output
+                .kitty_scene
+                .placeholder_renders
+                .first()
+                .map(|render| render.image_id)
+        })
+        .expect("expected recreated kitty scene to contain an internal image id");
+    output
+        .add_character_chunks_to_client(1, second_render.character_chunks, None)
+        .unwrap();
+    output.add_pane_image_output_to_client(1, second_render.image_output, None);
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("\u{1b}_Ga=t"),
+        "recreate path should retransmit the kitty asset bytes"
+    );
+    assert!(
+        client_output.contains(&format!("\x1b_Ga=p,U=1,i={recreated_image_id},p=1")),
+        "recreate path should emit the placeholder placement again"
+    );
+    assert!(
+        client_output.contains(&format!("\x1b_Ga=p,i={recreated_image_id},p=2")),
+        "recreate path should emit the explicit placement again"
+    );
+}
+
+#[test]
+fn kitty_retransmit_then_recreate_emits_updated_asset_payload_to_output() {
+    let (mut grid, sixel_image_store, kitty_asset_store, character_cell_size) =
+        create_grid_with_shared_stores(6, 20);
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement_payload(26, 1, 16, 8, 4, 2, "AAAAAAAAAAA="),
+    );
+    feed_bytes(&mut grid, &placeholder_rgba_text_with_placement(26, 1, 4, 2));
+    feed_bytes(&mut grid, &kitty_display_placement(26, 2, 4, 2));
+
+    let mut output = Output::new_with_kitty_asset_store(
+        sixel_image_store,
+        kitty_asset_store,
+        character_cell_size,
+        true,
+        true,
+    );
+    let client_ids = HashSet::from([1]);
+    output.add_clients(&client_ids, Rc::new(RefCell::new(LinkHandler::new())), None);
+
+    let first_render = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected initial render");
+    output
+        .add_character_chunks_to_client(1, first_render.character_chunks, None)
+        .unwrap();
+    output.add_pane_image_output_to_client(1, first_render.image_output, None);
+    let initial_serialized = output.serialize().unwrap();
+    let initial_client_output = initial_serialized.get(&1).unwrap();
+    assert!(
+        initial_client_output.contains("AAAAAAAAAAA="),
+        "initial frame should contain the original kitty asset payload"
+    );
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(26, 16, 8));
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement_payload(26, 1, 16, 8, 4, 2, "/////w=="),
+    );
+    feed_bytes(&mut grid, &placeholder_rgba_text_with_placement(26, 1, 4, 2));
+    feed_bytes(&mut grid, &kitty_display_placement(26, 2, 4, 2));
+
+    let second_render = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected recreate render");
+    output
+        .add_character_chunks_to_client(1, second_render.character_chunks, None)
+        .unwrap();
+    output.add_pane_image_output_to_client(1, second_render.image_output, None);
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("/////w=="),
+        "recreate path should emit the updated kitty asset payload"
+    );
+    assert!(
+        !client_output.contains("AAAAAAAAAAA="),
+        "recreate path should not re-emit the stale initial kitty asset payload"
+    );
+}
+
+#[test]
+fn kitty_stage11_smoke_sequence_emits_updated_payloads_for_both_recreate_styles() {
+    let (mut grid, sixel_image_store, kitty_asset_store, character_cell_size) =
+        create_grid_with_shared_stores(24, 80);
+    let separate_image_id = 122;
+    let combined_image_id = 123;
+    let initial_payload = "AAAAAAAAAAA=";
+    let updated_payload = "/////w==";
+
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement_payload(
+            separate_image_id,
+            1,
+            48,
+            32,
+            10,
+            4,
+            initial_payload,
+        ),
+    );
+    feed_bytes(
+        &mut grid,
+        &placeholder_rgba_text_with_placement(separate_image_id, 1, 10, 4),
+    );
+    feed_bytes(
+        &mut grid,
+        &kitty_display_placement(separate_image_id, 2, 16, 6),
+    );
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement_payload(
+            combined_image_id,
+            1,
+            48,
+            32,
+            10,
+            4,
+            initial_payload,
+        ),
+    );
+    feed_bytes(
+        &mut grid,
+        &placeholder_rgba_text_with_placement(combined_image_id, 1, 10, 4),
+    );
+    feed_bytes(
+        &mut grid,
+        &kitty_display_placement(combined_image_id, 2, 16, 6),
+    );
+
+    let mut output = Output::new_with_kitty_asset_store(
+        sixel_image_store,
+        kitty_asset_store,
+        character_cell_size,
+        true,
+        true,
+    );
+    let client_ids = HashSet::from([1]);
+    output.add_clients(&client_ids, Rc::new(RefCell::new(LinkHandler::new())), None);
+
+    let first_render = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected initial render");
+    output
+        .add_character_chunks_to_client(1, first_render.character_chunks, None)
+        .unwrap();
+    output.add_pane_image_output_to_client(1, first_render.image_output, None);
+    let first_serialized = output.serialize().unwrap();
+    let first_client_output = first_serialized.get(&1).unwrap();
+    assert!(
+        first_client_output.contains(initial_payload),
+        "initial stage-11 frame should transmit the blue payload"
+    );
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(separate_image_id, 48, 32));
+    feed_bytes(
+        &mut grid,
+        &placeholder_virtual_placement(separate_image_id, 1, 10, 4),
+    );
+    feed_bytes(
+        &mut grid,
+        &placeholder_rgba_text_with_placement(separate_image_id, 1, 10, 4),
+    );
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement_payload(
+            combined_image_id,
+            1,
+            48,
+            32,
+            10,
+            4,
+            updated_payload,
+        ),
+    );
+    feed_bytes(
+        &mut grid,
+        &placeholder_rgba_text_with_placement(combined_image_id, 1, 10, 4),
+    );
+    feed_bytes(
+        &mut grid,
+        &kitty_display_placement(separate_image_id, 2, 16, 6),
+    );
+    feed_bytes(
+        &mut grid,
+        &kitty_display_placement(combined_image_id, 2, 16, 6),
+    );
+
+    let second_render = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected stage-11 replace render");
+    let recreated_image_ids: Vec<_> = second_render
+        .image_output
+        .kitty_scene
+        .placeholder_renders
+        .iter()
+        .map(|render| render.image_id)
+        .collect();
+    assert_eq!(
+        recreated_image_ids.len(),
+        2,
+        "expected two recreated placeholder renders in stage-11 replace frame"
+    );
+    output
+        .add_character_chunks_to_client(1, second_render.character_chunks, None)
+        .unwrap();
+    output.add_pane_image_output_to_client(1, second_render.image_output, None);
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains(updated_payload),
+        "stage-11 replace frame should transmit the updated green payload"
+    );
+    assert!(
+        client_output.contains("\x1b_Ga=p,U=1,i="),
+        "stage-11 replace frame should recreate a placeholder via separate virtual placement; output was: {client_output:?}"
+    );
+    assert!(
+        client_output.matches("\x1b_Ga=p,i=").count() >= 2,
+        "stage-11 replace frame should recreate both explicit placements"
+    );
+    assert!(
+        client_output.matches("\x1b_Ga=t,i=").count() >= 2,
+        "stage-11 replace frame should retransmit both recreated assets"
+    );
 }
 
 #[test]

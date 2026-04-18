@@ -130,7 +130,8 @@ use crate::panes::kitty::{
 };
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::pane_image_scene::{
-    FlowAnchor, ImageContentFlow, KittyPlaceholderCell, KittyRenderBundle, PaneImageScene,
+    FlowAnchor, ImageContentFlow, ImageSceneEffect, KittyPlaceholderCell, KittyRenderBundle,
+    PaneImageScene,
 };
 use crate::panes::search::SearchResult;
 use crate::panes::terminal_character::{
@@ -1148,7 +1149,12 @@ impl Grid {
         }
     }
 
-    fn resolve_flow_anchor(&self, anchor: &FlowAnchor) -> Option<(usize, usize)> {
+    fn resolve_flow_anchor_in_buffers(
+        anchor: &FlowAnchor,
+        lines_above: &VecDeque<Row>,
+        viewport: &VecDeque<Row>,
+        width: usize,
+    ) -> Option<(usize, usize)> {
         match anchor {
             FlowAnchor::LogicalRow {
                 logical_row,
@@ -1157,24 +1163,32 @@ impl Grid {
             FlowAnchor::CanonicalLine {
                 canonical_line_index,
                 offset_in_line,
-            } => self.resolve_canonical_line_anchor(*canonical_line_index, *offset_in_line),
+            } => Self::resolve_canonical_line_anchor_in_buffers(
+                *canonical_line_index,
+                *offset_in_line,
+                lines_above,
+                viewport,
+                width,
+            ),
         }
     }
 
-    fn resolve_canonical_line_anchor(
-        &self,
+    fn resolve_flow_anchor(&self, anchor: &FlowAnchor) -> Option<(usize, usize)> {
+        Self::resolve_flow_anchor_in_buffers(anchor, &self.lines_above, &self.viewport, self.width)
+    }
+
+    fn resolve_canonical_line_anchor_in_buffers(
         canonical_line_index: usize,
         offset_in_line: usize,
+        lines_above: &VecDeque<Row>,
+        viewport: &VecDeque<Row>,
+        width: usize,
     ) -> Option<(usize, usize)> {
-        if self.width == 0 {
+        if width == 0 {
             return None;
         }
         let mut canonical_lines_traversed = 0;
-        let all_rows: Vec<&Row> = self
-            .lines_above
-            .iter()
-            .chain(self.viewport.iter())
-            .collect();
+        let all_rows: Vec<&Row> = lines_above.iter().chain(viewport.iter()).collect();
         let mut row_index = 0;
         while row_index < all_rows.len() {
             let row = all_rows.get(row_index)?;
@@ -1187,14 +1201,14 @@ impl Grid {
                     {
                         display_row_count += 1;
                     }
-                    let requested_row_in_line = offset_in_line / self.width;
+                    let requested_row_in_line = offset_in_line / width;
                     let clamped_row_in_line =
                         requested_row_in_line.min(display_row_count.saturating_sub(1));
                     let row_in_line = canonical_row_start + clamped_row_in_line;
                     let column = if clamped_row_in_line < requested_row_in_line {
-                        all_rows[row_in_line].width().min(self.width)
+                        all_rows[row_in_line].width().min(width)
                     } else {
-                        offset_in_line % self.width
+                        offset_in_line % width
                     };
                     return Some((row_in_line, column));
                 }
@@ -3728,20 +3742,41 @@ impl Perform for Grid {
                     return;
                 }
                 let character_cell_size = *self.character_cell_size.borrow();
+                let lines_above = &self.lines_above;
+                let viewport = &self.viewport;
+                let width = self.width;
                 if let Some(image_effect) = self.image_scene.handle_kitty_apc(
                     &apc_bytes,
                     self.full_cursor_flow_anchor(),
                     self.cursor.x,
                     self.lines_above.len() + self.cursor.y,
                     character_cell_size,
+                    self.lines_above.len(),
+                    self.height,
+                    |anchor| Self::resolve_flow_anchor_in_buffers(anchor, lines_above, viewport, width),
                 ) {
-                    match image_effect.placement.content_flow {
-                        ImageContentFlow::NoCursorMovement => {},
-                        ImageContentFlow::MoveCursorByCells { .. } => {
-                            for _ in 0..image_effect.placement.rows() {
-                                self.add_canonical_line();
+                    match image_effect {
+                        ImageSceneEffect::Placement(image_effect) => {
+                            for row in image_effect.cleared_placeholder_rows {
+                                self.output_buffer.update_line(row);
+                            }
+                            match image_effect.placement.content_flow {
+                                ImageContentFlow::NoCursorMovement => {},
+                                ImageContentFlow::MoveCursorByCells { .. } => {
+                                    for _ in 0..image_effect.placement.rows() {
+                                        self.add_canonical_line();
+                                    }
+                                }
                             }
                         },
+                        ImageSceneEffect::AssetReplaced {
+                            cleared_placeholder_rows,
+                        } => {
+                            for row in cleared_placeholder_rows {
+                                self.output_buffer.update_line(row);
+                            }
+                        },
+                        ImageSceneEffect::AssetStored => {},
                     }
                     self.mark_for_rerender();
                 }

@@ -104,6 +104,10 @@ fn create_kitty_image_data(image_id: u32) -> KittyImageData {
     }
 }
 
+fn create_kitty_generation(_image_id: u32) -> u64 {
+    1
+}
+
 fn create_kitty_placeholder_render(image_id: u32) -> crate::output::KittyPlaceholderRender {
     crate::output::KittyPlaceholderRender {
         image_id,
@@ -161,7 +165,7 @@ fn create_kitty_scene_state(placements: Vec<PlannedKittyPlacement>) -> KittyScen
     let mut scene = KittySceneState::default();
     for placement in placements {
         let image_id = placement.key().image_id;
-        scene.insert_asset(image_id, create_kitty_image_data(image_id));
+        scene.insert_asset(image_id, create_kitty_generation(image_id));
         scene.insert_placement(placement);
     }
     scene
@@ -385,14 +389,9 @@ fn test_kitty_diff_deletes_removed_placement() {
 #[test]
 fn test_kitty_diff_places_resident_asset_without_retransmit() {
     let mut assumed = KittySceneState::default();
-    assumed.resident_assets.insert(
-        1,
-        KittyImageData::Png {
-            data: vec![1, 2, 3, 4],
-            width: 1,
-            height: 1,
-        },
-    );
+    assumed
+        .resident_asset_generations
+        .insert(1, create_kitty_generation(1));
     let desired = create_kitty_scene_state(vec![create_kitty_diff_explicit_placement(1, 10, 2, 2)]);
 
     let plan = plan_kitty_scene(&assumed, &desired);
@@ -428,7 +427,7 @@ fn test_kitty_diff_retransmits_missing_asset_before_place() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 1,
-                image_data: create_kitty_image_data(1),
+                generation: create_kitty_generation(1),
             }],
             placement_ops: vec![KittyPlacementOp::PlaceExplicit {
                 key: KittyPlacementKey {
@@ -505,12 +504,7 @@ fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
             chunk: changed_chunk_two.clone(),
         },
     ]);
-    let changed_asset = KittyImageData::Png {
-        data: vec![9, 9, 9, 9],
-        width: 1,
-        height: 1,
-    };
-    desired.insert_asset(1, changed_asset.clone());
+    desired.insert_asset(1, create_kitty_generation(1) + 1);
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
@@ -519,7 +513,7 @@ fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 1,
-                image_data: changed_asset,
+                generation: create_kitty_generation(1) + 1,
             }],
             placement_ops: vec![
                 KittyPlacementOp::Delete {
@@ -579,12 +573,7 @@ fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
             render: changed_render.clone(),
         },
     ]);
-    let changed_asset = KittyImageData::Png {
-        data: vec![8, 8, 8, 8],
-        width: 1,
-        height: 1,
-    };
-    desired.insert_asset(1, changed_asset.clone());
+    desired.insert_asset(1, create_kitty_generation(1) + 1);
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
@@ -593,7 +582,7 @@ fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 1,
-                image_data: changed_asset,
+                generation: create_kitty_generation(1) + 1,
             }],
             placement_ops: vec![
                 KittyPlacementOp::Delete {
@@ -857,11 +846,21 @@ fn test_image_output_asset_change_invalidates_all_referencing_placements() {
     let mut other_asset_chunk = create_kitty_chunk(2, 2, 2);
     other_asset_chunk.placement_id = Some(20);
     other_asset_chunk.cell_x = 10;
-    let changed_first_chunk = first_chunk.clone();
-    let changed_second_chunk = second_chunk.clone();
-
     let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
         create_test_output_with_state();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![
+            first_chunk.clone(),
+            second_chunk.clone(),
+            other_asset_chunk.clone(),
+        ]),
+        None,
+    );
+    let _ = output.serialize().unwrap();
+
     seed_test_kitty_asset(
         kitty_asset_store,
         1,
@@ -871,20 +870,11 @@ fn test_image_output_asset_change_invalidates_all_referencing_placements() {
             height: 1,
         },
     );
-    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
-    output.add_clients(&client_ids, link_handler, None);
-    output.set_last_rendered_kitty_chunks(
-        HashMap::from([(
-            1,
-            vec![first_chunk, second_chunk, other_asset_chunk.clone()],
-        )]),
-        HashMap::new(),
-    );
     output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![
-            changed_first_chunk,
-            changed_second_chunk,
+            first_chunk,
+            second_chunk,
             other_asset_chunk,
         ]),
         None,
@@ -893,8 +883,79 @@ fn test_image_output_asset_change_invalidates_all_referencing_placements() {
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
     assert!(
+        client_output.contains("a=t"),
+        "asset changes should retransmit updated kitty image bytes"
+    );
+    assert!(
         !client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
         "asset changes should not force a kitty delete-all when per-asset updates suffice"
+    );
+}
+
+#[test]
+fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_placements() {
+    let client_ids = create_test_clients(1);
+    let mut explicit_chunk = create_kitty_chunk(1, 2, 2);
+    explicit_chunk.placement_id = Some(10);
+    explicit_chunk.cell_x = 5;
+    let mut placeholder_render = create_kitty_placeholder_render(1);
+    placeholder_render.placement_id = Some(20);
+
+    let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.add_pane_image_output_to_client(
+        1,
+        PaneImageRenderOutput {
+            kitty_scene: crate::output::KittyRenderBundle {
+                explicit_chunks: vec![explicit_chunk.clone()],
+                placeholder_renders: vec![placeholder_render.clone()],
+            },
+            ..Default::default()
+        },
+        None,
+    );
+    let _ = output.serialize().unwrap();
+
+    seed_test_kitty_asset(
+        kitty_asset_store,
+        1,
+        KittyImageData::Png {
+            data: vec![7, 7, 7, 7],
+            width: 1,
+            height: 1,
+        },
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        PaneImageRenderOutput {
+            kitty_scene: crate::output::KittyRenderBundle {
+                explicit_chunks: vec![explicit_chunk],
+                placeholder_renders: vec![placeholder_render],
+            },
+            ..Default::default()
+        },
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("\u{1b}_Ga=d,d=i,i=1,p=10\u{1b}\\"),
+        "shared asset replacement should delete the explicit placement before recreating it"
+    );
+    assert!(
+        client_output.contains("\u{1b}_Ga=d,d=i,i=1,p=20\u{1b}\\"),
+        "shared asset replacement should delete the placeholder placement before recreating it"
+    );
+    assert!(
+        client_output.contains("\u{1b}_Ga=p,i=1,p=10"),
+        "shared asset replacement should recreate the explicit placement"
+    );
+    assert!(
+        client_output.contains("\u{1b}_Ga=p,U=1,i=1,p=20"),
+        "shared asset replacement should recreate the placeholder placement"
     );
 }
 
@@ -1053,6 +1114,42 @@ fn test_kitty_diff_serialization_full_reset_fallback_preserves_existing_behavior
 }
 
 #[test]
+fn test_kitty_full_reset_assigns_distinct_synthesized_ids_across_modes() {
+    let client_ids = create_test_clients(1);
+    let mut chunk = create_kitty_chunk(1, 2, 2);
+    chunk.placement_id = None;
+    let mut render = create_kitty_placeholder_render(1);
+    render.placement_id = None;
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.add_pane_image_output_to_client(
+        1,
+        PaneImageRenderOutput {
+            kitty_scene: crate::panes::pane_image_scene::KittyRenderBundle {
+                explicit_chunks: vec![chunk],
+                placeholder_renders: vec![render],
+            },
+            ..Default::default()
+        },
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+
+    assert!(
+        client_output.contains("a=p,i=1,p=1"),
+        "expected synthesized placement id for the explicit placement"
+    );
+    assert!(
+        client_output.contains("a=p,U=1,i=1,p=2"),
+        "expected the placeholder placement to receive a distinct synthesized id"
+    );
+}
+
+#[test]
 fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes() {
     let client_ids = create_test_clients(1);
     let mut base_chunk = create_kitty_chunk(77, 2, 2);
@@ -1207,7 +1304,7 @@ fn test_prepare_render_body_derives_kitty_explicit_fragments() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 91,
-                image_data: create_kitty_image_data(91),
+                generation: 1,
             }],
             placement_ops: vec![KittyPlacementOp::PlaceExplicit {
                 key: KittyPlacementKey {
@@ -1241,7 +1338,7 @@ fn test_prepare_render_body_derives_kitty_placeholder_fragments() {
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
                 image_id: 92,
-                image_data: create_kitty_image_data(92),
+                generation: 1,
             }],
             placement_ops: vec![KittyPlacementOp::PlacePlaceholder {
                 key: KittyPlacementKey {

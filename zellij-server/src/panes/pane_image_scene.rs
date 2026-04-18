@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use zellij_utils::pane_size::SizeInPixels;
 
@@ -65,7 +65,72 @@ impl KittyDamageRedraw {
         })
     }
 }
-use crate::panes::kitty::{KittyImageInsertion, KittyImageState};
+
+fn mixed_kitty_asset_ids(bundle: &KittyRenderBundle) -> Vec<u32> {
+    let explicit_asset_ids: BTreeSet<u32> =
+        bundle.explicit_chunks.iter().map(|chunk| chunk.image_id).collect();
+    let placeholder_asset_ids: BTreeSet<u32> = bundle
+        .placeholder_renders
+        .iter()
+        .map(|render| render.image_id)
+        .collect();
+    explicit_asset_ids
+        .intersection(&placeholder_asset_ids)
+        .copied()
+        .collect()
+}
+
+fn kitty_render_bundle_summary(bundle: &KittyRenderBundle, mixed_asset_ids: &[u32]) -> Vec<String> {
+    let mixed_asset_ids: BTreeSet<u32> = mixed_asset_ids.iter().copied().collect();
+    let mut summary = vec![];
+    summary.extend(bundle.explicit_chunks.iter().filter_map(|chunk| {
+        mixed_asset_ids.contains(&chunk.image_id).then(|| {
+            format!(
+                "explicit {}:{:?} at ({},{}) cells {}x{} src ({},{}) {}x{} z={}",
+                chunk.image_id,
+                chunk.placement_id,
+                chunk.cell_x,
+                chunk.cell_y,
+                chunk.columns,
+                chunk.rows,
+                chunk.source_x,
+                chunk.source_y,
+                chunk.source_width,
+                chunk.source_height,
+                chunk.z_index
+            )
+        })
+    }));
+    summary.extend(bundle.placeholder_renders.iter().filter_map(|render| {
+        mixed_asset_ids.contains(&render.image_id).then(|| {
+            let min_x = render.cells.iter().map(|cell| cell.cell_x).min();
+            let max_x = render.cells.iter().map(|cell| cell.cell_x).max();
+            let min_y = render.cells.iter().map(|cell| cell.cell_y).min();
+            let max_y = render.cells.iter().map(|cell| cell.cell_y).max();
+            let bbox = match (min_x, min_y, max_x, max_y) {
+                (Some(min_x), Some(min_y), Some(max_x), Some(max_y)) => {
+                    format!(" bbox ({min_x},{min_y})-({max_x},{max_y})")
+                },
+                _ => " bbox <empty>".to_string(),
+            };
+            format!(
+                "placeholder {}:{:?} cells={} grid {}x{} src ({},{}) {}x{}{}",
+                render.image_id,
+                render.placement_id,
+                render.cells.len(),
+                render.columns,
+                render.rows,
+                render.source_x,
+                render.source_y,
+                render.source_width,
+                render.source_height,
+                bbox
+            )
+        })
+    }));
+    summary
+}
+use crate::panes::kitty::{KittyApcEffect, KittyImageInsertion, KittyImageState};
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -336,6 +401,16 @@ pub fn project_placement_to_viewport(
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ImageInsertionEffect {
     pub placement: ImagePlacement,
+    pub cleared_placeholder_rows: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImageSceneEffect {
+    Placement(ImageInsertionEffect),
+    AssetReplaced {
+        cleared_placeholder_rows: Vec<usize>,
+    },
+    AssetStored,
 }
 
 static NEXT_IMAGE_ASSET_ID: AtomicU64 = AtomicU64::new(1);
@@ -366,6 +441,52 @@ pub struct PaneImageScene {
 }
 
 impl PaneImageScene {
+    fn remove_kitty_asset_placements<F>(
+        &mut self,
+        asset_id: ImageAssetId,
+        scrollback_size_in_lines: usize,
+        viewport_height: usize,
+        resolve_anchor: &F,
+    ) -> Vec<usize>
+    where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
+        let logical_placement_ids_to_remove: Vec<_> = self
+            .placements
+            .iter()
+            .filter_map(|(logical_placement_id, placement)| {
+                (placement.asset_id == asset_id).then_some(*logical_placement_id)
+            })
+            .collect();
+        let mut cleared_placeholder_rows: Vec<_> = self
+            .kitty_placeholder_cells
+            .iter()
+            .filter_map(|placeholder_cell| {
+                if !logical_placement_ids_to_remove
+                    .contains(&placeholder_cell.logical_placement_id)
+                {
+                    return None;
+                }
+                let (logical_row, _column) = resolve_anchor(&placeholder_cell.anchor)?;
+                let viewport_row = logical_row.checked_sub(scrollback_size_in_lines)?;
+                (viewport_row < viewport_height).then_some(viewport_row)
+            })
+            .collect();
+        cleared_placeholder_rows.sort_unstable();
+        cleared_placeholder_rows.dedup();
+        self.placements.retain(|logical_placement_id, _| {
+            !logical_placement_ids_to_remove.contains(logical_placement_id)
+        });
+        self.kitty_placeholder_cells.retain(|placeholder_cell| {
+            !logical_placement_ids_to_remove.contains(&placeholder_cell.logical_placement_id)
+        });
+        self.kitty_logical_placement_ids
+            .retain(|_, logical_placement_id| {
+                !logical_placement_ids_to_remove.contains(logical_placement_id)
+            });
+        cleared_placeholder_rows
+    }
+
     pub fn new(kitty_asset_store: Rc<RefCell<KittyAssetStore>>) -> Self {
         Self {
             kitty: KittyImageState::new(kitty_asset_store),
@@ -385,14 +506,20 @@ impl PaneImageScene {
         (pixel_height as f64 / character_cell_size.height as f64).ceil() as usize
     }
 
-    pub fn handle_kitty_apc(
+    pub fn handle_kitty_apc<F>(
         &mut self,
         apc_bytes: &[u8],
         anchor: FlowAnchor,
         cursor_x: usize,
         scrollback_row: usize,
         character_cell_size: Option<SizeInPixels>,
-    ) -> Option<ImageInsertionEffect> {
+        scrollback_size_in_lines: usize,
+        viewport_height: usize,
+        resolve_anchor: F,
+    ) -> Option<ImageSceneEffect>
+    where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
         self.kitty
             .handle_apc(
                 apc_bytes,
@@ -401,88 +528,117 @@ impl PaneImageScene {
                 scrollback_row,
                 character_cell_size,
             )
-            .map(|insertion: KittyImageInsertion| {
-                let geometry = insertion.geometry;
-                let content_flow = if geometry.rows > 0 {
-                    ImageContentFlow::MoveCursorByCells {
-                        rows: geometry.rows,
+            .map(|effect| match effect {
+                KittyApcEffect::AssetReplaced { asset_id } => {
+                    let cleared_placeholder_rows = self.remove_kitty_asset_placements(
+                        asset_id,
+                        scrollback_size_in_lines,
+                        viewport_height,
+                        &resolve_anchor,
+                    );
+                    ImageSceneEffect::AssetReplaced {
+                        cleared_placeholder_rows,
                     }
-                } else {
-                    ImageContentFlow::NoCursorMovement
-                };
-                let protocol_identity = Some(ProtocolPlacementIdentity::Kitty {
-                    image_id: insertion.protocol_image_id,
-                    placement_id: insertion.protocol_placement_id,
-                });
-                let logical_placement_id = next_logical_placement_id();
-                let flavor = match insertion.placement_mode {
-                    KittyImagePlacementMode::Explicit => {
-                        PlacementFlavor::KittyExplicit(KittyExplicitPlacementFlavor {
-                            occupancy: PlacementOccupancy {
-                                columns: geometry.columns,
-                                rows: geometry.rows,
-                            },
-                            columns_specified: geometry.columns_specified,
-                            rows_specified: geometry.rows_specified,
-                            source_x: geometry.source_x,
-                            source_y: geometry.source_y,
-                            source_width: geometry.source_width,
-                            source_height: geometry.source_height,
-                            z_index: geometry.z_index,
-                            x_offset: geometry.x_offset,
-                            y_offset: geometry.y_offset,
-                        })
-                    },
-                    KittyImagePlacementMode::Placeholder => {
-                        PlacementFlavor::KittyPlaceholder(KittyVirtualPlacementFlavor {
-                            occupancy: PlacementOccupancy {
-                                columns: geometry.columns,
-                                rows: geometry.rows,
-                            },
-                            source_x: geometry.source_x,
-                            source_y: geometry.source_y,
-                            source_width: geometry.source_width,
-                            source_height: geometry.source_height,
-                            x_offset: geometry.x_offset,
-                            y_offset: geometry.y_offset,
-                        })
-                    },
-                };
-                if let Some(kitty_protocol_placement_key) =
-                    protocol_identity
-                        .as_ref()
-                        .and_then(|protocol_identity| match protocol_identity {
-                            ProtocolPlacementIdentity::Kitty {
-                                image_id: Some(image_id),
-                                placement_id,
-                            } => Some(KittyProtocolPlacementKey {
-                                image_id: *image_id,
-                                placement_id: *placement_id,
-                            }),
-                            _ => None,
-                        })
-                {
-                    if let Some(previous_logical_placement_id) = self
-                        .kitty_logical_placement_ids
-                        .insert(kitty_protocol_placement_key, logical_placement_id)
+                },
+                KittyApcEffect::AssetStored => ImageSceneEffect::AssetStored,
+                KittyApcEffect::Placement(insertion) => {
+                    let insertion: KittyImageInsertion = insertion;
+                    let cleared_placeholder_rows = if insertion.replaced_existing_asset {
+                        self.remove_kitty_asset_placements(
+                            insertion.asset_id,
+                            scrollback_size_in_lines,
+                            viewport_height,
+                            &resolve_anchor,
+                        )
+                    } else {
+                        vec![]
+                    };
+                    let geometry = insertion.geometry;
+                    let content_flow = if geometry.rows > 0 {
+                        ImageContentFlow::MoveCursorByCells {
+                            rows: geometry.rows,
+                        }
+                    } else {
+                        ImageContentFlow::NoCursorMovement
+                    };
+                    let protocol_identity = Some(ProtocolPlacementIdentity::Kitty {
+                        image_id: insertion.protocol_image_id,
+                        placement_id: insertion.protocol_placement_id,
+                    });
+                    let logical_placement_id = next_logical_placement_id();
+                    let flavor = match insertion.placement_mode {
+                        KittyImagePlacementMode::Explicit => {
+                            PlacementFlavor::KittyExplicit(KittyExplicitPlacementFlavor {
+                                occupancy: PlacementOccupancy {
+                                    columns: geometry.columns,
+                                    rows: geometry.rows,
+                                },
+                                columns_specified: geometry.columns_specified,
+                                rows_specified: geometry.rows_specified,
+                                source_x: geometry.source_x,
+                                source_y: geometry.source_y,
+                                source_width: geometry.source_width,
+                                source_height: geometry.source_height,
+                                z_index: geometry.z_index,
+                                x_offset: geometry.x_offset,
+                                y_offset: geometry.y_offset,
+                            })
+                        },
+                        KittyImagePlacementMode::Placeholder => {
+                            PlacementFlavor::KittyPlaceholder(KittyVirtualPlacementFlavor {
+                                occupancy: PlacementOccupancy {
+                                    columns: geometry.columns,
+                                    rows: geometry.rows,
+                                },
+                                source_x: geometry.source_x,
+                                source_y: geometry.source_y,
+                                source_width: geometry.source_width,
+                                source_height: geometry.source_height,
+                                x_offset: geometry.x_offset,
+                                y_offset: geometry.y_offset,
+                            })
+                        },
+                    };
+                    if let Some(kitty_protocol_placement_key) =
+                        protocol_identity
+                            .as_ref()
+                            .and_then(|protocol_identity| match protocol_identity {
+                                ProtocolPlacementIdentity::Kitty {
+                                    image_id: Some(image_id),
+                                    placement_id,
+                                } => Some(KittyProtocolPlacementKey {
+                                    image_id: *image_id,
+                                    placement_id: *placement_id,
+                                }),
+                                _ => None,
+                            })
                     {
-                        self.placements.remove(&previous_logical_placement_id);
-                        self.kitty_placeholder_cells.retain(|placeholder_cell| {
-                            placeholder_cell.logical_placement_id != previous_logical_placement_id
-                        });
+                        if let Some(previous_logical_placement_id) = self
+                            .kitty_logical_placement_ids
+                            .insert(kitty_protocol_placement_key, logical_placement_id)
+                        {
+                            self.placements.remove(&previous_logical_placement_id);
+                            self.kitty_placeholder_cells.retain(|placeholder_cell| {
+                                placeholder_cell.logical_placement_id
+                                    != previous_logical_placement_id
+                            });
+                        }
                     }
-                }
-                let placement = ImagePlacement {
-                    logical_placement_id,
-                    asset_id: insertion.asset_id,
-                    protocol_identity,
-                    anchor,
-                    flavor,
-                    content_flow,
-                };
-                self.placements
-                    .insert(logical_placement_id, placement.clone());
-                ImageInsertionEffect { placement }
+                    let placement = ImagePlacement {
+                        logical_placement_id,
+                        asset_id: insertion.asset_id,
+                        protocol_identity,
+                        anchor,
+                        flavor,
+                        content_flow,
+                    };
+                    self.placements
+                        .insert(logical_placement_id, placement.clone());
+                    ImageSceneEffect::Placement(ImageInsertionEffect {
+                        placement,
+                        cleared_placeholder_rows,
+                    })
+                },
             })
     }
 
@@ -821,10 +977,19 @@ impl PaneImageScene {
             });
         }
 
-        KittyRenderBundle {
+        let bundle = KittyRenderBundle {
             explicit_chunks,
             placeholder_renders,
+        };
+        let mixed_asset_ids = mixed_kitty_asset_ids(&bundle);
+        if !mixed_asset_ids.is_empty() {
+            log::warn!(
+                "visible mixed kitty scene for assets {:?}: {:?}",
+                mixed_asset_ids,
+                kitty_render_bundle_summary(&bundle, &mixed_asset_ids)
+            );
         }
+        bundle
     }
 
     pub fn visible_kitty_render_bundle_for_damage_redraw<F>(

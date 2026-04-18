@@ -1,4 +1,4 @@
-use super::{KittyImageChunk, KittyImageData, KittyPlaceholderRender};
+use super::{KittyImageChunk, KittyPlaceholderRender};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -30,7 +30,7 @@ impl PlannedKittyPlacement {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct KittySceneState {
-    pub resident_assets: BTreeMap<u32, KittyImageData>,
+    pub resident_asset_generations: BTreeMap<u32, u64>,
     pub placements: BTreeMap<KittyPlacementKey, PlannedKittyPlacement>,
 }
 
@@ -39,8 +39,8 @@ impl KittySceneState {
         self.placements.insert(placement.key(), placement);
     }
 
-    pub(crate) fn insert_asset(&mut self, image_id: u32, image_data: KittyImageData) {
-        self.resident_assets.insert(image_id, image_data);
+    pub(crate) fn insert_asset(&mut self, image_id: u32, generation: u64) {
+        self.resident_asset_generations.insert(image_id, generation);
     }
 }
 
@@ -48,7 +48,7 @@ impl KittySceneState {
 pub(crate) enum KittyAssetOp {
     EnsureResident {
         image_id: u32,
-        image_data: KittyImageData,
+        generation: u64,
     },
 }
 
@@ -85,11 +85,12 @@ pub(crate) fn plan_kitty_scene(
     desired: &KittySceneState,
 ) -> KittyScenePlan {
     let changed_asset_ids: BTreeSet<u32> = desired
-        .resident_assets
+        .resident_asset_generations
         .iter()
         .filter_map(
-            |(&image_id, desired_data)| match assumed.resident_assets.get(&image_id) {
-                Some(existing_data) if existing_data == desired_data => None,
+            |(&image_id, desired_generation)| match assumed.resident_asset_generations.get(&image_id)
+            {
+                Some(existing_generation) if existing_generation == desired_generation => None,
                 _ => Some(image_id),
             },
         )
@@ -97,14 +98,14 @@ pub(crate) fn plan_kitty_scene(
 
     let mut asset_ops = vec![];
     for image_id in &changed_asset_ids {
-        let image_data = desired
-            .resident_assets
+        let generation = *desired
+            .resident_asset_generations
             .get(image_id)
             .expect("changed asset must exist in desired scene")
-            .clone();
+            ;
         asset_ops.push(KittyAssetOp::EnsureResident {
             image_id: *image_id,
-            image_data,
+            generation,
         });
     }
 

@@ -1469,8 +1469,10 @@ pub(crate) struct Screen {
     host_theme_light_styling: Option<Styling>,
     regular_last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
     regular_last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
+    regular_last_rendered_kitty_asset_generations: HashMap<ClientId, HashMap<u32, u64>>,
     watcher_last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
     watcher_last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
+    watcher_last_rendered_kitty_asset_generations: HashMap<ClientId, HashMap<u32, u64>>,
 }
 
 /// A pending forward waiting to be dispatched once the current in-flight
@@ -1628,8 +1630,10 @@ impl Screen {
             host_theme_light_styling: None,
             regular_last_rendered_kitty_chunks: HashMap::new(),
             regular_last_rendered_kitty_placeholder_renders: HashMap::new(),
+            regular_last_rendered_kitty_asset_generations: HashMap::new(),
             watcher_last_rendered_kitty_chunks: HashMap::new(),
             watcher_last_rendered_kitty_placeholder_renders: HashMap::new(),
+            watcher_last_rendered_kitty_asset_generations: HashMap::new(),
         }
     }
 
@@ -2522,9 +2526,10 @@ impl Screen {
                 self.styled_underlines,
                 self.osc8_hyperlinks,
             );
-            output.set_last_rendered_kitty_chunks(
+            output.set_last_rendered_kitty_state(
                 self.regular_last_rendered_kitty_chunks.clone(),
                 self.regular_last_rendered_kitty_placeholder_renders.clone(),
+                self.regular_last_rendered_kitty_asset_generations.clone(),
             );
 
             let has_ansi_subscribers = self.pane_render_subscribers.values().any(|s| s.ansi);
@@ -2612,7 +2617,8 @@ impl Screen {
                 (
                     self.regular_last_rendered_kitty_chunks,
                     self.regular_last_rendered_kitty_placeholder_renders,
-                ) = output.take_last_rendered_kitty_chunks();
+                    self.regular_last_rendered_kitty_asset_generations,
+                ) = output.take_last_rendered_kitty_state();
                 let _ = self
                     .bus
                     .senders
@@ -2679,7 +2685,7 @@ impl Screen {
                     // For each watcher, clone the output and serialize with size constraints
                     for (watcher_id, watcher_state) in &self.watcher_clients {
                         let mut watcher_specific_output = watcher_output.clone();
-                        watcher_specific_output.set_last_rendered_kitty_chunks(
+                        watcher_specific_output.set_last_rendered_kitty_state(
                             HashMap::from([(
                                 followed_client_id,
                                 self.watcher_last_rendered_kitty_chunks
@@ -2694,6 +2700,13 @@ impl Screen {
                                     .cloned()
                                     .unwrap_or_default(),
                             )]),
+                            HashMap::from([(
+                                followed_client_id,
+                                self.watcher_last_rendered_kitty_asset_generations
+                                    .get(watcher_id)
+                                    .cloned()
+                                    .unwrap_or_default(),
+                            )]),
                         );
 
                         // Serialize this watcher's output with size constraints (cropping and padding handled inside)
@@ -2704,7 +2717,8 @@ impl Screen {
                         let (
                             mut watcher_last_rendered,
                             mut watcher_last_rendered_placeholder_renders,
-                        ) = watcher_specific_output.take_last_rendered_kitty_chunks();
+                            mut watcher_last_rendered_asset_generations,
+                        ) = watcher_specific_output.take_last_rendered_kitty_state();
                         self.watcher_last_rendered_kitty_chunks.insert(
                             *watcher_id,
                             watcher_last_rendered
@@ -2714,6 +2728,12 @@ impl Screen {
                         self.watcher_last_rendered_kitty_placeholder_renders.insert(
                             *watcher_id,
                             watcher_last_rendered_placeholder_renders
+                                .remove(&followed_client_id)
+                                .unwrap_or_default(),
+                        );
+                        self.watcher_last_rendered_kitty_asset_generations.insert(
+                            *watcher_id,
+                            watcher_last_rendered_asset_generations
                                 .remove(&followed_client_id)
                                 .unwrap_or_default(),
                         );

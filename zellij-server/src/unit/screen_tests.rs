@@ -6076,6 +6076,84 @@ fn integration_pty_bytes_not_delivered_when_viewport_unchanged() {
 }
 
 #[test]
+fn screen_stage11_fixture_emits_updated_payloads_for_replace_burst() {
+    let size = Size { cols: 120, rows: 24 };
+    let mut mock_screen = MockScreen::new(size);
+    mock_screen.drop_all_pty_messages();
+    let screen_thread = mock_screen.run(None, vec![]);
+
+    let received_server_instructions = Arc::new(Mutex::new(vec![]));
+    let server_receiver = mock_screen.server_receiver.take().unwrap();
+    let server_thread = log_actions_in_thread!(
+        received_server_instructions,
+        ServerInstruction::KillSession,
+        server_receiver
+    );
+    let plugin_receiver = mock_screen.plugin_receiver.take().unwrap();
+    let received_plugin_instructions = Arc::new(Mutex::new(vec![]));
+    let plugin_thread = log_actions_in_thread!(
+        received_plugin_instructions,
+        PluginInstruction::Exit,
+        plugin_receiver
+    );
+
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::TerminalPixelDimensions(PixelDimensions {
+            character_cell_size: Some(SizeInPixels {
+                width: 8,
+                height: 21,
+            }),
+            text_area_size: None,
+        }));
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    let stage11_fixture = include_bytes!("fixtures/stage11-zink-both-bursts.raw");
+    let replace_start = stage11_fixture
+        .windows(b"a=t,".len())
+        .position(|window| window == b"a=t,")
+        .expect("expected stage-11 fixture to contain a kitty replace burst");
+    let (initial_burst, replace_burst) = stage11_fixture.split_at(replace_start);
+
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::PtyBytes(0, initial_burst.to_vec()));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::PtyBytes(0, replace_burst.to_vec()));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    mock_screen.teardown(vec![server_thread, plugin_thread, screen_thread]);
+
+    let server_instructions = received_server_instructions.lock().unwrap();
+    let render_outputs: Vec<_> = server_instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            ServerInstruction::Render(Some(output)) => output.get(&1).cloned(),
+            _ => None,
+        })
+        .collect();
+    let last_render = render_outputs
+        .last()
+        .expect("expected screen test to capture at least one render");
+
+    assert!(
+        last_render.contains("PNJu"),
+        "screen-level stage-11 fixture should emit the updated green payload; last render was: {last_render:?}"
+    );
+    assert!(
+        last_render.contains("\u{1b}_Ga=t,i="),
+        "screen-level stage-11 fixture should retransmit kitty assets in the replace burst"
+    );
+    assert!(
+        last_render.contains("\u{1b}_Ga=p,U=1,i="),
+        "screen-level stage-11 fixture should recreate placeholder placements in the replace burst"
+    );
+}
+
+#[test]
 fn integration_scrollback_from_pre_subscription_pty_bytes() {
     let size = Size { cols: 80, rows: 20 };
     let mut mock_screen = MockScreen::new(size);

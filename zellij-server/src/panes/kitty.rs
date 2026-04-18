@@ -190,6 +190,14 @@ pub struct KittyImageInsertion {
     pub protocol_image_id: Option<u32>,
     pub protocol_placement_id: Option<u32>,
     pub placement_mode: KittyImagePlacementMode,
+    pub replaced_existing_asset: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KittyApcEffect {
+    Placement(KittyImageInsertion),
+    AssetReplaced { asset_id: ImageAssetId },
+    AssetStored,
 }
 
 impl KittyImageState {
@@ -218,11 +226,16 @@ impl KittyImageState {
         cursor_x: usize,
         scrollback_row: usize,
         character_cell_size: Option<SizeInPixels>,
-    ) -> Option<KittyImageInsertion> {
+    ) -> Option<KittyApcEffect> {
         let pending = self.pending_transmit.take()?;
         let protocol_image_id = pending.protocol_image_id;
         let mut placement = pending.placement.clone();
         let image_id = pending.image_id;
+        let replaced_existing_asset = self
+            .kitty_asset_store
+            .borrow()
+            .image_data(image_id)
+            .is_some();
         let image_data = pending.into_image_data()?;
         let image_dimensions = kitty_image_dimensions(&image_data);
         if let Some(placement) = placement.as_mut() {
@@ -232,8 +245,15 @@ impl KittyImageState {
             .borrow_mut()
             .insert_asset(image_id, image_data);
         let asset_id = ImageAssetId(image_id as u64);
+        if replaced_existing_asset {
+            self.placements.retain(|p| p.image_id != image_id);
+        }
         let Some(placement) = placement else {
-            return None;
+            return Some(if replaced_existing_asset {
+                KittyApcEffect::AssetReplaced { asset_id }
+            } else {
+                KittyApcEffect::AssetStored
+            });
         };
         self.placements.retain(|p| {
             if let Some(new_placement_id) = placement.placement_id {
@@ -251,13 +271,14 @@ impl KittyImageState {
             character_cell_size,
         );
         self.placements.push(placement);
-        Some(KittyImageInsertion {
+        Some(KittyApcEffect::Placement(KittyImageInsertion {
             asset_id,
             geometry,
             protocol_image_id,
             protocol_placement_id,
             placement_mode,
-        })
+            replaced_existing_asset,
+        }))
     }
 
     pub fn handle_apc(
@@ -267,7 +288,7 @@ impl KittyImageState {
         cursor_x: usize,
         scrollback_row: usize,
         character_cell_size: Option<SizeInPixels>,
-    ) -> Option<KittyImageInsertion> {
+    ) -> Option<KittyApcEffect> {
         let command = ParsedKittyCommand::parse(apc_bytes)?;
         match command {
             ParsedKittyCommand::ImmediateTransmit {
@@ -343,13 +364,14 @@ impl KittyImageState {
                 let protocol_placement_id = placement.placement_id;
                 let placement_mode = placement.placement_mode;
                 self.placements.push(placement);
-                Some(KittyImageInsertion {
+                Some(KittyApcEffect::Placement(KittyImageInsertion {
                     asset_id: ImageAssetId(image_id as u64),
                     geometry,
                     protocol_image_id: Some(protocol_image_id),
                     protocol_placement_id,
                     placement_mode,
-                })
+                    replaced_existing_asset: false,
+                }))
             },
             ParsedKittyCommand::TransmitChunk { more, payload } => {
                 let pending = self.pending_transmit.as_mut()?;
@@ -547,6 +569,56 @@ impl KittyImageState {
 
         for (placement_index, render) in renders.iter().enumerate() {
             let placement_id = render.placement_id.unwrap_or(placement_index as u32 + 1);
+            raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
+        }
+        raw_vte_output.push_str("\u{1b}[u");
+        raw_vte_output
+    }
+
+    pub fn serialize_full_scene_with_asset_store(
+        chunks: &[KittyImageChunk],
+        renders: &[KittyPlaceholderRender],
+        kitty_asset_store: &KittyAssetStore,
+    ) -> String {
+        if chunks.is_empty() && renders.is_empty() {
+            return String::new();
+        }
+        let mut raw_vte_output = String::new();
+        raw_vte_output.push_str("\u{1b}[s");
+
+        let mut transmitted_image_ids = std::collections::HashSet::new();
+        for image_id in chunks
+            .iter()
+            .map(|chunk| chunk.image_id)
+            .chain(renders.iter().map(|render| render.image_id))
+        {
+            if transmitted_image_ids.insert(image_id) {
+                let Some(image_data) = kitty_asset_store.image_data(image_id) else {
+                    continue;
+                };
+                for transmit_command in serialize_transmit(image_id, &image_data) {
+                    raw_vte_output.push_str("\u{1b}_G");
+                    raw_vte_output.push_str(&transmit_command);
+                    raw_vte_output.push_str("\u{1b}\\");
+                }
+            }
+        }
+
+        let mut next_synthesized_placement_id = 1u32;
+        for chunk in chunks {
+            let placement_id = chunk.placement_id.unwrap_or_else(|| {
+                let placement_id = next_synthesized_placement_id;
+                next_synthesized_placement_id += 1;
+                placement_id
+            });
+            raw_vte_output.push_str(&Self::serialize_explicit_placement(chunk, placement_id));
+        }
+        for render in renders {
+            let placement_id = render.placement_id.unwrap_or_else(|| {
+                let placement_id = next_synthesized_placement_id;
+                next_synthesized_placement_id += 1;
+                placement_id
+            });
             raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
         }
         raw_vte_output.push_str("\u{1b}[u");

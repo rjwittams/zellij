@@ -11,9 +11,15 @@ fn kitty_image_dimensions(image_data: &KittyImageData) -> (u32, u32) {
 }
 
 #[derive(Clone, Debug)]
+pub struct KittyAsset {
+    pub generation: u64,
+    pub image_data: KittyImageData,
+}
+
+#[derive(Clone, Debug)]
 pub struct KittyAssetStore {
     next_asset_id: u32,
-    assets: HashMap<u32, KittyImageData>,
+    assets: HashMap<u32, KittyAsset>,
 }
 
 impl Default for KittyAssetStore {
@@ -33,14 +39,35 @@ impl KittyAssetStore {
     }
 
     pub fn insert_asset(&mut self, image_id: u32, image_data: KittyImageData) {
-        self.assets.insert(image_id, image_data);
+        let next_generation = self
+            .assets
+            .get(&image_id)
+            .map(|asset| asset.generation.saturating_add(1))
+            .unwrap_or(1);
+        self.assets.insert(
+            image_id,
+            KittyAsset {
+                generation: next_generation,
+                image_data,
+            },
+        );
+    }
+
+    pub fn generation(&self, image_id: u32) -> Option<u64> {
+        self.assets.get(&image_id).map(|asset| asset.generation)
+    }
+
+    pub fn asset(&self, image_id: u32) -> Option<&KittyAsset> {
+        self.assets.get(&image_id)
     }
 
     pub fn image_data(&self, image_id: u32) -> Option<KittyImageData> {
-        self.assets.get(&image_id).cloned()
+        self.assets.get(&image_id).map(|asset| asset.image_data.clone())
     }
 
     pub fn image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
-        self.assets.get(&image_id).map(kitty_image_dimensions)
+        self.assets
+            .get(&image_id)
+            .map(|asset| kitty_image_dimensions(&asset.image_data))
     }
 }
