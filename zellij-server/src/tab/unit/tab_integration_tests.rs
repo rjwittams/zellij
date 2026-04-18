@@ -1039,6 +1039,43 @@ fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u3
     format!("\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
 }
 
+fn kitty_display_placement_crop(
+    image_id: u32,
+    placement_id: u32,
+    cols: u32,
+    rows: u32,
+    source_x: u32,
+    source_y: u32,
+    source_width: u32,
+    source_height: u32,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows},x={source_x},y={source_y},w={source_width},h={source_height}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_raw_proof_scene_bytes() -> Vec<u8> {
+    let mut bytes = b"\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b_Gq=2,a=d,d=A;\x1b\\".to_vec();
+    bytes.extend_from_slice(&kitty_explicit_rgba(3001, 64, 32, 14, 7));
+    bytes.extend_from_slice(&kitty_retransmit_rgba_with_payload(
+        3002,
+        64,
+        32,
+        "AAAAAAAAAAA=",
+    ));
+    bytes.extend_from_slice(&kitty_display_placement(3002, 1, 14, 7));
+    bytes.extend_from_slice(&kitty_retransmit_rgba_with_payload(
+        3003,
+        96,
+        64,
+        "/////w==",
+    ));
+    bytes.extend_from_slice(&kitty_display_placement_crop(3003, 1, 14, 7, 0, 0, 48, 32));
+    bytes.extend_from_slice(&kitty_display_placement(3003, 2, 14, 7));
+    bytes
+}
+
 fn placeholder_virtual_placement(
     image_id: u32,
     placement_id: u32,
@@ -10941,6 +10978,49 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
     assert!(
         second_render.contains(&format!("\u{1b}_Ga=p,i={internal_image_id},p=2")),
         "replace frame should recreate the explicit placement"
+    );
+}
+
+#[test]
+fn kitty_alt_screen_proof_scene_retains_assets_in_shared_store() {
+    let proof_bytes = kitty_raw_proof_scene_bytes();
+    let size = Size { cols: 120, rows: 24 };
+    let client_id = 1;
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+    let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
+        width: 8,
+        height: 21,
+    })));
+    let mut tab = create_new_tab_with_image_stores(
+        size,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+    );
+
+    tab.handle_pty_bytes(1, proof_bytes).unwrap();
+
+    let mut output = Output::new_with_kitty_asset_store(
+        sixel_image_store,
+        kitty_asset_store.clone(),
+        character_cell_size,
+        true,
+        true,
+    );
+    tab.render(&mut output, None).unwrap();
+    let render = output.serialize().unwrap();
+    let render = render.get(&client_id).unwrap();
+    let store = kitty_asset_store.borrow();
+
+    assert!(
+        store.asset(1).is_some() && store.asset(2).is_some() && store.asset(3).is_some(),
+        "alt-screen proof scene should leave stored assets 1,2,3 in the shared kitty asset store"
+    );
+    assert!(
+        render.contains("\u{1b}_Ga=t,i=1")
+            && render.contains("\u{1b}_Ga=t,i=2")
+            && render.contains("\u{1b}_Ga=t,i=3"),
+        "alt-screen proof scene render should serialize stored assets from the shared store; render was: {render:?}"
     );
 }
 

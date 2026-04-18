@@ -368,7 +368,7 @@ pub struct KittyPlaceholderCell {
     pub anchor: FlowAnchor,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct PaneImageScene {
     kitty: KittyImageState,
     placements: HashMap<LogicalPlacementId, ImagePlacement>,
@@ -377,6 +377,10 @@ pub struct PaneImageScene {
 }
 
 impl PaneImageScene {
+    pub fn empty_clone(&self) -> Self {
+        Self::new(self.kitty.kitty_asset_store())
+    }
+
     fn remove_kitty_asset_placements<F>(
         &mut self,
         asset_id: ImageAssetId,

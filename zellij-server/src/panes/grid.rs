@@ -4393,7 +4393,9 @@ impl Perform for Grid {
                                 &mut self.sixel_grid,
                                 SixelGrid::new(self.character_cell_size.clone(), sixel_image_store),
                             );
-                            let current_image_scene = std::mem::take(&mut self.image_scene);
+                            let replacement_image_scene = self.image_scene.empty_clone();
+                            let current_image_scene =
+                                std::mem::replace(&mut self.image_scene, replacement_image_scene);
                             self.alternate_screen_state = Some(AlternateScreenState::new(
                                 current_lines_above,
                                 current_viewport,

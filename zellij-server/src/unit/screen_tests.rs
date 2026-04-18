@@ -175,6 +175,48 @@ fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u3
     format!("\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
 }
 
+fn kitty_display_placement_crop(
+    image_id: u32,
+    placement_id: u32,
+    cols: u32,
+    rows: u32,
+    source_x: u32,
+    source_y: u32,
+    source_width: u32,
+    source_height: u32,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows},x={source_x},y={source_y},w={source_width},h={source_height}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_explicit_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
+    format!("\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAA==\u{1b}\\")
+        .into_bytes()
+}
+
+fn kitty_raw_proof_scene_bytes() -> Vec<u8> {
+    let mut bytes = b"\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b_Gq=2,a=d,d=A;\x1b\\".to_vec();
+    bytes.extend_from_slice(&kitty_explicit_rgba(3001, 64, 32, 14, 7));
+    bytes.extend_from_slice(&kitty_retransmit_rgba_with_payload(
+        3002,
+        64,
+        32,
+        "AAAAAAAAAAA=",
+    ));
+    bytes.extend_from_slice(&kitty_display_placement(3002, 1, 14, 7));
+    bytes.extend_from_slice(&kitty_retransmit_rgba_with_payload(
+        3003,
+        96,
+        64,
+        "/////w==",
+    ));
+    bytes.extend_from_slice(&kitty_display_placement_crop(3003, 1, 14, 7, 0, 0, 48, 32));
+    bytes.extend_from_slice(&kitty_display_placement(3003, 2, 14, 7));
+    bytes
+}
+
 fn placeholder_virtual_placement(
     image_id: u32,
     placement_id: u32,
@@ -6236,6 +6278,82 @@ fn screen_kitty_shared_asset_replace_emits_updated_payloads() {
     assert!(
         last_render.contains("\u{1b}_Ga=p,U=1,i="),
         "screen-level shared-asset replace should recreate placeholder placements in the replace burst"
+    );
+}
+
+#[test]
+fn screen_alt_screen_proof_scene_resends_stored_assets_after_full_reset() {
+    let proof_bytes = kitty_raw_proof_scene_bytes();
+    let size = Size { cols: 120, rows: 24 };
+    let mut initial_layout = TiledPaneLayout::default();
+    initial_layout.children_split_direction = SplitDirection::Vertical;
+    initial_layout.children = vec![TiledPaneLayout::default(), TiledPaneLayout::default()];
+    let mut mock_screen = MockScreen::new(size);
+    mock_screen.drop_all_pty_messages();
+    let screen_thread = mock_screen.run(Some(initial_layout), vec![]);
+
+    let received_server_instructions = Arc::new(Mutex::new(vec![]));
+    let server_receiver = mock_screen.server_receiver.take().unwrap();
+    let server_thread = log_actions_in_thread!(
+        received_server_instructions,
+        ServerInstruction::KillSession,
+        server_receiver
+    );
+    let plugin_receiver = mock_screen.plugin_receiver.take().unwrap();
+    let received_plugin_instructions = Arc::new(Mutex::new(vec![]));
+    let plugin_thread = log_actions_in_thread!(
+        received_plugin_instructions,
+        PluginInstruction::Exit,
+        plugin_receiver
+    );
+
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::TerminalPixelDimensions(PixelDimensions {
+            character_cell_size: Some(SizeInPixels {
+                width: 8,
+                height: 21,
+            }),
+            text_area_size: None,
+        }));
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::PtyBytes(0, proof_bytes.clone()));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::PtyBytes(1, proof_bytes));
+    std::thread::sleep(std::time::Duration::from_millis(150));
+
+    mock_screen.teardown(vec![server_thread, plugin_thread, screen_thread]);
+
+    let server_instructions = received_server_instructions.lock().unwrap();
+    let render_outputs: Vec<_> = server_instructions
+        .iter()
+        .filter_map(|instruction| match instruction {
+            ServerInstruction::Render(Some(output)) => output.get(&1).cloned(),
+            _ => None,
+        })
+        .collect();
+    let last_render = render_outputs
+        .last()
+        .expect("expected at least one render output");
+
+    assert!(
+        last_render.contains("\u{1b}_Ga=d,d=A"),
+        "full-reset proof scene should clear host kitty state before resend; last render was: {last_render:?}"
+    );
+    assert!(
+        last_render.contains("\u{1b}_Ga=t,i=1")
+            && last_render.contains("\u{1b}_Ga=t,i=2")
+            && last_render.contains("\u{1b}_Ga=t,i=3")
+            && last_render.contains("\u{1b}_Ga=t,i=4")
+            && last_render.contains("\u{1b}_Ga=t,i=5")
+            && last_render.contains("\u{1b}_Ga=t,i=6"),
+        "full-reset proof scene should resend stored assets for both panes after the clear; last render was: {last_render:?}"
     );
 }
 

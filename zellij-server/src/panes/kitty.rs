@@ -223,7 +223,7 @@ enum KittyTransportCompression {
     Zlib,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct KittyImageState {
     kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     placements: Vec<KittyPlacement>,
@@ -264,6 +264,10 @@ impl KittyImageState {
             protocol_image_id_to_internal_id: HashMap::new(),
             pending_transmit: None,
         }
+    }
+
+    pub fn kitty_asset_store(&self) -> Rc<RefCell<KittyAssetStore>> {
+        self.kitty_asset_store.clone()
     }
 
     pub fn image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
