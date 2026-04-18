@@ -1,4 +1,5 @@
 use base64;
+use miniz_oxide::inflate::decompress_to_vec_zlib;
 use zellij_utils::pane_size::SizeInPixels;
 
 use crate::output::{
@@ -62,18 +63,63 @@ impl PendingKittyPlaceholder {
         }
     }
 
-    pub fn resolve(self) -> Option<ResolvedKittyPlaceholder> {
+    fn can_inherit_from(&self, previous: &ResolvedKittyPlaceholder) -> bool {
+        let Some(anchor) = self.anchor.as_ref() else {
+            return false;
+        };
+        if previous.placement_id != self.placement_id {
+            return false;
+        }
+        if previous.image_id & 0x00FF_FFFF != self.image_id_low_bits.unwrap_or_default() {
+            return false;
+        }
+        match (anchor, &previous.anchor) {
+            (
+                FlowAnchor::LogicalRow {
+                    logical_row: current_row,
+                    column: current_column,
+                },
+                FlowAnchor::LogicalRow {
+                    logical_row: previous_row,
+                    column: previous_column,
+                },
+            ) => current_row == previous_row && *current_column == previous_column.saturating_add(1),
+            (
+                FlowAnchor::CanonicalLine {
+                    canonical_line_index: current_line,
+                    offset_in_line: current_offset,
+                },
+                FlowAnchor::CanonicalLine {
+                    canonical_line_index: previous_line,
+                    offset_in_line: previous_offset,
+                },
+            ) => current_line == previous_line && *current_offset == previous_offset.saturating_add(1),
+            _ => false,
+        }
+    }
+
+    pub fn resolve_with_previous(
+        self,
+        previous: Option<&ResolvedKittyPlaceholder>,
+    ) -> Option<ResolvedKittyPlaceholder> {
+        let inherited = previous.filter(|previous| self.can_inherit_from(previous));
         let anchor = self.anchor?;
         let image_id_low_bits = self.image_id_low_bits?;
-        let row_diacritic = self.row_diacritic?;
-        let column_diacritic = self.column_diacritic?;
-        let placeholder_row = kitty_diacritic_to_index(row_diacritic)? as u16;
-        let placeholder_col = kitty_diacritic_to_index(column_diacritic)? as u16;
+        let placeholder_row = match self.row_diacritic {
+            Some(row_diacritic) => kitty_diacritic_to_index(row_diacritic)? as u16,
+            None => inherited.map(|previous| previous.placeholder_row)?,
+        };
+        let placeholder_col = match self.column_diacritic {
+            Some(column_diacritic) => kitty_diacritic_to_index(column_diacritic)? as u16,
+            None => inherited
+                .map(|previous| previous.placeholder_col.saturating_add(1))?,
+        };
         let image_id = if let Some(high_byte_diacritic) = self.image_id_high_byte_diacritic {
             let high_byte = kitty_diacritic_to_index(high_byte_diacritic)?;
             image_id_low_bits | ((high_byte as u32) << 24)
         } else {
-            image_id_low_bits
+            let inherited_high_byte = inherited.map(|previous| previous.image_id & 0xFF00_0000);
+            image_id_low_bits | inherited_high_byte.unwrap_or(0)
         };
         Some(ResolvedKittyPlaceholder {
             image_id,
@@ -82,6 +128,10 @@ impl PendingKittyPlaceholder {
             placeholder_col,
             anchor,
         })
+    }
+
+    pub fn resolve(self) -> Option<ResolvedKittyPlaceholder> {
+        self.resolve_with_previous(None)
     }
 }
 
@@ -154,6 +204,7 @@ struct PendingKittyTransmit {
     protocol_image_id: Option<u32>,
     image_id: u32,
     image_format: KittyImageFormat,
+    compression: Option<KittyTransportCompression>,
     width: u32,
     height: u32,
     placement: Option<KittyPlacement>,
@@ -165,6 +216,11 @@ enum KittyImageFormat {
     Png,
     Rgb,
     Rgba,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KittyTransportCompression {
+    Zlib,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -294,6 +350,7 @@ impl KittyImageState {
             ParsedKittyCommand::ImmediateTransmit {
                 protocol_image_id,
                 image_format,
+                compression,
                 width,
                 height,
                 mut placement,
@@ -321,6 +378,7 @@ impl KittyImageState {
                     protocol_image_id,
                     image_id,
                     image_format,
+                    compression,
                     width,
                     height,
                     placement,
@@ -730,6 +788,7 @@ enum ParsedKittyCommand {
     ImmediateTransmit {
         protocol_image_id: Option<u32>,
         image_format: KittyImageFormat,
+        compression: Option<KittyTransportCompression>,
         width: u32,
         height: u32,
         placement: Option<KittyPlacement>,
@@ -829,22 +888,26 @@ impl KittyPlacement {
 
 impl PendingKittyTransmit {
     fn into_image_data(self) -> Option<KittyImageData> {
+        let payload = match self.compression {
+            Some(KittyTransportCompression::Zlib) => decompress_to_vec_zlib(&self.payload).ok()?,
+            None => self.payload,
+        };
         Some(match self.image_format {
             KittyImageFormat::Png => {
-                let (width, height) = parse_png_dimensions(&self.payload)?;
+                let (width, height) = parse_png_dimensions(&payload)?;
                 KittyImageData::Png {
-                    data: self.payload,
+                    data: payload,
                     width,
                     height,
                 }
             },
             KittyImageFormat::Rgb => KittyImageData::Rgb {
-                data: self.payload,
+                data: payload,
                 width: self.width,
                 height: self.height,
             },
             KittyImageFormat::Rgba => KittyImageData::Rgba {
-                data: self.payload,
+                data: payload,
                 width: self.width,
                 height: self.height,
             },
@@ -875,6 +938,27 @@ fn kitty_delete_header(apc_bytes: &[u8]) -> Option<HashMap<&str, &str>> {
         kv.insert(key, value);
     }
     Some(kv)
+}
+
+fn decode_kitty_payload(payload_b64: &[u8], compression: Option<&str>) -> Option<Vec<u8>> {
+    let payload = decode_kitty_transport_payload(payload_b64)?;
+    match compression {
+        Some("z") => decompress_to_vec_zlib(&payload).ok(),
+        Some(_) => None,
+        None => Some(payload),
+    }
+}
+
+fn decode_kitty_transport_payload(payload_b64: &[u8]) -> Option<Vec<u8>> {
+    base64::decode(payload_b64).ok()
+}
+
+fn parse_kitty_transport_compression(compression: Option<&str>) -> Option<Option<KittyTransportCompression>> {
+    match compression {
+        Some("z") => Some(Some(KittyTransportCompression::Zlib)),
+        Some(_) => None,
+        None => Some(None),
+    }
 }
 
 pub fn kitty_delete_all_visible(apc_bytes: &[u8]) -> bool {
@@ -929,14 +1013,14 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
             message: "EINVAL:Must not specify both i and I".to_string(),
         }
     } else {
-        let payload = match base64::decode(payload_b64) {
-            Ok(payload) => payload,
-            Err(_) => {
+        let payload = match decode_kitty_payload(payload_b64, kv.get("o").copied()) {
+            Some(payload) => payload,
+            None => {
                 let response = KittyQueryResponse::Error {
                     image_id,
                     placement_id,
                     image_number,
-                    message: "EINVAL:Invalid base64 payload".to_string(),
+                    message: "EINVAL:Invalid image payload encoding".to_string(),
                 };
                 return if quiet == 2 { None } else { Some(response) };
             },
@@ -1017,7 +1101,62 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
     };
 
     match (&reply, quiet) {
-        (KittyQueryResponse::Ok { .. }, 1) => None,
+        (KittyQueryResponse::Ok { .. }, 1 | 2) => None,
+        (KittyQueryResponse::Error { .. }, 2) => None,
+        _ => Some(reply),
+    }
+}
+
+pub fn kitty_non_query_response(
+    apc_bytes: &[u8],
+    command_succeeded: bool,
+) -> Option<KittyQueryResponse> {
+    let rest = apc_bytes.strip_prefix(b"G")?;
+    let mut parts = rest.splitn(2, |b| *b == b';');
+    let header = std::str::from_utf8(parts.next()?).ok()?;
+
+    let mut kv = HashMap::new();
+    for part in header.split(',') {
+        if part.is_empty() {
+            continue;
+        }
+        let mut split = part.splitn(2, '=');
+        let key = split.next()?;
+        let value = split.next().unwrap_or("");
+        kv.insert(key, value);
+    }
+
+    let action = kv.get("a").copied()?;
+    if !matches!(action, "t" | "T" | "p") {
+        return None;
+    }
+
+    let quiet = kv.get("q").and_then(|q| q.parse::<u8>().ok()).unwrap_or(0);
+    let image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
+    let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
+
+    let reply = if command_succeeded {
+        KittyQueryResponse::Ok {
+            image_id,
+            placement_id,
+            image_number: None,
+        }
+    } else {
+        let message = if action == "p" {
+            "ENOENT:Image or placement not found"
+        } else {
+            "EINVAL:Invalid or unsupported kitty command"
+        };
+        KittyQueryResponse::Error {
+            image_id,
+            placement_id,
+            image_number: None,
+            message: message.to_string(),
+        }
+    };
+
+    match (&reply, quiet) {
+        (KittyQueryResponse::Ok { .. }, 1 | 2) => None,
         (KittyQueryResponse::Error { .. }, 2) => None,
         _ => Some(reply),
     }
@@ -1042,7 +1181,7 @@ impl ParsedKittyCommand {
         }
 
         let more = kv.get("m").and_then(|m| m.parse::<u8>().ok()).unwrap_or(0) != 0;
-        let payload = base64::decode(payload).ok()?;
+        let payload = decode_kitty_transport_payload(payload)?;
 
         if let Some(action) = kv.get("a") {
             let placement = KittyPlacement {
@@ -1074,6 +1213,7 @@ impl ParsedKittyCommand {
                         "32" => KittyImageFormat::Rgba,
                         _ => return None,
                     };
+                    let compression = parse_kitty_transport_compression(kv.get("o").copied())?;
                     let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
                     let width = kv.get("s").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
                     let height = kv.get("v").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
@@ -1092,6 +1232,7 @@ impl ParsedKittyCommand {
                     Some(ParsedKittyCommand::ImmediateTransmit {
                         protocol_image_id,
                         image_format,
+                        compression,
                         width,
                         height,
                         placement: if should_create_placement {
@@ -1316,6 +1457,13 @@ mod tests {
     }
 
     #[test]
+    fn kitty_non_query_response_suppresses_success_for_q2() {
+        let reply =
+            kitty_non_query_response(b"Gq=2,a=T,f=24,s=1,v=1,i=52,c=1,r=1;EjRW", true);
+        assert!(reply.is_none());
+    }
+
+    #[test]
     fn kitty_rgb24_payloads_roundtrip_natively() {
         let payload = vec![0x12, 0x34, 0x56];
         let parsed = ParsedKittyCommand::parse(b"Ga=t,f=24,s=1,v=1,i=7;EjRW").unwrap();
@@ -1340,6 +1488,7 @@ mod tests {
             protocol_image_id: Some(7),
             image_id: 99,
             image_format,
+            compression: None,
             width,
             height,
             placement: None,

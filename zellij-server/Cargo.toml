@@ -25,6 +25,7 @@ isahc = { workspace = true }
 kdl = { workspace = true }
 lazy_static = { workspace = true }
 log = { workspace = true }
+miniz_oxide = "0.8"
 notify-debouncer-full = { workspace = true }
 prost = { workspace = true }
 regex = { workspace = true }

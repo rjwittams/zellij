@@ -125,8 +125,9 @@ use crate::output::{
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
 use crate::panes::kitty::{
-    kitty_delete_all_visible, kitty_delete_by_image_id, kitty_query_response,
-    PendingKittyPlaceholder,
+    kitty_delete_all_visible, kitty_delete_by_image_id, kitty_non_query_response,
+    kitty_query_response,
+    PendingKittyPlaceholder, ResolvedKittyPlaceholder,
 };
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::pane_image_scene::{
@@ -622,6 +623,7 @@ pub struct Grid {
     active_charset: CharsetIndex,
     preceding_char: Option<TerminalCharacter>,
     pending_kitty_placeholder: Option<PendingKittyPlaceholder>,
+    last_resolved_kitty_placeholder: Option<ResolvedKittyPlaceholder>,
     #[allow(dead_code)]
     terminal_emulator_colors: Rc<RefCell<Palette>>,
     #[allow(dead_code)]
@@ -992,6 +994,7 @@ impl Grid {
             scroll_region: (0, rows.saturating_sub(1)),
             preceding_char: None,
             pending_kitty_placeholder: None,
+            last_resolved_kitty_placeholder: None,
             width: columns,
             height: rows,
             should_render: true,
@@ -2549,6 +2552,9 @@ impl Grid {
                 return true;
             }
             self.finalize_pending_kitty_placeholder();
+            self.last_resolved_kitty_placeholder = None;
+        } else if c.width().unwrap_or(0) != 0 {
+            self.last_resolved_kitty_placeholder = None;
         }
         false
     }
@@ -2557,7 +2563,10 @@ impl Grid {
         let Some(pending) = self.pending_kitty_placeholder.take() else {
             return;
         };
-        let Some(resolved) = pending.resolve() else {
+        let Some(resolved) =
+            pending.resolve_with_previous(self.last_resolved_kitty_placeholder.as_ref())
+        else {
+            self.last_resolved_kitty_placeholder = None;
             return;
         };
         let Some(logical_placement_id) = self
@@ -2569,6 +2578,7 @@ impl Grid {
                 resolved.image_id,
                 resolved.placement_id
             );
+            self.last_resolved_kitty_placeholder = None;
             return;
         };
         self.image_scene
@@ -2576,8 +2586,9 @@ impl Grid {
                 logical_placement_id,
                 placeholder_row: resolved.placeholder_row,
                 placeholder_col: resolved.placeholder_col,
-                anchor: resolved.anchor,
+                anchor: resolved.anchor.clone(),
             });
+        self.last_resolved_kitty_placeholder = Some(resolved);
     }
     /// Called by the server-side handler for SetPaneRegexHighlights.
     /// Upserts highlights keyed by pattern string for the given plugin.
@@ -3714,6 +3725,8 @@ impl Grid {
 
 impl Perform for Grid {
     fn apc_start(&mut self) {
+        self.finalize_pending_kitty_placeholder();
+        self.last_resolved_kitty_placeholder = None;
         self.apc_bytes = Some(vec![]);
     }
 
@@ -3745,7 +3758,7 @@ impl Perform for Grid {
                 let lines_above = &self.lines_above;
                 let viewport = &self.viewport;
                 let width = self.width;
-                if let Some(image_effect) = self.image_scene.handle_kitty_apc(
+                let image_effect = self.image_scene.handle_kitty_apc(
                     &apc_bytes,
                     self.full_cursor_flow_anchor(),
                     self.cursor.x,
@@ -3754,7 +3767,11 @@ impl Perform for Grid {
                     self.lines_above.len(),
                     self.height,
                     |anchor| Self::resolve_flow_anchor_in_buffers(anchor, lines_above, viewport, width),
-                ) {
+                );
+                if let Some(reply) = kitty_non_query_response(&apc_bytes, image_effect.is_some()) {
+                    self.queue_pending_message_to_pty(reply.to_apc_response());
+                }
+                if let Some(image_effect) = image_effect {
                     match image_effect {
                         ImageSceneEffect::Placement(image_effect) => {
                             for row in image_effect.cleared_placeholder_rows {
@@ -3836,6 +3853,8 @@ impl Perform for Grid {
     }
 
     fn hook(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, c: char) {
+        self.finalize_pending_kitty_placeholder();
+        self.last_resolved_kitty_placeholder = None;
         if c == 'q' {
             // we only process sixel images if we know the pixel size of each character cell,
             // otherwise we can't reliably display them
@@ -3884,6 +3903,8 @@ impl Perform for Grid {
     }
 
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
+        self.finalize_pending_kitty_placeholder();
+        self.last_resolved_kitty_placeholder = None;
         let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
 
         if params.is_empty() || params[0].is_empty() {
@@ -4151,6 +4172,8 @@ impl Perform for Grid {
     }
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, c: char) {
+        self.finalize_pending_kitty_placeholder();
+        self.last_resolved_kitty_placeholder = None;
         let mut params_iter = params.iter();
         let mut next_param_or = |default: u16| {
             params_iter
@@ -4793,6 +4816,8 @@ impl Perform for Grid {
     }
 
     fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        self.finalize_pending_kitty_placeholder();
+        self.last_resolved_kitty_placeholder = None;
         match (byte, intermediates.get(0)) {
             (b'A', charset_index_symbol) => {
                 let charset_index: CharsetIndex = match charset_index_symbol {

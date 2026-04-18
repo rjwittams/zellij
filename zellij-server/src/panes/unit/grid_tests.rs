@@ -5230,12 +5230,90 @@ fn kitty_virtual_rgba_with_placement_payload(
     .into_bytes()
 }
 
+fn kitty_virtual_rgb_with_placement(
+    image_id: u32,
+    placement_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+) -> Vec<u8> {
+    let payload_b64 = base64::encode(vec![0; (width * height * 3) as usize]);
+    format!(
+        "\u{1b}_Ga=T,U=1,f=24,s={width},v={height},c={cols},r={rows},i={image_id},p={placement_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
 fn kitty_retransmit_rgba(image_id: u32, width: u32, height: u32) -> Vec<u8> {
     format!("\u{1b}_Ga=t,f=32,s={width},v={height},i={image_id};AAAAAA==\u{1b}\\").into_bytes()
 }
 
 fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u32) -> Vec<u8> {
     format!("\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
+}
+
+fn kitty_explicit_rgba_compressed(
+    image_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+    raw_payload: &[u8],
+) -> Vec<u8> {
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(raw_payload, 6);
+    let payload_b64 = base64::encode(compressed);
+    format!(
+        "\u{1b}_Ga=T,o=z,f=32,s={width},v={height},c={cols},r={rows},i={image_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_explicit_rgb_compressed(
+    image_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+    raw_payload: &[u8],
+) -> Vec<u8> {
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(raw_payload, 6);
+    let payload_b64 = base64::encode(compressed);
+    format!(
+        "\u{1b}_Ga=T,o=z,f=24,s={width},v={height},c={cols},r={rows},i={image_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_explicit_rgb_compressed_chunked(
+    image_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+    raw_payload: &[u8],
+    chunk_size: usize,
+) -> Vec<u8> {
+    let compressed = miniz_oxide::deflate::compress_to_vec_zlib(raw_payload, 6);
+    let payload_b64 = base64::encode(compressed);
+    let parts: Vec<&str> = payload_b64
+        .as_bytes()
+        .chunks(chunk_size)
+        .map(|chunk| std::str::from_utf8(chunk).unwrap())
+        .collect();
+    let mut output = String::new();
+    let last_index = parts.len().saturating_sub(1);
+    for (index, part) in parts.into_iter().enumerate() {
+        let more = if index < last_index { 1 } else { 0 };
+        if index == 0 {
+            output.push_str(&format!(
+                "\u{1b}_Ga=T,o=z,f=24,s={width},v={height},c={cols},r={rows},i={image_id},m={more};{part}\u{1b}\\"
+            ));
+        } else {
+            output.push_str(&format!("\u{1b}_Gm={more};{part}\u{1b}\\"));
+        }
+    }
+    output.into_bytes()
 }
 
 fn kitty_placeholder_text(image_id: u32) -> Vec<u8> {
@@ -5311,6 +5389,36 @@ fn placeholder_rgba_text_with_placement(
         }
         output.push_str("\u{1b}[39m\u{1b}[59m");
     }
+    output.into_bytes()
+}
+
+fn placeholder_text_with_placement_inherited_single_row(
+    image_id: u32,
+    placement_id: u32,
+    cols: usize,
+) -> Vec<u8> {
+    let image_low = image_id & 0x00FF_FFFF;
+    let image_r = (image_low >> 16) & 0xFF;
+    let image_g = (image_low >> 8) & 0xFF;
+    let image_b = image_low & 0xFF;
+    let placement_low = placement_id & 0x00FF_FFFF;
+    let placement_r = (placement_low >> 16) & 0xFF;
+    let placement_g = (placement_low >> 8) & 0xFF;
+    let placement_b = placement_low & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    let row0 = '\u{305}';
+    let col0 = '\u{305}';
+    let mut output = String::new();
+    output.push_str(&format!(
+        "\u{1b}[38;2;{image_r};{image_g};{image_b}m\u{1b}[58;2;{placement_r};{placement_g};{placement_b}m"
+    ));
+    output.push(placeholder);
+    output.push(row0);
+    output.push(col0);
+    for _ in 1..cols {
+        output.push(placeholder);
+    }
+    output.push_str("\u{1b}[39m\u{1b}[59m");
     output.into_bytes()
 }
 
@@ -5410,6 +5518,205 @@ fn kitty_placeholder_cells_advance_text_flow() {
             .iter()
             .all(|line| !line.contains('\u{10EEEE}')),
         "raw kitty placeholder glyphs should not leak into viewport text"
+    );
+}
+
+#[test]
+fn kitty_placeholder_inherits_omitted_diacritics_for_rgb_and_rgba() {
+    let mut grid = create_grid_with_size_and_raw(
+        4,
+        16,
+        &kitty_virtual_rgb_with_placement(30, 1, 4, 1, 4, 1),
+    );
+    feed_bytes(
+        &mut grid,
+        &placeholder_text_with_placement_inherited_single_row(30, 1, 4),
+    );
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement(31, 2, 4, 1, 4, 1),
+    );
+    feed_bytes(
+        &mut grid,
+        &placeholder_text_with_placement_inherited_single_row(31, 2, 4),
+    );
+
+    let placeholder_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(placeholder_renders.len(), 2);
+    assert_eq!(
+        placeholder_renders
+            .iter()
+            .find(|render| render.image_id == 1)
+            .map(|render| render.cells.len()),
+        Some(4),
+        "RGB placeholder cells should inherit omitted diacritics from the cell to the left",
+    );
+    assert_eq!(
+        placeholder_renders
+            .iter()
+            .find(|render| render.image_id == 2)
+            .map(|render| render.cells.len()),
+        Some(4),
+        "RGBA placeholder cells should inherit omitted diacritics from the cell to the left",
+    );
+}
+
+#[test]
+fn kitty_compressed_rgba_payload_is_decompressed_before_storage() {
+    let (mut grid, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(4, 8);
+    let raw_payload = [0u8, 0, 0, 255, 255, 255, 255, 255];
+    feed_bytes(
+        &mut grid,
+        &kitty_explicit_rgba_compressed(32, 1, 2, 1, 2, &raw_payload),
+    );
+
+    let stored_image_id = grid
+        .visible_kitty_image_chunks(0, 0)
+        .first()
+        .map(|chunk| chunk.image_id)
+        .expect("expected compressed RGBA placement to remain visible");
+    let stored_image = kitty_asset_store
+        .borrow()
+        .image_data(stored_image_id)
+        .expect("expected compressed RGBA payload to be stored");
+    match stored_image {
+        crate::output::KittyImageData::Rgba { data, width, height } => {
+            assert_eq!((width, height), (1, 2));
+            assert_eq!(
+                data, raw_payload,
+                "compressed RGBA payloads should be decompressed before entering the kitty asset store"
+            );
+        },
+        other => panic!("expected stored RGBA image data, got {other:?}"),
+    }
+}
+
+#[test]
+fn kitty_compressed_rgb_payload_is_decompressed_before_storage() {
+    let (mut grid, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(4, 8);
+    let raw_payload = [0u8, 0, 0, 255, 255, 255];
+    feed_bytes(
+        &mut grid,
+        &kitty_explicit_rgb_compressed(33, 1, 2, 1, 2, &raw_payload),
+    );
+
+    let stored_image_id = grid
+        .visible_kitty_image_chunks(0, 0)
+        .first()
+        .map(|chunk| chunk.image_id)
+        .expect("expected compressed RGB placement to remain visible");
+    let stored_image = kitty_asset_store
+        .borrow()
+        .image_data(stored_image_id)
+        .expect("expected compressed RGB payload to be stored");
+    match stored_image {
+        crate::output::KittyImageData::Rgb { data, width, height } => {
+            assert_eq!((width, height), (1, 2));
+            assert_eq!(
+                data, raw_payload,
+                "compressed RGB payloads should be decompressed before entering the kitty asset store"
+            );
+        },
+        other => panic!("expected stored RGB image data, got {other:?}"),
+    }
+}
+
+#[test]
+fn kitty_chunked_compressed_rgb_payload_is_decompressed_after_full_assembly() {
+    let (mut grid, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 32);
+    let raw_payload = vec![0x55; 8 * 4 * 3];
+    feed_bytes(
+        &mut grid,
+        &kitty_explicit_rgb_compressed_chunked(34, 8, 4, 8, 4, &raw_payload, 8),
+    );
+
+    let stored_image_id = grid
+        .visible_kitty_image_chunks(0, 0)
+        .first()
+        .map(|chunk| chunk.image_id)
+        .expect("expected chunked compressed RGB placement to remain visible");
+    let stored_image = kitty_asset_store
+        .borrow()
+        .image_data(stored_image_id)
+        .expect("expected chunked compressed RGB payload to be stored");
+    match stored_image {
+        crate::output::KittyImageData::Rgb { data, width, height } => {
+            assert_eq!((width, height), (8, 4));
+            assert_eq!(
+                data, raw_payload,
+                "chunked compressed RGB payloads should be decompressed only after full assembly"
+            );
+        },
+        other => panic!("expected stored RGB image data, got {other:?}"),
+    }
+}
+
+#[test]
+fn kitty_non_query_upload_and_placement_commands_emit_replies() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(4, 8);
+
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=t,f=24,s=1,v=1,i=51;EjRW\x1b\\",
+    );
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=p,i=51,p=1,c=1,r=1\x1b\\",
+    );
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=p,i=404,p=1,c=1,r=1\x1b\\",
+    );
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=1,a=p,i=51,p=2,c=1,r=1\x1b\\",
+    );
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=2,a=T,f=24,s=1,v=1,i=52,c=1,r=1;EjRW\x1b\\",
+    );
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=2,a=p,i=404,p=2,c=1,r=1\x1b\\",
+    );
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert_eq!(
+        replies.len(),
+        3,
+        "non-quiet kitty upload/placement commands should enqueue success and error replies, got {replies:?}",
+    );
+    assert!(
+        replies.iter().any(|reply| reply == "\u{1b}_Gi=51;OK\u{1b}\\"),
+        "expected upload success reply for i=51, got {replies:?}",
+    );
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply == "\u{1b}_Gi=51,p=1;OK\u{1b}\\"),
+        "expected placement success reply for i=51,p=1, got {replies:?}",
+    );
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.contains("i=404,p=1;ENOENT:")),
+        "expected missing-image placement failure reply for i=404,p=1, got {replies:?}",
+    );
+    assert!(
+        !replies.iter().any(|reply| reply.contains("i=52;OK")),
+        "q=2 successful non-query commands should not emit visible OK replies, got {replies:?}",
+    );
+    assert!(
+        !replies.iter().any(|reply| reply.contains("i=404,p=2;ENOENT:")),
+        "q=2 failing non-query commands should suppress failure replies, got {replies:?}",
     );
 }
 
