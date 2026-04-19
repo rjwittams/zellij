@@ -112,7 +112,8 @@ impl PendingKittyPlaceholder {
         let placeholder_col = match self.column_diacritic {
             Some(column_diacritic) => kitty_diacritic_to_index(column_diacritic)? as u16,
             None => inherited
-                .map(|previous| previous.placeholder_col.saturating_add(1))?,
+                .map(|previous| previous.placeholder_col.saturating_add(1))
+                .unwrap_or(0),
         };
         let image_id = if let Some(high_byte_diacritic) = self.image_id_high_byte_diacritic {
             let high_byte = kitty_diacritic_to_index(high_byte_diacritic)?;

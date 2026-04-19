@@ -5435,6 +5435,43 @@ fn placeholder_text_with_placement_inherited_single_row(
     output.into_bytes()
 }
 
+fn placeholder_text_with_placement_inherited_rows(
+    image_id: u32,
+    placement_id: u32,
+    cols: usize,
+    rows: usize,
+    x: usize,
+    y: usize,
+) -> Vec<u8> {
+    let image_low = image_id & 0x00FF_FFFF;
+    let image_r = (image_low >> 16) & 0xFF;
+    let image_g = (image_low >> 8) & 0xFF;
+    let image_b = image_low & 0xFF;
+    let placement_low = placement_id & 0x00FF_FFFF;
+    let placement_r = (placement_low >> 16) & 0xFF;
+    let placement_g = (placement_low >> 8) & 0xFF;
+    let placement_b = placement_low & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    let diacritics = [
+        '\u{305}', '\u{30D}', '\u{30E}', '\u{310}', '\u{312}', '\u{33D}', '\u{33E}', '\u{33F}',
+        '\u{346}', '\u{34A}', '\u{34B}', '\u{34C}', '\u{350}', '\u{351}',
+    ];
+    let mut output = String::new();
+    for row in 0..rows {
+        output.push_str(&format!("\u{1b}[{};{}H", y + row, x));
+        output.push_str(&format!(
+            "\u{1b}[38;2;{image_r};{image_g};{image_b}m\u{1b}[58;2;{placement_r};{placement_g};{placement_b}m"
+        ));
+        output.push(placeholder);
+        output.push(diacritics[row]);
+        for _ in 1..cols {
+            output.push(placeholder);
+        }
+        output.push_str("\u{1b}[39m\u{1b}[59m");
+    }
+    output.into_bytes()
+}
+
 fn create_grid_with_size_and_raw(rows: usize, cols: usize, content: &[u8]) -> Grid {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
@@ -6073,6 +6110,48 @@ fn kitty_placeholder_inherits_omitted_diacritics_for_rgb_and_rgba() {
             .map(|render| render.cells.len()),
         Some(4),
         "RGBA placeholder cells should inherit omitted diacritics from the cell to the left",
+    );
+}
+
+#[test]
+fn kitty_placeholder_inherits_omitted_diacritics_in_smoke_style_multi_row_grid() {
+    let cols: usize = 10;
+    let rows: usize = 4;
+    let mut grid = create_grid_with_size_and_raw(
+        24,
+        40,
+        &kitty_virtual_rgb_with_placement(160, 1, cols as u32, rows as u32, cols as u32, rows as u32),
+    );
+    feed_bytes(
+        &mut grid,
+        &placeholder_text_with_placement_inherited_rows(160, 1, cols, rows, 3, 9),
+    );
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement(161, 2, cols as u32, rows as u32, cols as u32, rows as u32),
+    );
+    feed_bytes(
+        &mut grid,
+        &placeholder_text_with_placement_inherited_rows(161, 2, cols, rows, 21, 17),
+    );
+
+    let placeholder_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(placeholder_renders.len(), 2);
+    assert_eq!(
+        placeholder_renders
+            .iter()
+            .find(|render| render.image_id == 1)
+            .map(|render| render.cells.len()),
+        Some(cols * rows),
+        "RGB smoke-style inherited placeholder grid should resolve all cells",
+    );
+    assert_eq!(
+        placeholder_renders
+            .iter()
+            .find(|render| render.image_id == 2)
+            .map(|render| render.cells.len()),
+        Some(cols * rows),
+        "RGBA smoke-style inherited placeholder grid should resolve all cells",
     );
 }
 
