@@ -90,6 +90,167 @@ fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageC
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct TestRect {
+    x: usize,
+    y: usize,
+    columns: usize,
+    rows: usize,
+}
+
+fn test_scale_u32(total: u32, kept: usize, original: usize) -> u32 {
+    if original == 0 {
+        0
+    } else {
+        ((total as u64 * kept as u64) / original as u64) as u32
+    }
+}
+
+fn rect_intersection(a: TestRect, b: TestRect) -> Option<TestRect> {
+    let left = a.x.max(b.x);
+    let top = a.y.max(b.y);
+    let right = (a.x + a.columns).min(b.x + b.columns);
+    let bottom = (a.y + a.rows).min(b.y + b.rows);
+    if left < right && top < bottom {
+        Some(TestRect {
+            x: left,
+            y: top,
+            columns: right - left,
+            rows: bottom - top,
+        })
+    } else {
+        None
+    }
+}
+
+fn subtract_rect(rect: TestRect, occluder: TestRect) -> Vec<TestRect> {
+    let Some(intersection) = rect_intersection(rect, occluder) else {
+        return vec![rect];
+    };
+    if intersection == rect {
+        return vec![];
+    }
+    let mut fragments = vec![];
+    if intersection.y > rect.y {
+        fragments.push(TestRect {
+            x: rect.x,
+            y: rect.y,
+            columns: rect.columns,
+            rows: intersection.y - rect.y,
+        });
+    }
+    let rect_bottom = rect.y + rect.rows;
+    let intersection_bottom = intersection.y + intersection.rows;
+    if intersection_bottom < rect_bottom {
+        fragments.push(TestRect {
+            x: rect.x,
+            y: intersection_bottom,
+            columns: rect.columns,
+            rows: rect_bottom - intersection_bottom,
+        });
+    }
+    if intersection.x > rect.x {
+        fragments.push(TestRect {
+            x: rect.x,
+            y: intersection.y,
+            columns: intersection.x - rect.x,
+            rows: intersection.rows,
+        });
+    }
+    let rect_right = rect.x + rect.columns;
+    let intersection_right = intersection.x + intersection.columns;
+    if intersection_right < rect_right {
+        fragments.push(TestRect {
+            x: intersection_right,
+            y: intersection.y,
+            columns: rect_right - intersection_right,
+            rows: intersection.rows,
+        });
+    }
+    fragments
+}
+
+fn expected_explicit_fragments_for_occluders(
+    chunk: &KittyImageChunk,
+    occluders: &[TestRect],
+) -> Vec<KittyImageChunk> {
+    let mut rects = vec![TestRect {
+        x: chunk.cell_x,
+        y: chunk.cell_y,
+        columns: chunk.columns,
+        rows: chunk.rows,
+    }];
+    for occluder in occluders {
+        let mut next = vec![];
+        for rect in rects {
+            next.extend(subtract_rect(rect, *occluder));
+        }
+        rects = next;
+    }
+    let mut chunks = rects
+        .into_iter()
+        .map(|rect| KittyImageChunk {
+            cell_x: rect.x,
+            cell_y: rect.y,
+            columns: rect.columns,
+            rows: rect.rows,
+            source_x: chunk.source_x
+                + test_scale_u32(chunk.source_width, rect.x - chunk.cell_x, chunk.columns),
+            source_y: chunk.source_y
+                + test_scale_u32(chunk.source_height, rect.y - chunk.cell_y, chunk.rows),
+            source_width: test_scale_u32(chunk.source_width, rect.columns, chunk.columns),
+            source_height: test_scale_u32(chunk.source_height, rect.rows, chunk.rows),
+            ..chunk.clone()
+        })
+        .collect::<Vec<_>>();
+    chunks.sort_by_key(|chunk| (chunk.cell_y, chunk.cell_x, chunk.rows, chunk.columns));
+    chunks
+}
+
+fn kitty_chunk_signature(
+    chunk: &KittyImageChunk,
+) -> (
+    usize,
+    usize,
+    usize,
+    usize,
+    u32,
+    u32,
+    u32,
+    u32,
+    i32,
+    u32,
+    u32,
+) {
+    (
+        chunk.cell_x,
+        chunk.cell_y,
+        chunk.columns,
+        chunk.rows,
+        chunk.source_x,
+        chunk.source_y,
+        chunk.source_width,
+        chunk.source_height,
+        chunk.z_index,
+        chunk.x_offset,
+        chunk.y_offset,
+    )
+}
+
+fn assert_kitty_chunk_sets_eq(actual: &[KittyImageChunk], expected: &[KittyImageChunk]) {
+    let mut actual = actual
+        .iter()
+        .map(kitty_chunk_signature)
+        .collect::<Vec<_>>();
+    let mut expected = expected
+        .iter()
+        .map(kitty_chunk_signature)
+        .collect::<Vec<_>>();
+    actual.sort_unstable();
+    expected.sort_unstable();
+    assert_eq!(actual, expected);
+}
+
 fn create_kitty_image_data(image_id: u32) -> KittyImageData {
     let byte = image_id as u8;
     KittyImageData::Png {
@@ -987,6 +1148,10 @@ fn test_image_output_pre_vte_clear_invalidates_assumed_kitty_scene() {
         client_output.contains("a=p"),
         "after a pre-VTE clear the kitty scene should still be rebuilt"
     );
+    assert!(
+        client_output.contains("a=t"),
+        "after a pre-VTE clear the kitty asset should be retransmitted because 2J invalidates assumed kitty residency"
+    );
 }
 
 #[test]
@@ -1318,6 +1483,90 @@ fn test_prepare_render_body_derives_kitty_explicit_fragments() {
 }
 
 #[test]
+fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments() {
+    let client_ids = create_test_clients(1);
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    let floating_panes_stack = FloatingPanesStack {
+        layers: vec![create_pane_geom(2, 2, 4, 4), create_pane_geom(5, 0, 2, 5)],
+    };
+    output.add_clients(&client_ids, link_handler, Some(floating_panes_stack));
+
+    let chunk = KittyImageChunk {
+        image_id: 97,
+        placement_id: Some(97),
+        placement_mode: crate::output::KittyImagePlacementMode::Explicit,
+        cell_x: 0,
+        cell_y: 0,
+        columns: 8,
+        rows: 8,
+        source_x: 10,
+        source_y: 20,
+        source_width: 240,
+        source_height: 160,
+        z_index: 0,
+        x_offset: 0,
+        y_offset: 0,
+    };
+    let occluders = [
+        TestRect {
+            x: 2,
+            y: 2,
+            columns: 4,
+            rows: 4,
+        },
+        TestRect {
+            x: 5,
+            y: 0,
+            columns: 2,
+            rows: 5,
+        },
+    ];
+    let expected = expected_explicit_fragments_for_occluders(&chunk, &occluders);
+
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        Some(0),
+    );
+
+    let prepared = output.image_output.prepare_render_body_for_client(1, false);
+    match &prepared.after_text.kitty_plan {
+        KittyScenePlan::Diff {
+            asset_ops,
+            placement_ops,
+        } => {
+            assert_eq!(asset_ops.len(), 1, "expected one resident-asset op");
+            let actual = placement_ops
+                .iter()
+                .map(|placement_op| match placement_op {
+                    KittyPlacementOp::PlaceExplicit { chunk, .. } => chunk.clone(),
+                    other => panic!("expected only explicit placement ops, got {other:?}"),
+                })
+                .collect::<Vec<_>>();
+            assert_kitty_chunk_sets_eq(&actual, &expected);
+        },
+        other => panic!("expected diff kitty plan, got {other:?}"),
+    }
+
+    let mut serialized = String::new();
+    prepared
+        .after_text
+        .serialize(&mut output.image_output, None, &mut serialized)
+        .unwrap();
+    assert_eq!(
+        serialized.matches("\u{1b}_Ga=p,").count(),
+        expected.len(),
+        "serialized output should place every surviving explicit fragment",
+    );
+    assert_eq!(
+        serialized.matches("\u{1b}_Ga=t,").count(),
+        1,
+        "serialized output should ensure the asset once for all fragments",
+    );
+}
+
+#[test]
 fn test_prepare_render_body_derives_kitty_placeholder_fragments() {
     let client_ids = create_test_clients(1);
     let mut output = create_test_output();
@@ -1380,6 +1629,108 @@ fn test_clip_kitty_explicit_fragment_against_covering_pane() {
         },
         other => panic!("expected kitty explicit fragment, got {other:?}"),
     }
+}
+
+#[test]
+fn test_clip_kitty_explicit_fragment_against_two_covering_panes() {
+    let stack = FloatingPanesStack {
+        layers: vec![create_pane_geom(2, 2, 4, 4), create_pane_geom(5, 0, 2, 5)],
+    };
+    let chunk = KittyImageChunk {
+        cell_x: 0,
+        cell_y: 0,
+        columns: 8,
+        rows: 8,
+        source_width: 80,
+        source_height: 80,
+        ..create_kitty_chunk(95, 8, 8)
+    };
+    let occluders = [
+        TestRect {
+            x: 2,
+            y: 2,
+            columns: 4,
+            rows: 4,
+        },
+        TestRect {
+            x: 5,
+            y: 0,
+            columns: 2,
+            rows: 5,
+        },
+    ];
+    let expected =
+        expected_explicit_fragments_for_occluders(&chunk, &occluders);
+
+    let fragments = visible_image_fragments(
+        &stack,
+        vec![ImageFragment::KittyExplicit(KittyExplicitFragment {
+            chunk,
+        })],
+        Some(0),
+        None,
+    );
+
+    let actual = fragments
+        .into_iter()
+        .map(|fragment| match fragment {
+            ImageFragment::KittyExplicit(fragment) => fragment.chunk,
+            other => panic!("expected kitty explicit fragment, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_kitty_chunk_sets_eq(&actual, &expected);
+}
+
+#[test]
+fn test_clip_cropped_kitty_explicit_fragment_against_two_covering_panes() {
+    let stack = FloatingPanesStack {
+        layers: vec![create_pane_geom(2, 2, 4, 4), create_pane_geom(5, 0, 2, 5)],
+    };
+    let chunk = KittyImageChunk {
+        cell_x: 0,
+        cell_y: 0,
+        columns: 8,
+        rows: 8,
+        source_x: 100,
+        source_y: 200,
+        source_width: 240,
+        source_height: 160,
+        ..create_kitty_chunk(96, 8, 8)
+    };
+    let occluders = [
+        TestRect {
+            x: 2,
+            y: 2,
+            columns: 4,
+            rows: 4,
+        },
+        TestRect {
+            x: 5,
+            y: 0,
+            columns: 2,
+            rows: 5,
+        },
+    ];
+    let expected =
+        expected_explicit_fragments_for_occluders(&chunk, &occluders);
+
+    let fragments = visible_image_fragments(
+        &stack,
+        vec![ImageFragment::KittyExplicit(KittyExplicitFragment {
+            chunk,
+        })],
+        Some(0),
+        None,
+    );
+
+    let actual = fragments
+        .into_iter()
+        .map(|fragment| match fragment {
+            ImageFragment::KittyExplicit(fragment) => fragment.chunk,
+            other => panic!("expected kitty explicit fragment, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_kitty_chunk_sets_eq(&actual, &expected);
 }
 
 #[test]

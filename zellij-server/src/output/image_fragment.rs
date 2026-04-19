@@ -65,6 +65,30 @@ fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
     }
 }
 
+fn remap_fragment_placement_id(chunk: &KittyImageChunk) -> Option<u32> {
+    let base = chunk.placement_id?;
+    let mut hash = (base as u64) ^ 0x9e37_79b9_7f4a_7c15;
+    let fields = [
+        chunk.cell_x as u64,
+        chunk.cell_y as u64,
+        chunk.columns as u64,
+        chunk.rows as u64,
+        chunk.source_x as u64,
+        chunk.source_y as u64,
+        chunk.source_width as u64,
+        chunk.source_height as u64,
+        chunk.x_offset as u64,
+        chunk.y_offset as u64,
+    ];
+    for field in fields {
+        hash ^= field
+            .wrapping_add(0x9e37_79b9_7f4a_7c15)
+            .wrapping_add(hash << 6)
+            .wrapping_add(hash >> 2);
+    }
+    Some((hash & 0xffff_ffff) as u32)
+}
+
 fn clip_kitty_explicit_fragment(
     pane_geom: &PaneGeom,
     fragment: &KittyExplicitFragment,
@@ -72,88 +96,114 @@ fn clip_kitty_explicit_fragment(
     let k_chunk = &fragment.chunk;
     let pane_top_edge = pane_geom.y;
     let pane_left_edge = pane_geom.x;
-    let pane_bottom_edge = pane_geom.y + pane_geom.rows.as_usize().saturating_sub(1);
-    let pane_right_edge = pane_geom.x + pane_geom.cols.as_usize().saturating_sub(1);
+    let pane_bottom_edge = pane_geom.y + pane_geom.rows.as_usize();
+    let pane_right_edge = pane_geom.x + pane_geom.cols.as_usize();
     let chunk_top_edge = k_chunk.cell_y;
     let chunk_left_edge = k_chunk.cell_x;
-    let chunk_bottom_edge = k_chunk.cell_y + k_chunk.rows.saturating_sub(1);
-    let chunk_right_edge = k_chunk.cell_x + k_chunk.columns.saturating_sub(1);
+    let chunk_bottom_edge = k_chunk.cell_y + k_chunk.rows;
+    let chunk_right_edge = k_chunk.cell_x + k_chunk.columns;
+
+    let intersection_top = pane_top_edge.max(chunk_top_edge);
+    let intersection_left = pane_left_edge.max(chunk_left_edge);
+    let intersection_bottom = pane_bottom_edge.min(chunk_bottom_edge);
+    let intersection_right = pane_right_edge.min(chunk_right_edge);
+
+    if intersection_top >= intersection_bottom || intersection_left >= intersection_right {
+        return vec![ImageFragment::KittyExplicit(fragment.clone())];
+    }
+
     let mut uncovered = vec![];
-    let covers_completely = pane_top_edge <= chunk_top_edge
-        && pane_bottom_edge >= chunk_bottom_edge
-        && pane_left_edge <= chunk_left_edge
-        && pane_right_edge >= chunk_right_edge;
-    if covers_completely {
+    if intersection_top == chunk_top_edge
+        && intersection_bottom == chunk_bottom_edge
+        && intersection_left == chunk_left_edge
+        && intersection_right == chunk_right_edge
+    {
         return uncovered;
     }
-    let intersects_vertically = (pane_left_edge >= chunk_left_edge
-        && pane_left_edge <= chunk_right_edge)
-        || (pane_right_edge >= chunk_left_edge && pane_right_edge <= chunk_right_edge)
-        || (pane_left_edge <= chunk_left_edge && pane_right_edge >= chunk_right_edge);
-    let intersects_horizontally = (pane_top_edge >= chunk_top_edge
-        && pane_top_edge <= chunk_bottom_edge)
-        || (pane_bottom_edge >= chunk_top_edge && pane_bottom_edge <= chunk_bottom_edge)
-        || (pane_top_edge <= chunk_top_edge && pane_bottom_edge >= chunk_bottom_edge);
-    if pane_top_edge > chunk_top_edge && pane_top_edge <= chunk_bottom_edge && intersects_vertically
-    {
-        let kept_rows = pane_top_edge - chunk_top_edge;
+
+    if intersection_top > chunk_top_edge {
+        let kept_rows = intersection_top - chunk_top_edge;
+        let chunk = KittyImageChunk {
+            rows: kept_rows,
+            source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
+            ..k_chunk.clone()
+        };
         uncovered.push(ImageFragment::KittyExplicit(KittyExplicitFragment {
             chunk: KittyImageChunk {
-                rows: kept_rows,
-                source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
-                ..k_chunk.clone()
+                placement_id: remap_fragment_placement_id(&chunk),
+                ..chunk
             },
         }));
     }
-    if pane_bottom_edge >= chunk_top_edge
-        && pane_bottom_edge < chunk_bottom_edge
-        && intersects_vertically
-    {
-        let removed_rows = pane_bottom_edge + 1 - chunk_top_edge;
-        let kept_rows = k_chunk.rows.saturating_sub(removed_rows);
+    if intersection_bottom < chunk_bottom_edge {
+        let removed_rows = intersection_bottom - chunk_top_edge;
+        let kept_rows = chunk_bottom_edge - intersection_bottom;
+        let chunk = KittyImageChunk {
+            cell_y: intersection_bottom,
+            rows: kept_rows,
+            source_y: k_chunk.source_y
+                + scale_u32(k_chunk.source_height, removed_rows, k_chunk.rows),
+            source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
+            ..k_chunk.clone()
+        };
         uncovered.push(ImageFragment::KittyExplicit(KittyExplicitFragment {
             chunk: KittyImageChunk {
-                cell_y: pane_bottom_edge + 1,
-                rows: kept_rows,
-                source_y: k_chunk.source_y
-                    + scale_u32(k_chunk.source_height, removed_rows, k_chunk.rows),
-                source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
-                ..k_chunk.clone()
+                placement_id: remap_fragment_placement_id(&chunk),
+                ..chunk
             },
         }));
     }
-    if pane_left_edge > chunk_left_edge
-        && pane_left_edge <= chunk_right_edge
-        && intersects_horizontally
-    {
-        let kept_cols = pane_left_edge - chunk_left_edge;
+    if intersection_left > chunk_left_edge {
+        let kept_cols = intersection_left - chunk_left_edge;
+        let kept_rows = intersection_bottom - intersection_top;
+        let chunk = KittyImageChunk {
+            cell_y: intersection_top,
+            columns: kept_cols,
+            rows: kept_rows,
+            source_y: k_chunk.source_y
+                + scale_u32(
+                    k_chunk.source_height,
+                    intersection_top - chunk_top_edge,
+                    k_chunk.rows,
+                ),
+            source_width: scale_u32(k_chunk.source_width, kept_cols, k_chunk.columns),
+            source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
+            ..k_chunk.clone()
+        };
         uncovered.push(ImageFragment::KittyExplicit(KittyExplicitFragment {
             chunk: KittyImageChunk {
-                columns: kept_cols,
-                source_width: scale_u32(k_chunk.source_width, kept_cols, k_chunk.columns),
-                ..k_chunk.clone()
+                placement_id: remap_fragment_placement_id(&chunk),
+                ..chunk
             },
         }));
     }
-    if pane_right_edge >= chunk_left_edge
-        && pane_right_edge < chunk_right_edge
-        && intersects_horizontally
-    {
-        let removed_cols = pane_right_edge + 1 - chunk_left_edge;
-        let kept_cols = k_chunk.columns.saturating_sub(removed_cols);
+    if intersection_right < chunk_right_edge {
+        let removed_cols = intersection_right - chunk_left_edge;
+        let kept_cols = chunk_right_edge - intersection_right;
+        let kept_rows = intersection_bottom - intersection_top;
+        let chunk = KittyImageChunk {
+            cell_x: intersection_right,
+            cell_y: intersection_top,
+            columns: kept_cols,
+            rows: kept_rows,
+            source_x: k_chunk.source_x
+                + scale_u32(k_chunk.source_width, removed_cols, k_chunk.columns),
+            source_y: k_chunk.source_y
+                + scale_u32(
+                    k_chunk.source_height,
+                    intersection_top - chunk_top_edge,
+                    k_chunk.rows,
+                ),
+            source_width: scale_u32(k_chunk.source_width, kept_cols, k_chunk.columns),
+            source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
+            ..k_chunk.clone()
+        };
         uncovered.push(ImageFragment::KittyExplicit(KittyExplicitFragment {
             chunk: KittyImageChunk {
-                cell_x: pane_right_edge + 1,
-                columns: kept_cols,
-                source_x: k_chunk.source_x
-                    + scale_u32(k_chunk.source_width, removed_cols, k_chunk.columns),
-                source_width: scale_u32(k_chunk.source_width, kept_cols, k_chunk.columns),
-                ..k_chunk.clone()
+                placement_id: remap_fragment_placement_id(&chunk),
+                ..chunk
             },
         }));
-    }
-    if uncovered.is_empty() {
-        uncovered.push(ImageFragment::KittyExplicit(fragment.clone()));
     }
     uncovered
 }
