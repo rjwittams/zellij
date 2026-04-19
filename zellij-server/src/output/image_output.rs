@@ -639,13 +639,7 @@ impl ImageOutput {
             &kitty_asset_store,
         );
         let assumed_kitty_scene = if pre_vte_clears_display {
-            Some(KittySceneState {
-                resident_asset_generations: resident_kitty_assets
-                    .iter()
-                    .map(|(image_id, generation)| (*image_id, *generation))
-                    .collect(),
-                ..Default::default()
-            })
+            Some(KittySceneState::default())
         } else {
             Self::kitty_scene_state_from_rendered(
                 &resident_kitty_assets,

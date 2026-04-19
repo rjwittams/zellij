@@ -1158,6 +1158,66 @@ fn kitty_explicit_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: 
         .into_bytes()
 }
 
+fn goto_bytes(x: usize, y: usize) -> Vec<u8> {
+    format!("\u{1b}[{y};{x}H").into_bytes()
+}
+
+fn shared_asset_resize_scene_bytes() -> Vec<u8> {
+    let image_id = 122;
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(
+        b"Expect first: both pairs below show blue shared-asset placeholder + explicit placements.\r\n",
+    );
+    bytes.extend_from_slice(
+        b"Then both assets are replaced with green bytes. The top placeholder is recreated via a separate U=1 placement.\r\n",
+    );
+    bytes.extend_from_slice(
+        b"The bottom placeholder is recreated via combined T,U=1. Explicit recreate stays the same in both pairs.\r\n",
+    );
+    bytes.extend_from_slice(&goto_bytes(2, 7));
+    bytes.extend_from_slice(b"+[shared placeholder]");
+    bytes.extend_from_slice(&goto_bytes(2, 8));
+    bytes.extend_from_slice(b"|          |");
+    bytes.extend_from_slice(&goto_bytes(2, 9));
+    bytes.extend_from_slice(b"|          |");
+    bytes.extend_from_slice(&goto_bytes(2, 10));
+    bytes.extend_from_slice(b"|          |");
+    bytes.extend_from_slice(&goto_bytes(2, 11));
+    bytes.extend_from_slice(b"|          |");
+    bytes.extend_from_slice(&goto_bytes(2, 12));
+    bytes.extend_from_slice(b"+----------+");
+    bytes.extend_from_slice(&goto_bytes(26, 7));
+    bytes.extend_from_slice(b"+[shared explicit]--+");
+    bytes.extend_from_slice(&goto_bytes(26, 8));
+    bytes.extend_from_slice(b"|                |");
+    bytes.extend_from_slice(&goto_bytes(26, 9));
+    bytes.extend_from_slice(b"|                |");
+    bytes.extend_from_slice(&goto_bytes(26, 10));
+    bytes.extend_from_slice(b"|                |");
+    bytes.extend_from_slice(&goto_bytes(26, 11));
+    bytes.extend_from_slice(b"|                |");
+    bytes.extend_from_slice(&goto_bytes(26, 12));
+    bytes.extend_from_slice(b"|                |");
+    bytes.extend_from_slice(&goto_bytes(26, 13));
+    bytes.extend_from_slice(b"|                |");
+    bytes.extend_from_slice(&goto_bytes(26, 14));
+    bytes.extend_from_slice(b"+----------------+");
+    bytes.extend_from_slice(&kitty_virtual_rgba_with_placement_payload(
+        image_id,
+        1,
+        48,
+        32,
+        10,
+        4,
+        "AAAAAAAAAAA=",
+    ));
+    bytes.extend_from_slice(&goto_bytes(3, 8));
+    bytes.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 10, 4));
+    bytes.extend_from_slice(&goto_bytes(27, 8));
+    bytes.extend_from_slice(&kitty_display_placement(image_id, 2, 16, 6));
+    bytes
+}
+
 enum KittyResizeRenderMode {
     Explicit,
     Placeholder,
@@ -10979,6 +11039,155 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
         second_render.contains(&format!("\u{1b}_Ga=p,i={internal_image_id},p=2")),
         "replace frame should recreate the explicit placement"
     );
+}
+
+#[test]
+fn kitty_shared_asset_scene_keeps_rows_stable_across_tab_resize_cycles() {
+    let size = Size { cols: 100, rows: 24 };
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+    let mut tab = create_new_tab_with_image_stores(
+        size,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+    );
+    tab.handle_pty_bytes(1, shared_asset_resize_scene_bytes())
+        .unwrap();
+
+    let mut pane_render = tab
+        .get_pane_with_id_mut(PaneId::Terminal(1))
+        .unwrap()
+        .render(None)
+        .unwrap()
+        .unwrap();
+    let initial_placeholder = pane_render
+        .image_output
+        .kitty_scene
+        .placeholder_renders
+        .clone();
+    let initial_explicit = pane_render.image_output.kitty_scene.explicit_chunks.clone();
+    assert_eq!(initial_placeholder.len(), 1);
+    assert_eq!(initial_explicit.len(), 1);
+    let initial_placeholder_y = initial_placeholder[0]
+        .cells
+        .iter()
+        .map(|cell| cell.cell_y)
+        .min()
+        .unwrap();
+    let initial_explicit_y = initial_explicit[0].cell_y;
+
+    for _ in 0..3 {
+        let narrow = Size { cols: 40, rows: 24 };
+        tab.resize_whole_tab(narrow).unwrap();
+        pane_render = tab
+            .get_pane_with_id_mut(PaneId::Terminal(1))
+            .unwrap()
+            .render(None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pane_render.image_output.kitty_scene.placeholder_renders.len(),
+            1,
+            "placeholder render should still be present immediately after narrowing"
+        );
+        assert_eq!(
+            pane_render.image_output.kitty_scene.explicit_chunks.len(),
+            1,
+            "explicit chunk should still be present immediately after narrowing"
+        );
+
+        let wide = Size { cols: 100, rows: 24 };
+        tab.resize_whole_tab(wide).unwrap();
+        pane_render = tab
+            .get_pane_with_id_mut(PaneId::Terminal(1))
+            .unwrap()
+            .render(None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            pane_render.image_output.kitty_scene.placeholder_renders.len(),
+            1,
+            "placeholder render should still be present immediately after widening"
+        );
+        assert_eq!(
+            pane_render.image_output.kitty_scene.explicit_chunks.len(),
+            1,
+            "explicit chunk should still be present immediately after widening"
+        );
+    }
+
+    let final_placeholder = pane_render.image_output.kitty_scene.placeholder_renders.clone();
+    let final_explicit = pane_render.image_output.kitty_scene.explicit_chunks.clone();
+    assert_eq!(final_placeholder.len(), 1);
+    assert_eq!(final_explicit.len(), 1);
+    let final_placeholder_y = final_placeholder[0]
+        .cells
+        .iter()
+        .map(|cell| cell.cell_y)
+        .min()
+        .unwrap();
+    let final_explicit_y = final_explicit[0].cell_y;
+
+    assert_eq!(
+        final_placeholder_y, initial_placeholder_y,
+        "placeholder rows should return to their original position after repeated tab resize cycles"
+    );
+    assert_eq!(
+        final_explicit_y, initial_explicit_y,
+        "explicit placement rows should return to their original position after repeated tab resize cycles"
+    );
+}
+
+#[test]
+fn kitty_shared_asset_resize_followup_frames_retransmit_and_redraw_both_modes() {
+    let size = Size { cols: 100, rows: 24 };
+    let client_id = 1;
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+    let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
+        width: 8,
+        height: 21,
+    })));
+    let mut tab = create_new_tab_with_image_stores(
+        size,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+    );
+    tab.handle_pty_bytes(1, shared_asset_resize_scene_bytes())
+        .unwrap();
+
+    let mut output = Output::new_with_kitty_asset_store(
+        sixel_image_store,
+        kitty_asset_store,
+        character_cell_size,
+        true,
+        true,
+    );
+    tab.render(&mut output, None).unwrap();
+    let _ = output.serialize().unwrap();
+
+    for target_size in [Size { cols: 40, rows: 24 }, Size { cols: 100, rows: 24 }] {
+        tab.resize_whole_tab(target_size).unwrap();
+        tab.render(&mut output, None).unwrap();
+        let render = output.serialize().unwrap();
+        let render = render.get(&client_id).unwrap();
+        assert!(
+            render.contains("a=t"),
+            "shared-asset resize follow-up frame should retransmit kitty asset data; render was: {render:?}"
+        );
+        assert!(
+            render.contains("a=p,U=1"),
+            "shared-asset resize follow-up frame should redraw placeholder placement; render was: {render:?}"
+        );
+        assert!(
+            render.contains('\u{10EEEE}'),
+            "shared-asset resize follow-up frame should redraw placeholder cells; render was: {render:?}"
+        );
+        assert!(
+            render.contains("a=p,i="),
+            "shared-asset resize follow-up frame should redraw explicit placement; render was: {render:?}"
+        );
+    }
 }
 
 #[test]

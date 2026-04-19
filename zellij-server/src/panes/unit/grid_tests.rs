@@ -5194,6 +5194,19 @@ fn kitty_explicit_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: 
         .into_bytes()
 }
 
+fn kitty_explicit_rgba_no_movement(
+    image_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=T,C=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAA==\u{1b}\\"
+    )
+    .into_bytes()
+}
+
 fn kitty_virtual_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
     format!(
         "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAAAAAAA=\u{1b}\\"
@@ -5518,6 +5531,508 @@ fn kitty_placeholder_cells_advance_text_flow() {
             .iter()
             .all(|line| !line.contains('\u{10EEEE}')),
         "raw kitty placeholder glyphs should not leak into viewport text"
+    );
+}
+
+#[test]
+fn kitty_explicit_c1_placement_does_not_advance_text_flow() {
+    let mut grid = create_grid_with_size_and_raw(2, 8, b"AAA\r\nBBB");
+
+    assert_eq!(grid.lines_above.len(), 0);
+    feed_bytes(&mut grid, &kitty_explicit_rgba_no_movement(27, 1, 2, 1, 2));
+
+    assert_eq!(
+        grid.lines_above.len(),
+        0,
+        "explicit C=1 placement should not add canonical lines or scroll text"
+    );
+    let vp = viewport_texts(&grid);
+    assert_eq!(vp[0], "AAA");
+    assert_eq!(vp[1], "BBB");
+}
+
+#[test]
+fn kitty_explicit_default_placement_advances_text_flow() {
+    let mut grid = create_grid_with_size_and_raw(2, 8, b"AAA\r\nBBB");
+
+    assert_eq!(grid.lines_above.len(), 0);
+    feed_bytes(&mut grid, &kitty_explicit_rgba(28, 1, 2, 1, 2));
+
+    assert_eq!(grid.lines_above.len(), 2);
+}
+
+#[test]
+fn kitty_explicit_c1_stays_aligned_with_text_marker_across_scroll_viewport_transitions() {
+    let mut grid = create_grid_with_size_and_raw(4, 12, b"\x1b[2;2HMARK\x1b[2;8H");
+    feed_bytes(&mut grid, &kitty_explicit_rgba_no_movement(35, 1, 1, 1, 1));
+    feed_bytes(&mut grid, b"\r\nAA\r\nBB\r\nCC\r\nDD\r\nEE");
+
+    assert!(
+        grid.visible_kitty_image_chunks(0, 0).is_empty(),
+        "explicit image should be out of view after enough subsequent text"
+    );
+
+    grid.move_viewport_up(4);
+    let chunks = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(chunks.len(), 1, "explicit image should reappear when scrolling back");
+
+    let marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker text should reappear when scrolling back");
+    assert_eq!(
+        chunks[0].cell_y, marker_row,
+        "explicit C=1 image should stay aligned with surrounding text after scrolling"
+    );
+
+    grid.move_viewport_down(4);
+    assert!(
+        grid.visible_kitty_image_chunks(0, 0).is_empty(),
+        "explicit image should disappear again when scrolled back to the bottom"
+    );
+}
+
+#[test]
+fn kitty_explicit_c1_stays_aligned_with_text_marker_after_prior_wrap_and_scroll() {
+    let mut grid = create_grid_with_size_and_raw(
+        4,
+        10,
+        b"this heading is long enough to wrap and scroll before placement",
+    );
+
+    feed_bytes(&mut grid, b"\x1b[4;2HMARK");
+    feed_bytes(&mut grid, b"\x1b[4;8H");
+    feed_bytes(&mut grid, &kitty_explicit_rgba_no_movement(36, 1, 1, 1, 1));
+
+    let marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker text should be visible");
+    let chunks = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(
+        chunks.len(),
+        1,
+        "expected a single explicit kitty image chunk"
+    );
+    assert_eq!(
+        chunks[0].cell_y, marker_row,
+        "explicit C=1 image should stay aligned with a bottom-row marker after prior wrap/scroll"
+    );
+}
+
+#[test]
+fn kitty_explicit_c1_scrolls_with_text_after_bottom_newline() {
+    let mut grid = create_grid_with_size_and_raw(4, 12, b"\x1b[3;2HMARK\x1b[3;8H");
+    feed_bytes(&mut grid, &kitty_explicit_rgba_no_movement(37, 1, 1, 1, 1));
+
+    let before_marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker should be visible before scroll");
+    let before_chunks = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(before_chunks.len(), 1);
+    assert_eq!(before_chunks[0].cell_y, before_marker_row);
+
+    feed_bytes(&mut grid, b"\x1b[4;1H\n");
+
+    let after_marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker should remain visible after bottom newline scroll");
+    let after_chunks = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(after_chunks.len(), 1);
+    assert_eq!(
+        after_chunks[0].cell_y, after_marker_row,
+        "explicit C=1 image should scroll with surrounding text after bottom newline"
+    );
+}
+
+#[test]
+fn kitty_placeholder_scrolls_with_text_after_bottom_newline() {
+    let mut grid = create_grid_with_size_and_raw(4, 12, &kitty_virtual_rgba_with_placement(38, 1, 1, 1, 1, 1));
+    feed_bytes(&mut grid, b"\x1b[3;2HMARK\x1b[3;8H");
+    feed_bytes(
+        &mut grid,
+        &placeholder_text_with_placement_inherited_single_row(38, 1, 1),
+    );
+
+    let before_marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker should be visible before scroll");
+    let before_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(
+        before_renders.len(),
+        1,
+        "before-scroll viewport={:?} scrollback={:?} scene={:?}",
+        viewport_texts(&grid),
+        scrollback_texts(&grid),
+        grid.image_scene
+    );
+    assert_eq!(before_renders[0].cells.len(), 1);
+    assert_eq!(before_renders[0].cells[0].cell_y, before_marker_row);
+
+    feed_bytes(&mut grid, b"\x1b[4;1H\n");
+
+    let after_marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker should remain visible after bottom newline scroll");
+    let after_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(
+        after_renders.len(),
+        1,
+        "viewport={:?} scrollback={:?} scene={:?}",
+        viewport_texts(&grid),
+        scrollback_texts(&grid),
+        grid.image_scene
+    );
+    assert_eq!(after_renders[0].cells.len(), 1);
+    assert_eq!(
+        after_renders[0].cells[0].cell_y, after_marker_row,
+        "placeholder image should scroll with surrounding text after bottom newline"
+    );
+}
+
+#[test]
+fn kitty_explicit_multirow_bottom_clipped_scrolls_with_text_after_bottom_newline() {
+    let mut grid = create_grid_with_size_and_raw(4, 12, b"\x1b[2;2HMARK\x1b[2;8H");
+    feed_bytes(&mut grid, &kitty_explicit_rgba_no_movement(40, 2, 8, 2, 4));
+
+    let before_marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker should be visible before scroll");
+    let before_chunks = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(before_chunks.len(), 1);
+    assert_eq!(before_chunks[0].cell_y, before_marker_row);
+
+    feed_bytes(&mut grid, b"\x1b[4;1H\n");
+
+    let after_marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker should remain visible after bottom newline scroll");
+    let after_chunks = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(after_chunks.len(), 1);
+    assert_eq!(
+        after_chunks[0].cell_y, after_marker_row,
+        "multi-row explicit image should scroll with surrounding text after bottom newline"
+    );
+}
+
+#[test]
+fn kitty_placeholder_multirow_bottom_clipped_scrolls_with_text_after_bottom_newline() {
+    let mut grid =
+        create_grid_with_size_and_raw(4, 12, &kitty_virtual_rgba_with_placement(41, 1, 2, 8, 2, 4));
+    feed_bytes(&mut grid, b"\x1b[2;2HMARK\x1b[2;8H");
+    feed_bytes(
+        &mut grid,
+        &placeholder_rgba_text_with_placement(41, 1, 2, 4),
+    );
+
+    let before_marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker should be visible before scroll");
+    let before_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(
+        before_renders.len(),
+        1,
+        "before-scroll viewport={:?} scrollback={:?} scene={:?}",
+        viewport_texts(&grid),
+        scrollback_texts(&grid),
+        grid.image_scene
+    );
+    assert!(
+        before_renders[0]
+            .cells
+            .iter()
+            .any(|cell| cell.cell_y == before_marker_row),
+        "placeholder cells should include the marker row before scroll"
+    );
+
+    feed_bytes(&mut grid, b"\x1b[4;1H\n");
+
+    let after_marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker should remain visible after bottom newline scroll");
+    let after_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(after_renders.len(), 1);
+    assert!(
+        after_renders[0]
+            .cells
+            .iter()
+            .any(|cell| cell.cell_y == after_marker_row),
+        "multi-row placeholder should still include the marker row after bottom newline"
+    );
+}
+
+fn goto_bytes(x: usize, y: usize) -> Vec<u8> {
+    format!("\u{1b}[{y};{x}H").into_bytes()
+}
+
+fn smoke_draw_box_bytes(x: usize, y: usize, w: usize, h: usize, title: &str) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let title_text = format!("[{title}]");
+    let mut top = format!("+{}+", "-".repeat(w));
+    if title_text.len() + 4 <= top.len() {
+        top = format!("{}{}{}", &top[..2], title_text, &top[2 + title_text.len()..]);
+    }
+    bytes.extend_from_slice(&goto_bytes(x, y));
+    bytes.extend_from_slice(top.as_bytes());
+    for row in 1..=h {
+        bytes.extend_from_slice(&goto_bytes(x, y + row));
+        bytes.extend_from_slice(format!("|{}|", " ".repeat(w)).as_bytes());
+    }
+    bytes.extend_from_slice(&goto_bytes(x, y + h + 1));
+    bytes.extend_from_slice(format!("+{}+", "-".repeat(w)).as_bytes());
+    bytes
+}
+
+fn shared_asset_smoke_stage_blue_phase_bytes() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&shared_asset_smoke_stage_layout_bytes());
+    bytes.extend_from_slice(&shared_asset_smoke_stage_label_bytes());
+    bytes
+}
+
+fn shared_asset_smoke_stage_layout_bytes() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    let width = 48;
+    let height = 32;
+    let top_image_id = 122;
+    let bottom_image_id = 123;
+
+    bytes.extend_from_slice(b"\x1b[2J\x1b[H\x1b[0m");
+    bytes.extend_from_slice(&goto_bytes(1, 1));
+    bytes.extend_from_slice(b"Shared Asset: replace then recreate placements");
+    bytes.extend_from_slice(&smoke_draw_box_bytes(2, 7, 10, 4, "separate p/U=1"));
+    bytes.extend_from_slice(&smoke_draw_box_bytes(26, 7, 16, 6, "separate explicit"));
+    bytes.extend_from_slice(&kitty_virtual_rgba_with_placement(top_image_id, 1, width, height, 10, 4));
+    bytes.extend_from_slice(&goto_bytes(3, 8));
+    bytes.extend_from_slice(&placeholder_rgba_text_with_placement(top_image_id, 1, 10, 4));
+    bytes.extend_from_slice(&goto_bytes(27, 8));
+    bytes.extend_from_slice(&kitty_display_placement(top_image_id, 2, 16, 6));
+
+    bytes.extend_from_slice(&smoke_draw_box_bytes(2, 15, 10, 4, "combined T,U=1"));
+    bytes.extend_from_slice(&smoke_draw_box_bytes(26, 15, 16, 6, "combined explicit"));
+    bytes.extend_from_slice(&kitty_virtual_rgba_with_placement(bottom_image_id, 1, width, height, 10, 4));
+    bytes.extend_from_slice(&goto_bytes(3, 16));
+    bytes.extend_from_slice(&placeholder_rgba_text_with_placement(bottom_image_id, 1, 10, 4));
+    bytes.extend_from_slice(&goto_bytes(27, 16));
+    bytes.extend_from_slice(&kitty_display_placement(bottom_image_id, 2, 16, 6));
+    bytes
+}
+
+fn shared_asset_smoke_stage_label_bytes() -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&goto_bytes(1, 3));
+    bytes.extend_from_slice(
+        b"Expect first: both pairs below show blue shared-asset placeholder + explicit placements.",
+    );
+    bytes.extend_from_slice(&goto_bytes(1, 4));
+    bytes.extend_from_slice(
+        b"Then both assets are replaced with green bytes. The top placeholder is recreated via a separate U=1 placement.",
+    );
+    bytes.extend_from_slice(&goto_bytes(1, 5));
+    bytes.extend_from_slice(
+        b"The bottom placeholder is recreated via combined T,U=1. Explicit recreate stays the same in both pairs.",
+    );
+    bytes
+}
+
+#[test]
+fn kitty_shared_asset_scene_keeps_placeholder_and_explicit_rows_stable_across_resize_cycles() {
+    let mut grid = create_grid_with_size_and_raw(24, 100, &shared_asset_smoke_stage_blue_phase_bytes());
+
+    let initial_placeholder = grid.visible_kitty_placeholder_renders(0, 0);
+    let initial_explicit = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(initial_placeholder.len(), 2);
+    assert_eq!(initial_explicit.len(), 2);
+    let mut initial_placeholder_ys = initial_placeholder
+        .iter()
+        .map(|render| render.cells.iter().map(|cell| cell.cell_y).min().unwrap())
+        .collect::<Vec<_>>();
+    initial_placeholder_ys.sort_unstable();
+    let mut initial_explicit_ys = initial_explicit
+        .iter()
+        .map(|chunk| chunk.cell_y)
+        .collect::<Vec<_>>();
+    initial_explicit_ys.sort_unstable();
+
+    for _ in 0..3 {
+        grid.change_size(24, 40);
+        grid.change_size(24, 100);
+    }
+
+    let final_placeholder = grid.visible_kitty_placeholder_renders(0, 0);
+    let final_explicit = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(final_placeholder.len(), 2);
+    assert_eq!(final_explicit.len(), 2);
+    let mut final_placeholder_ys = final_placeholder
+        .iter()
+        .map(|render| render.cells.iter().map(|cell| cell.cell_y).min().unwrap())
+        .collect::<Vec<_>>();
+    final_placeholder_ys.sort_unstable();
+    let mut final_explicit_ys = final_explicit
+        .iter()
+        .map(|chunk| chunk.cell_y)
+        .collect::<Vec<_>>();
+    final_explicit_ys.sort_unstable();
+
+    assert_eq!(
+        final_placeholder_ys, initial_placeholder_ys,
+        "placeholder rows should return to their original position after narrow->wide resize cycles"
+    );
+    assert_eq!(
+        final_explicit_ys, initial_explicit_ys,
+        "explicit placement rows should return to their original position after narrow->wide resize cycles"
+    );
+}
+
+#[test]
+fn kitty_shared_asset_scene_labels_move_top_pair_down_in_narrow_pane() {
+    let mut grid = create_grid_with_size_and_raw(24, 52, &shared_asset_smoke_stage_layout_bytes());
+
+    let before_label_placeholder_y = grid
+        .visible_kitty_placeholder_renders(0, 0)
+        .iter()
+        .map(|render| render.cells.iter().map(|cell| cell.cell_y).min().unwrap())
+        .min()
+        .unwrap();
+    let before_label_explicit_y = grid
+        .visible_kitty_image_chunks(0, 0)
+        .iter()
+        .map(|chunk| chunk.cell_y)
+        .min()
+        .unwrap();
+
+    feed_bytes(&mut grid, &shared_asset_smoke_stage_label_bytes());
+
+    let after_label_placeholder_y = grid
+        .visible_kitty_placeholder_renders(0, 0)
+        .iter()
+        .map(|render| render.cells.iter().map(|cell| cell.cell_y).min().unwrap())
+        .min()
+        .unwrap();
+    let after_label_explicit_y = grid
+        .visible_kitty_image_chunks(0, 0)
+        .iter()
+        .map(|chunk| chunk.cell_y)
+        .min()
+        .unwrap();
+
+    assert_eq!(before_label_placeholder_y, 7);
+    assert_eq!(before_label_explicit_y, 7);
+    assert_eq!(
+        after_label_placeholder_y, 7,
+        "labels written after the top pair should not push placeholder cells down"
+    );
+    assert_eq!(
+        after_label_explicit_y, 7,
+        "labels written after the top pair should not push explicit placements down"
+    );
+}
+
+#[test]
+fn kitty_shared_asset_scene_narrow_reflow_keeps_images_aligned_with_box_titles() {
+    let mut grid = create_grid_with_size_and_raw(24, 100, &shared_asset_smoke_stage_blue_phase_bytes());
+    grid.change_size(24, 52);
+
+    let placeholder = grid.visible_kitty_placeholder_renders(0, 0);
+    let explicit = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(placeholder.len(), 2);
+    assert_eq!(explicit.len(), 2);
+
+    let top_placeholder_y = placeholder
+        .iter()
+        .map(|render| render.cells.iter().map(|cell| cell.cell_y).min().unwrap())
+        .min()
+        .unwrap();
+    let top_explicit_y = explicit.iter().map(|chunk| chunk.cell_y).min().unwrap();
+
+    assert_eq!(
+        top_placeholder_y, 7,
+        "top placeholder cells should stay on the first interior row of the top box after narrowing"
+    );
+    assert_eq!(
+        top_explicit_y, 7,
+        "top explicit placement should stay on the first interior row of the top box after narrowing"
+    );
+}
+
+#[test]
+fn kitty_shared_asset_scene_created_while_already_narrow_stays_aligned_after_resize() {
+    let mut grid = create_grid_with_size_and_raw(24, 52, &shared_asset_smoke_stage_blue_phase_bytes());
+
+    let initial_placeholder = grid.visible_kitty_placeholder_renders(0, 0);
+    let initial_explicit = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(initial_placeholder.len(), 2);
+    assert_eq!(initial_explicit.len(), 2);
+
+    let initial_top_placeholder_y = initial_placeholder
+        .iter()
+        .map(|render| render.cells.iter().map(|cell| cell.cell_y).min().unwrap())
+        .min()
+        .unwrap();
+    let initial_top_explicit_y = initial_explicit.iter().map(|chunk| chunk.cell_y).min().unwrap();
+
+    assert_eq!(initial_top_placeholder_y, 7);
+    assert_eq!(initial_top_explicit_y, 7);
+
+    grid.change_size(24, 44);
+    grid.change_size(24, 52);
+
+    let final_placeholder = grid.visible_kitty_placeholder_renders(0, 0);
+    let final_explicit = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(final_placeholder.len(), 2);
+    assert_eq!(final_explicit.len(), 2);
+
+    let final_top_placeholder_y = final_placeholder
+        .iter()
+        .map(|render| render.cells.iter().map(|cell| cell.cell_y).min().unwrap())
+        .min()
+        .unwrap();
+    let final_top_explicit_y = final_explicit.iter().map(|chunk| chunk.cell_y).min().unwrap();
+
+    assert_eq!(final_top_placeholder_y, 7);
+    assert_eq!(final_top_explicit_y, 7);
+}
+
+#[test]
+fn kitty_placeholder_stays_aligned_with_text_marker_after_prior_wrap_and_scroll() {
+    let mut grid = create_grid_with_size_and_raw(
+        4,
+        10,
+        b"this heading is long enough to wrap and scroll before placement",
+    );
+
+    feed_bytes(&mut grid, &kitty_virtual_rgba_with_placement(39, 1, 1, 1, 1, 1));
+    feed_bytes(&mut grid, b"\x1b[4;2HMARK\x1b[4;8H");
+    feed_bytes(
+        &mut grid,
+        &placeholder_text_with_placement_inherited_single_row(39, 1, 1),
+    );
+
+    let marker_row = viewport_texts(&grid)
+        .iter()
+        .position(|line| line.contains("MARK"))
+        .expect("marker text should be visible");
+    let renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(
+        renders.len(),
+        1,
+        "expected a single placeholder render; viewport={:?} scrollback={:?} scene={:?}",
+        viewport_texts(&grid),
+        scrollback_texts(&grid),
+        grid.image_scene
+    );
+    assert_eq!(renders[0].cells.len(), 1, "expected a single placeholder cell");
+    assert_eq!(
+        renders[0].cells[0].cell_y, marker_row,
+        "placeholder should stay aligned with a bottom-row marker after prior wrap/scroll"
     );
 }
 

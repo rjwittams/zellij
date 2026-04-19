@@ -66,7 +66,9 @@ impl KittyDamageRedraw {
     }
 }
 
-use crate::panes::kitty::{KittyApcEffect, KittyImageInsertion, KittyImageState};
+use crate::panes::kitty::{
+    KittyApcEffect, KittyCursorMovementPolicy, KittyImageInsertion, KittyImageState,
+};
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -494,12 +496,17 @@ impl PaneImageScene {
                         vec![]
                     };
                     let geometry = insertion.geometry;
-                    let content_flow = if geometry.rows > 0 {
-                        ImageContentFlow::MoveCursorByCells {
+                    let content_flow = match (
+                        insertion.placement_mode,
+                        insertion.cursor_movement_policy,
+                    ) {
+                        (
+                            KittyImagePlacementMode::Explicit,
+                            KittyCursorMovementPolicy::AfterPlacement,
+                        ) if geometry.rows > 0 => ImageContentFlow::MoveCursorByCells {
                             rows: geometry.rows,
-                        }
-                    } else {
-                        ImageContentFlow::NoCursorMovement
+                        },
+                        _ => ImageContentFlow::NoCursorMovement,
                     };
                     let protocol_identity = Some(ProtocolPlacementIdentity::Kitty {
                         image_id: insertion.protocol_image_id,
@@ -568,7 +575,7 @@ impl PaneImageScene {
                         logical_placement_id,
                         asset_id: insertion.asset_id,
                         protocol_identity,
-                        anchor,
+                        anchor: insertion.anchor,
                         flavor,
                         content_flow,
                     };
@@ -733,16 +740,16 @@ impl PaneImageScene {
             }
             source_height = scale_u32(source_height, projection.rows, rows);
             rows = projection.rows;
-            let serialized_columns = if flavor.columns_specified { columns } else { 0 };
-            let serialized_rows = if flavor.rows_specified { rows } else { 0 };
             explicit_chunks.push(KittyImageChunk {
                 image_id,
                 placement_id,
                 placement_mode: KittyImagePlacementMode::Explicit,
                 cell_x: projection.cell_x,
                 cell_y: projection.cell_y,
-                columns: serialized_columns,
-                rows: serialized_rows,
+                columns,
+                rows,
+                columns_specified: flavor.columns_specified,
+                rows_specified: flavor.rows_specified,
                 source_x,
                 source_y,
                 source_width,

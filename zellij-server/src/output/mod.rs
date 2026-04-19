@@ -966,6 +966,8 @@ pub struct KittyImageChunk {
     pub cell_y: usize,
     pub columns: usize,
     pub rows: usize,
+    pub columns_specified: bool,
+    pub rows_specified: bool,
     pub source_x: u32,
     pub source_y: u32,
     pub source_width: u32,

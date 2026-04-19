@@ -160,6 +160,7 @@ pub struct KittyPlacement {
     pub image_id: u32,
     pub placement_id: Option<u32>,
     pub placement_mode: KittyImagePlacementMode,
+    pub cursor_movement_policy: KittyCursorMovementPolicy,
     pub anchor: FlowAnchor,
     pub source_x: Option<u32>,
     pub source_y: Option<u32>,
@@ -180,6 +181,7 @@ impl Default for KittyPlacement {
             image_id: 0,
             placement_id: None,
             placement_mode: KittyImagePlacementMode::Explicit,
+            cursor_movement_policy: KittyCursorMovementPolicy::AfterPlacement,
             anchor: FlowAnchor::LogicalRow {
                 logical_row: 0,
                 column: 0,
@@ -242,10 +244,12 @@ fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KittyImageInsertion {
     pub asset_id: ImageAssetId,
+    pub anchor: FlowAnchor,
     pub geometry: ImagePlacementGeometry,
     pub protocol_image_id: Option<u32>,
     pub protocol_placement_id: Option<u32>,
     pub placement_mode: KittyImagePlacementMode,
+    pub cursor_movement_policy: KittyCursorMovementPolicy,
     pub replaced_existing_asset: bool,
 }
 
@@ -254,6 +258,12 @@ pub enum KittyApcEffect {
     Placement(KittyImageInsertion),
     AssetReplaced { asset_id: ImageAssetId },
     AssetStored,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KittyCursorMovementPolicy {
+    AfterPlacement,
+    NoMovement,
 }
 
 impl KittyImageState {
@@ -299,7 +309,7 @@ impl KittyImageState {
         let image_data = pending.into_image_data()?;
         let image_dimensions = kitty_image_dimensions(&image_data);
         if let Some(placement) = placement.as_mut() {
-            placement.anchor = anchor;
+            placement.anchor = anchor.clone();
         }
         self.kitty_asset_store
             .borrow_mut()
@@ -324,6 +334,8 @@ impl KittyImageState {
         });
         let protocol_placement_id = placement.placement_id;
         let placement_mode = placement.placement_mode;
+        let cursor_movement_policy = placement.cursor_movement_policy;
+        let placement_anchor = placement.anchor.clone();
         let geometry = placement.geometry_for_image(
             image_dimensions,
             cursor_x,
@@ -333,10 +345,12 @@ impl KittyImageState {
         self.placements.push(placement);
         Some(KittyApcEffect::Placement(KittyImageInsertion {
             asset_id,
+            anchor: placement_anchor,
             geometry,
             protocol_image_id,
             protocol_placement_id,
             placement_mode,
+            cursor_movement_policy,
             replaced_existing_asset,
         }))
     }
@@ -425,13 +439,17 @@ impl KittyImageState {
                 );
                 let protocol_placement_id = placement.placement_id;
                 let placement_mode = placement.placement_mode;
+                let cursor_movement_policy = placement.cursor_movement_policy;
+                let placement_anchor = placement.anchor.clone();
                 self.placements.push(placement);
                 Some(KittyApcEffect::Placement(KittyImageInsertion {
                     asset_id: ImageAssetId(image_id as u64),
+                    anchor: placement_anchor,
                     geometry,
                     protocol_image_id: Some(protocol_image_id),
                     protocol_placement_id,
                     placement_mode,
+                    cursor_movement_policy,
                     replaced_existing_asset: false,
                 }))
             },
@@ -536,6 +554,8 @@ impl KittyImageState {
                 cell_y,
                 columns,
                 rows,
+                columns_specified: placement.columns_specified,
+                rows_specified: placement.rows_specified,
                 source_x,
                 source_y,
                 source_width,
@@ -1207,6 +1227,10 @@ impl ParsedKittyCommand {
                 x_offset: kv.get("X").and_then(|v| v.parse::<u32>().ok()),
                 y_offset: kv.get("Y").and_then(|v| v.parse::<u32>().ok()),
                 z_index: kv.get("z").and_then(|v| v.parse::<i32>().ok()),
+                cursor_movement_policy: match kv.get("C").copied() {
+                    Some("1") => KittyCursorMovementPolicy::NoMovement,
+                    _ => KittyCursorMovementPolicy::AfterPlacement,
+                },
                 ..Default::default()
             };
             match *action {
@@ -1347,10 +1371,10 @@ fn serialize_display(chunk: &KittyImageChunk, placement_id: u32) -> String {
         format!("w={}", chunk.source_width),
         format!("h={}", chunk.source_height),
     ];
-    if chunk.columns > 0 {
+    if chunk.columns_specified {
         parts.push(format!("c={}", chunk.columns));
     }
-    if chunk.rows > 0 {
+    if chunk.rows_specified {
         parts.push(format!("r={}", chunk.rows));
     }
     if chunk.x_offset > 0 {
@@ -1547,6 +1571,7 @@ mod tests {
                 image_id: 1,
                 placement_id: Some(7),
                 placement_mode: KittyImagePlacementMode::Explicit,
+                cursor_movement_policy: KittyCursorMovementPolicy::AfterPlacement,
                 anchor: FlowAnchor::LogicalRow {
                     logical_row: 0,
                     column: 0,
@@ -1575,16 +1600,10 @@ mod tests {
                 placement_mode: KittyImagePlacementMode::Explicit,
                 cell_x: 0,
                 cell_y: 0,
-                columns: if geometry.columns_specified {
-                    geometry.columns
-                } else {
-                    0
-                },
-                rows: if geometry.rows_specified {
-                    geometry.rows
-                } else {
-                    0
-                },
+                columns: geometry.columns,
+                rows: geometry.rows,
+                columns_specified: geometry.columns_specified,
+                rows_specified: geometry.rows_specified,
                 source_x: geometry.source_x,
                 source_y: geometry.source_y,
                 source_width: geometry.source_width,

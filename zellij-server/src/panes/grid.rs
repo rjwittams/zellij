@@ -1140,16 +1140,56 @@ impl Grid {
     fn set_active_charset(&mut self, index: CharsetIndex) {
         self.active_charset = index;
     }
-    fn canonical_line_count(rows: &VecDeque<Row>) -> usize {
-        rows.iter().filter(|row| row.is_canonical).count()
+    fn canonical_flow_anchor_for_position_in_buffers(
+        lines_above: &VecDeque<Row>,
+        viewport: &VecDeque<Row>,
+        width: usize,
+        logical_row: usize,
+        column: usize,
+    ) -> Option<FlowAnchor> {
+        if width == 0 {
+            return None;
+        }
+        let all_rows: Vec<&Row> = lines_above.iter().chain(viewport.iter()).collect();
+        all_rows.get(logical_row)?;
+        let mut canonical_row = logical_row;
+        while canonical_row > 0 && !all_rows.get(canonical_row)?.is_canonical {
+            canonical_row -= 1;
+        }
+        if !all_rows.get(canonical_row)?.is_canonical {
+            return None;
+        }
+        let canonical_line_index = all_rows[..=canonical_row]
+            .iter()
+            .filter(|row| row.is_canonical)
+            .count()
+            .saturating_sub(1);
+        let offset_in_line = logical_row
+            .saturating_sub(canonical_row)
+            .saturating_mul(width)
+            .saturating_add(column);
+        Some(FlowAnchor::CanonicalLine {
+            canonical_line_index,
+            offset_in_line,
+        })
     }
 
-    fn full_cursor_flow_anchor(&self) -> FlowAnchor {
-        let canonical_lines_above = Self::canonical_line_count(&self.lines_above);
-        FlowAnchor::CanonicalLine {
-            canonical_line_index: canonical_lines_above + self.cursor_canonical_line_index(),
-            offset_in_line: self.cursor_index_in_canonical_line(),
+    fn current_logical_flow_anchor(&self) -> FlowAnchor {
+        FlowAnchor::LogicalRow {
+            logical_row: self.lines_above.len() + self.cursor.y,
+            column: self.cursor.x,
         }
+    }
+
+    fn kitty_cursor_flow_anchor(&self) -> FlowAnchor {
+        Self::canonical_flow_anchor_for_position_in_buffers(
+            &self.lines_above,
+            &self.viewport,
+            self.width,
+            self.lines_above.len() + self.cursor.y,
+            self.cursor.x,
+        )
+        .unwrap_or_else(|| self.current_logical_flow_anchor())
     }
 
     fn resolve_flow_anchor_in_buffers(
@@ -2541,7 +2581,7 @@ impl Grid {
             self.finalize_pending_kitty_placeholder();
             self.pending_kitty_placeholder = Some(PendingKittyPlaceholder::new(
                 &self.cursor.pending_styles,
-                self.full_cursor_flow_anchor(),
+                self.kitty_cursor_flow_anchor(),
             ));
             self.move_cursor_forward_until_edge(1);
             return true;
@@ -3760,7 +3800,7 @@ impl Perform for Grid {
                 let width = self.width;
                 let image_effect = self.image_scene.handle_kitty_apc(
                     &apc_bytes,
-                    self.full_cursor_flow_anchor(),
+                    self.kitty_cursor_flow_anchor(),
                     self.cursor.x,
                     self.lines_above.len() + self.cursor.y,
                     character_cell_size,

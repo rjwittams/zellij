@@ -80,6 +80,8 @@ fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageC
         cell_y: 0,
         columns,
         rows,
+        columns_specified: true,
+        rows_specified: true,
         source_x: 0,
         source_y: 0,
         source_width: 10,
@@ -207,33 +209,22 @@ fn expected_explicit_fragments_for_occluders(
     chunks
 }
 
-fn kitty_chunk_signature(
-    chunk: &KittyImageChunk,
-) -> (
-    usize,
-    usize,
-    usize,
-    usize,
-    u32,
-    u32,
-    u32,
-    u32,
-    i32,
-    u32,
-    u32,
-) {
-    (
+fn kitty_chunk_signature(chunk: &KittyImageChunk) -> String {
+    format!(
+        "{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}:{}",
         chunk.cell_x,
         chunk.cell_y,
         chunk.columns,
         chunk.rows,
+        chunk.columns_specified,
+        chunk.rows_specified,
         chunk.source_x,
         chunk.source_y,
         chunk.source_width,
         chunk.source_height,
         chunk.z_index,
         chunk.x_offset,
-        chunk.y_offset,
+        chunk.y_offset
     )
 }
 
@@ -1500,6 +1491,8 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments()
         cell_y: 0,
         columns: 8,
         rows: 8,
+        columns_specified: true,
+        rows_specified: true,
         source_x: 10,
         source_y: 20,
         source_width: 240,
@@ -1563,6 +1556,187 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments()
         serialized.matches("\u{1b}_Ga=t,").count(),
         1,
         "serialized output should ensure the asset once for all fragments",
+    );
+}
+
+#[test]
+fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_with_columns_only()
+{
+    let client_ids = create_test_clients(1);
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    let floating_panes_stack = FloatingPanesStack {
+        layers: vec![create_pane_geom(2, 2, 4, 4), create_pane_geom(5, 0, 2, 5)],
+    };
+    output.add_clients(&client_ids, link_handler, Some(floating_panes_stack));
+
+    let expected_geometry = KittyImageChunk {
+        image_id: 98,
+        placement_id: Some(98),
+        placement_mode: crate::output::KittyImagePlacementMode::Explicit,
+        cell_x: 0,
+        cell_y: 0,
+        columns: 8,
+        rows: 8,
+        columns_specified: true,
+        rows_specified: false,
+        source_x: 10,
+        source_y: 20,
+        source_width: 240,
+        source_height: 160,
+        z_index: 0,
+        x_offset: 0,
+        y_offset: 0,
+    };
+    let occluders = [
+        TestRect {
+            x: 2,
+            y: 2,
+            columns: 4,
+            rows: 4,
+        },
+        TestRect {
+            x: 5,
+            y: 0,
+            columns: 2,
+            rows: 5,
+        },
+    ];
+    let expected = expected_explicit_fragments_for_occluders(&expected_geometry, &occluders);
+
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![expected_geometry.clone()]),
+        Some(0),
+    );
+
+    let prepared = output.image_output.prepare_render_body_for_client(1, false);
+    match &prepared.after_text.kitty_plan {
+        KittyScenePlan::Diff {
+            asset_ops,
+            placement_ops,
+        } => {
+            assert_eq!(asset_ops.len(), 1, "expected one resident-asset op");
+            let actual = placement_ops
+                .iter()
+                .map(|placement_op| match placement_op {
+                    KittyPlacementOp::PlaceExplicit { chunk, .. } => chunk.clone(),
+                    other => panic!("expected only explicit placement ops, got {other:?}"),
+                })
+                .collect::<Vec<_>>();
+            assert_kitty_chunk_sets_eq(&actual, &expected);
+        },
+        other => panic!("expected diff kitty plan, got {other:?}"),
+    }
+
+    let mut serialized = String::new();
+    prepared
+        .after_text
+        .serialize(&mut output.image_output, None, &mut serialized)
+        .unwrap();
+    assert_eq!(
+        serialized.matches("\u{1b}_Ga=p,").count(),
+        expected.len(),
+        "serialized output should place every surviving explicit fragment",
+    );
+    assert_eq!(
+        serialized.matches("\u{1b}_Ga=t,").count(),
+        1,
+        "serialized output should ensure the asset once for all fragments",
+    );
+    assert!(
+        !serialized.contains(",r="),
+        "columns-only serialization should omit r= while retaining real occupancy for clipping",
+    );
+}
+
+#[test]
+fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_with_rows_only() {
+    let client_ids = create_test_clients(1);
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    let floating_panes_stack = FloatingPanesStack {
+        layers: vec![create_pane_geom(2, 2, 4, 4), create_pane_geom(5, 0, 2, 5)],
+    };
+    output.add_clients(&client_ids, link_handler, Some(floating_panes_stack));
+
+    let expected_geometry = KittyImageChunk {
+        image_id: 99,
+        placement_id: Some(99),
+        placement_mode: crate::output::KittyImagePlacementMode::Explicit,
+        cell_x: 0,
+        cell_y: 0,
+        columns: 8,
+        rows: 8,
+        columns_specified: false,
+        rows_specified: true,
+        source_x: 10,
+        source_y: 20,
+        source_width: 240,
+        source_height: 160,
+        z_index: 0,
+        x_offset: 0,
+        y_offset: 0,
+    };
+    let occluders = [
+        TestRect {
+            x: 2,
+            y: 2,
+            columns: 4,
+            rows: 4,
+        },
+        TestRect {
+            x: 5,
+            y: 0,
+            columns: 2,
+            rows: 5,
+        },
+    ];
+    let expected = expected_explicit_fragments_for_occluders(&expected_geometry, &occluders);
+
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![expected_geometry.clone()]),
+        Some(0),
+    );
+
+    let prepared = output.image_output.prepare_render_body_for_client(1, false);
+    match &prepared.after_text.kitty_plan {
+        KittyScenePlan::Diff {
+            asset_ops,
+            placement_ops,
+        } => {
+            assert_eq!(asset_ops.len(), 1, "expected one resident-asset op");
+            let actual = placement_ops
+                .iter()
+                .map(|placement_op| match placement_op {
+                    KittyPlacementOp::PlaceExplicit { chunk, .. } => chunk.clone(),
+                    other => panic!("expected only explicit placement ops, got {other:?}"),
+                })
+                .collect::<Vec<_>>();
+            assert_kitty_chunk_sets_eq(&actual, &expected);
+        },
+        other => panic!("expected diff kitty plan, got {other:?}"),
+    }
+
+    let mut serialized = String::new();
+    prepared
+        .after_text
+        .serialize(&mut output.image_output, None, &mut serialized)
+        .unwrap();
+    assert_eq!(
+        serialized.matches("\u{1b}_Ga=p,").count(),
+        expected.len(),
+        "serialized output should place every surviving explicit fragment",
+    );
+    assert_eq!(
+        serialized.matches("\u{1b}_Ga=t,").count(),
+        1,
+        "serialized output should ensure the asset once for all fragments",
+    );
+    assert!(
+        !serialized.contains(",c="),
+        "rows-only serialization should omit c= while retaining real occupancy for clipping",
     );
 }
 
