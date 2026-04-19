@@ -89,6 +89,14 @@ fn remap_fragment_placement_id(chunk: &KittyImageChunk) -> Option<u32> {
     Some((hash & 0xffff_ffff) as u32)
 }
 
+fn promote_split_explicit_chunk_to_bounded_geometry(chunk: KittyImageChunk) -> KittyImageChunk {
+    KittyImageChunk {
+        columns_specified: true,
+        rows_specified: true,
+        ..chunk
+    }
+}
+
 fn clip_kitty_explicit_fragment(
     pane_geom: &PaneGeom,
     fragment: &KittyExplicitFragment,
@@ -128,6 +136,7 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
             ..k_chunk.clone()
         };
+        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
         uncovered.push(ImageFragment::KittyExplicit(KittyExplicitFragment {
             chunk: KittyImageChunk {
                 placement_id: remap_fragment_placement_id(&chunk),
@@ -146,6 +155,7 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
             ..k_chunk.clone()
         };
+        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
         uncovered.push(ImageFragment::KittyExplicit(KittyExplicitFragment {
             chunk: KittyImageChunk {
                 placement_id: remap_fragment_placement_id(&chunk),
@@ -170,6 +180,7 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
             ..k_chunk.clone()
         };
+        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
         uncovered.push(ImageFragment::KittyExplicit(KittyExplicitFragment {
             chunk: KittyImageChunk {
                 placement_id: remap_fragment_placement_id(&chunk),
@@ -198,6 +209,7 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(k_chunk.source_height, kept_rows, k_chunk.rows),
             ..k_chunk.clone()
         };
+        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
         uncovered.push(ImageFragment::KittyExplicit(KittyExplicitFragment {
             chunk: KittyImageChunk {
                 placement_id: remap_fragment_placement_id(&chunk),

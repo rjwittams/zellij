@@ -1602,7 +1602,11 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_w
             rows: 5,
         },
     ];
-    let expected = expected_explicit_fragments_for_occluders(&expected_geometry, &occluders);
+    let mut expected = expected_explicit_fragments_for_occluders(&expected_geometry, &occluders);
+    for fragment in &mut expected {
+        fragment.columns_specified = true;
+        fragment.rows_specified = true;
+    }
 
     output.add_pane_image_output_to_client(
         1,
@@ -1645,8 +1649,8 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_w
         "serialized output should ensure the asset once for all fragments",
     );
     assert!(
-        !serialized.contains(",r="),
-        "columns-only serialization should omit r= while retaining real occupancy for clipping",
+        serialized.contains(",r="),
+        "split columns-only fragments should serialize bounded r= to preserve the original resolved transform",
     );
 }
 
@@ -1692,7 +1696,11 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_w
             rows: 5,
         },
     ];
-    let expected = expected_explicit_fragments_for_occluders(&expected_geometry, &occluders);
+    let mut expected = expected_explicit_fragments_for_occluders(&expected_geometry, &occluders);
+    for fragment in &mut expected {
+        fragment.columns_specified = true;
+        fragment.rows_specified = true;
+    }
 
     output.add_pane_image_output_to_client(
         1,
@@ -1735,8 +1743,8 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_w
         "serialized output should ensure the asset once for all fragments",
     );
     assert!(
-        !serialized.contains(",c="),
-        "rows-only serialization should omit c= while retaining real occupancy for clipping",
+        serialized.contains(",c="),
+        "split rows-only fragments should serialize bounded c= to preserve the original resolved transform",
     );
 }
 

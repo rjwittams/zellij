@@ -205,6 +205,7 @@ impl Default for KittyPlacement {
 #[derive(Clone, Debug)]
 struct PendingKittyTransmit {
     protocol_image_id: Option<u32>,
+    image_number: Option<u32>,
     image_id: u32,
     image_format: KittyImageFormat,
     compression: Option<KittyTransportCompression>,
@@ -231,6 +232,8 @@ pub struct KittyImageState {
     kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     placements: Vec<KittyPlacement>,
     protocol_image_id_to_internal_id: HashMap<u32, u32>,
+    image_number_to_protocol_image_id: HashMap<u32, u32>,
+    next_generated_protocol_image_id: u32,
     pending_transmit: Option<PendingKittyTransmit>,
 }
 
@@ -248,6 +251,7 @@ pub struct KittyImageInsertion {
     pub anchor: FlowAnchor,
     pub geometry: ImagePlacementGeometry,
     pub protocol_image_id: Option<u32>,
+    pub protocol_image_number: Option<u32>,
     pub protocol_placement_id: Option<u32>,
     pub placement_mode: KittyImagePlacementMode,
     pub cursor_movement_policy: KittyCursorMovementPolicy,
@@ -257,8 +261,15 @@ pub struct KittyImageInsertion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KittyApcEffect {
     Placement(KittyImageInsertion),
-    AssetReplaced { asset_id: ImageAssetId },
-    AssetStored,
+    AssetReplaced {
+        asset_id: ImageAssetId,
+        protocol_image_id: Option<u32>,
+        protocol_image_number: Option<u32>,
+    },
+    AssetStored {
+        protocol_image_id: Option<u32>,
+        protocol_image_number: Option<u32>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,7 +284,53 @@ impl KittyImageState {
             kitty_asset_store,
             placements: vec![],
             protocol_image_id_to_internal_id: HashMap::new(),
+            image_number_to_protocol_image_id: HashMap::new(),
+            next_generated_protocol_image_id: 0x8000_0001,
             pending_transmit: None,
+        }
+    }
+
+    fn next_synthetic_protocol_image_id(&mut self) -> u32 {
+        loop {
+            let candidate = self.next_generated_protocol_image_id;
+            self.next_generated_protocol_image_id =
+                self.next_generated_protocol_image_id.wrapping_add(1).max(0x8000_0001);
+            if !self.protocol_image_id_to_internal_id.contains_key(&candidate) {
+                return candidate;
+            }
+        }
+    }
+
+    fn protocol_image_id_for_create(
+        &mut self,
+        protocol_image_id: Option<u32>,
+        image_number: Option<u32>,
+    ) -> Option<u32> {
+        if let Some(protocol_image_id) = protocol_image_id {
+            Some(protocol_image_id)
+        } else if let Some(image_number) = image_number {
+            let synthetic_id = self.next_synthetic_protocol_image_id();
+            self.image_number_to_protocol_image_id
+                .insert(image_number, synthetic_id);
+            Some(synthetic_id)
+        } else {
+            None
+        }
+    }
+
+    fn resolve_protocol_image_id(
+        &self,
+        protocol_image_id: Option<u32>,
+        image_number: Option<u32>,
+    ) -> Option<u32> {
+        if let Some(protocol_image_id) = protocol_image_id {
+            Some(protocol_image_id)
+        } else {
+            image_number.and_then(|image_number| {
+                self.image_number_to_protocol_image_id
+                    .get(&image_number)
+                    .copied()
+            })
         }
     }
 
@@ -300,6 +357,7 @@ impl KittyImageState {
     ) -> Option<KittyApcEffect> {
         let pending = self.pending_transmit.take()?;
         let protocol_image_id = pending.protocol_image_id;
+        let image_number = pending.image_number;
         let mut placement = pending.placement.clone();
         let image_id = pending.image_id;
         let replaced_existing_asset = self
@@ -321,9 +379,16 @@ impl KittyImageState {
         }
         let Some(placement) = placement else {
             return Some(if replaced_existing_asset {
-                KittyApcEffect::AssetReplaced { asset_id }
+                KittyApcEffect::AssetReplaced {
+                    asset_id,
+                    protocol_image_id,
+                    protocol_image_number: image_number,
+                }
             } else {
-                KittyApcEffect::AssetStored
+                KittyApcEffect::AssetStored {
+                    protocol_image_id,
+                    protocol_image_number: image_number,
+                }
             });
         };
         self.placements.retain(|p| {
@@ -348,10 +413,11 @@ impl KittyImageState {
             asset_id,
             anchor: placement_anchor,
             geometry,
-            protocol_image_id,
-            protocol_placement_id,
-            placement_mode,
-            cursor_movement_policy,
+                    protocol_image_id,
+                    protocol_image_number: image_number,
+                    protocol_placement_id,
+                    placement_mode,
+                    cursor_movement_policy,
             replaced_existing_asset,
         }))
     }
@@ -368,6 +434,7 @@ impl KittyImageState {
         match command {
             ParsedKittyCommand::ImmediateTransmit {
                 protocol_image_id,
+                image_number,
                 image_format,
                 compression,
                 width,
@@ -376,7 +443,9 @@ impl KittyImageState {
                 more,
                 payload,
             } => {
-                let image_id = if let Some(protocol_image_id) = protocol_image_id {
+                let resolved_protocol_image_id =
+                    self.protocol_image_id_for_create(protocol_image_id, image_number);
+                let image_id = if let Some(protocol_image_id) = resolved_protocol_image_id {
                     if let Some(existing_image_id) =
                         self.protocol_image_id_to_internal_id.get(&protocol_image_id)
                     {
@@ -394,7 +463,8 @@ impl KittyImageState {
                     placement.image_id = image_id;
                 }
                 self.pending_transmit = Some(PendingKittyTransmit {
-                    protocol_image_id,
+                    protocol_image_id: resolved_protocol_image_id,
+                    image_number,
                     image_id,
                     image_format,
                     compression,
@@ -416,11 +486,14 @@ impl KittyImageState {
             },
             ParsedKittyCommand::DisplayPlacement {
                 protocol_image_id,
+                image_number,
                 mut placement,
             } => {
+                let resolved_protocol_image_id =
+                    self.resolve_protocol_image_id(protocol_image_id, image_number)?;
                 let image_id = *self
                     .protocol_image_id_to_internal_id
-                    .get(&protocol_image_id)?;
+                    .get(&resolved_protocol_image_id)?;
                 let image_dimensions = self.kitty_asset_store.borrow().image_dimensions(image_id)?;
                 placement.image_id = image_id;
                 placement.anchor = anchor;
@@ -447,7 +520,8 @@ impl KittyImageState {
                     asset_id: ImageAssetId(image_id as u64),
                     anchor: placement_anchor,
                     geometry,
-                    protocol_image_id: Some(protocol_image_id),
+                    protocol_image_id: Some(resolved_protocol_image_id),
+                    protocol_image_number: image_number,
                     protocol_placement_id,
                     placement_mode,
                     cursor_movement_policy,
@@ -531,6 +605,10 @@ impl KittyImageState {
             ) else {
                 continue;
             };
+            let clipped_by_projection = projection.clipped_left_cols > 0
+                || projection.clipped_top_rows > 0
+                || projection.columns != columns
+                || projection.rows != rows;
 
             if projection.clipped_left_cols > 0 {
                 source_x =
@@ -555,8 +633,8 @@ impl KittyImageState {
                 cell_y,
                 columns,
                 rows,
-                columns_specified: placement.columns_specified,
-                rows_specified: placement.rows_specified,
+                columns_specified: placement.columns_specified || clipped_by_projection,
+                rows_specified: placement.rows_specified || clipped_by_projection,
                 source_x,
                 source_y,
                 source_width,
@@ -572,6 +650,7 @@ impl KittyImageState {
     pub fn clear(&mut self) {
         self.placements.clear();
         self.protocol_image_id_to_internal_id.clear();
+        self.image_number_to_protocol_image_id.clear();
         self.pending_transmit = None;
     }
 
@@ -592,6 +671,10 @@ impl KittyImageState {
                 None => false,
             }
         });
+    }
+
+    pub fn protocol_image_id_for_image_number(&self, image_number: u32) -> Option<u32> {
+        self.image_number_to_protocol_image_id.get(&image_number).copied()
     }
 
     pub fn serialize_chunks_with_asset_store(
@@ -812,6 +895,7 @@ impl KittyQueryResponse {
 enum ParsedKittyCommand {
     ImmediateTransmit {
         protocol_image_id: Option<u32>,
+        image_number: Option<u32>,
         image_format: KittyImageFormat,
         compression: Option<KittyTransportCompression>,
         width: u32,
@@ -821,7 +905,8 @@ enum ParsedKittyCommand {
         payload: Vec<u8>,
     },
     DisplayPlacement {
-        protocol_image_id: u32,
+        protocol_image_id: Option<u32>,
+        image_number: Option<u32>,
         placement: KittyPlacement,
     },
     TransmitChunk {
@@ -1004,6 +1089,28 @@ pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<u32>)> 
     Some((image_id, placement_id))
 }
 
+pub fn kitty_delete_by_image_number(apc_bytes: &[u8]) -> Option<(u32, Option<u32>)> {
+    let rest = apc_bytes.strip_prefix(b"G")?;
+    let mut parts = rest.splitn(2, |b| *b == b';');
+    let header = std::str::from_utf8(parts.next()?).ok()?;
+    let mut kv = HashMap::new();
+    for part in header.split(',') {
+        if part.is_empty() {
+            continue;
+        }
+        let mut split = part.splitn(2, '=');
+        let key = split.next()?;
+        let value = split.next().unwrap_or("");
+        kv.insert(key, value);
+    }
+    if kv.get("a").copied() != Some("d") || kv.get("d").copied() != Some("n") {
+        return None;
+    }
+    let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok())?;
+    let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
+    Some((image_number, placement_id))
+}
+
 pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
     let rest = apc_bytes.strip_prefix(b"G")?;
     let mut parts = rest.splitn(2, |b| *b == b';');
@@ -1135,6 +1242,8 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
 pub fn kitty_non_query_response(
     apc_bytes: &[u8],
     command_succeeded: bool,
+    resolved_image_id: Option<u32>,
+    resolved_image_number: Option<u32>,
 ) -> Option<KittyQueryResponse> {
     let rest = apc_bytes.strip_prefix(b"G")?;
     let mut parts = rest.splitn(2, |b| *b == b';');
@@ -1157,14 +1266,23 @@ pub fn kitty_non_query_response(
     }
 
     let quiet = kv.get("q").and_then(|q| q.parse::<u8>().ok()).unwrap_or(0);
-    let image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
+    let parsed_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
+    let image_id = resolved_image_id.or(parsed_image_id);
     let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
+    let image_number = resolved_image_number.or_else(|| kv.get("I").and_then(|i| i.parse::<u32>().ok()));
 
-    let reply = if command_succeeded {
+    let reply = if parsed_image_id.is_some() && image_number.is_some() {
+        KittyQueryResponse::Error {
+            image_id,
+            placement_id,
+            image_number,
+            message: "EINVAL:Must not specify both i and I".to_string(),
+        }
+    } else if command_succeeded {
         KittyQueryResponse::Ok {
             image_id,
             placement_id,
-            image_number: None,
+            image_number,
         }
     } else {
         let message = if action == "p" {
@@ -1175,7 +1293,7 @@ pub fn kitty_non_query_response(
         KittyQueryResponse::Error {
             image_id,
             placement_id,
-            image_number: None,
+            image_number,
             message: message.to_string(),
         }
     };
@@ -1244,6 +1362,7 @@ impl ParsedKittyCommand {
                     };
                     let compression = parse_kitty_transport_compression(kv.get("o").copied())?;
                     let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
+                    let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok());
                     let width = kv.get("s").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
                     let height = kv.get("v").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
                     let should_create_placement = *action == "T"
@@ -1260,6 +1379,7 @@ impl ParsedKittyCommand {
                         || kv.get("U").copied() == Some("1");
                     Some(ParsedKittyCommand::ImmediateTransmit {
                         protocol_image_id,
+                        image_number,
                         image_format,
                         compression,
                         width,
@@ -1274,9 +1394,14 @@ impl ParsedKittyCommand {
                     })
                 },
                 "p" => {
-                    let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok())?;
+                    let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
+                    let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok());
+                    if protocol_image_id.is_none() && image_number.is_none() {
+                        return None;
+                    }
                     Some(ParsedKittyCommand::DisplayPlacement {
                         protocol_image_id,
+                        image_number,
                         placement,
                     })
                 },
@@ -1488,7 +1613,7 @@ mod tests {
     #[test]
     fn kitty_non_query_response_suppresses_success_for_q2() {
         let reply =
-            kitty_non_query_response(b"Gq=2,a=T,f=24,s=1,v=1,i=52,c=1,r=1;EjRW", true);
+            kitty_non_query_response(b"Gq=2,a=T,f=24,s=1,v=1,i=52,c=1,r=1;EjRW", true, None, None);
         assert!(reply.is_none());
     }
 
@@ -1515,6 +1640,7 @@ mod tests {
 
         let image_data = PendingKittyTransmit {
             protocol_image_id: Some(7),
+            image_number: None,
             image_id: 99,
             image_format,
             compression: None,
@@ -1617,5 +1743,97 @@ mod tests {
             assert_eq!(serialized.contains("c="), expect_c);
             assert_eq!(serialized.contains("r="), expect_r);
         }
+    }
+
+    #[test]
+    fn naive_bounded_conversion_for_one_dimensional_geometry_does_not_preserve_rendered_pixel_size()
+    {
+        let image_dimensions = test_image_dimensions(16, 9);
+        let cell_size = Some(SizeInPixels {
+            width: 10,
+            height: 20,
+        });
+
+        let columns_only = KittyPlacement {
+            image_id: 1,
+            placement_id: Some(7),
+            placement_mode: KittyImagePlacementMode::Explicit,
+            cursor_movement_policy: KittyCursorMovementPolicy::AfterPlacement,
+            anchor: FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            source_x: None,
+            source_y: None,
+            source_width: None,
+            source_height: None,
+            columns: Some(10),
+            rows: None,
+            columns_specified: true,
+            rows_specified: false,
+            x_offset: None,
+            y_offset: None,
+            z_index: None,
+        };
+
+        let geometry = columns_only.geometry_for_image(image_dimensions, 0, 0, cell_size);
+        assert_eq!(geometry.columns, 10);
+        assert_eq!(geometry.rows, 3);
+
+        // Kitty/Ghostty calculate the one-dimensional rendered size in pixels first.
+        let one_dimensional_rendered_width = 10 * 10;
+        let one_dimensional_rendered_height = 56;
+
+        // A naive conversion to bounded c+r uses the derived row count as a fit box.
+        let bounded_box_width = geometry.columns * 10;
+        let bounded_box_height = geometry.rows * 20;
+
+        assert_eq!(bounded_box_width, one_dimensional_rendered_width);
+        assert_eq!(
+            bounded_box_height, one_dimensional_rendered_height,
+            "naively turning a one-dimensional placement into bounded c+r changes the rendered pixel size"
+        );
+    }
+
+    #[test]
+    fn bounded_conversion_with_offsets_can_preserve_one_dimensional_rendered_pixel_size() {
+        let image_dimensions = test_image_dimensions(16, 9);
+        let cell_size = SizeInPixels {
+            width: 10,
+            height: 20,
+        };
+        let one_dimensional_rendered_width = 100usize;
+        let one_dimensional_rendered_height = 56usize;
+
+        // One plausible bounded equivalent is a 10x3 box with the rendered image
+        // starting at the top-left and leaving trailing slack in the final row.
+        let bounded_chunk = KittyImageChunk {
+            image_id: 1,
+            placement_id: Some(7),
+            placement_mode: KittyImagePlacementMode::Explicit,
+            cell_x: 0,
+            cell_y: 0,
+            columns: 10,
+            rows: 3,
+            columns_specified: true,
+            rows_specified: true,
+            source_x: 0,
+            source_y: 0,
+            source_width: 16,
+            source_height: 9,
+            z_index: 0,
+            x_offset: 0,
+            y_offset: 0,
+        };
+
+        let rendered_width = bounded_chunk.columns * cell_size.width as usize;
+        let rendered_height =
+            bounded_chunk.rows * cell_size.height as usize - bounded_chunk.y_offset as usize;
+
+        assert_eq!(rendered_width, one_dimensional_rendered_width);
+        assert_eq!(
+            rendered_height, one_dimensional_rendered_height,
+            "a bounded c+r conversion with offsets should be able to preserve the one-dimensional rendered pixel size"
+        );
     }
 }

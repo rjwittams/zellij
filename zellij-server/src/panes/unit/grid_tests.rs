@@ -6314,6 +6314,115 @@ fn kitty_non_query_upload_and_placement_commands_emit_replies() {
     );
 }
 
+fn kitty_reply_image_id(reply: &str) -> Option<u32> {
+    let start = reply.find("i=")? + 2;
+    let digits: String = reply[start..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse().ok()
+}
+
+#[test]
+fn kitty_image_number_upload_and_placement_commands_emit_replies_and_render() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(4, 8);
+
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=t,f=24,s=1,v=1,I=71;EjRW\x1b\\",
+    );
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=p,I=71,p=1,c=1,r=1\x1b\\",
+    );
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 2, "expected create and place replies, got {replies:?}");
+    let create_reply = replies
+        .iter()
+        .find(|reply| reply.contains("I=71;OK") && !reply.contains(",p="))
+        .expect("expected create reply with I=71");
+    let place_reply = replies
+        .iter()
+        .find(|reply| reply.contains("I=71;OK") && reply.contains(",p=1"))
+        .expect("expected place reply with I=71,p=1");
+    let create_image_id = kitty_reply_image_id(create_reply).expect("create reply should include i=");
+    let place_image_id = kitty_reply_image_id(place_reply).expect("place reply should include i=");
+    assert_eq!(
+        create_image_id, place_image_id,
+        "placement by I= should resolve to the newest created synthetic image id"
+    );
+
+    let visible = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(visible.len(), 1);
+    assert_eq!(visible[0].placement_id, Some(1));
+}
+
+#[test]
+fn kitty_image_number_targets_newest_image_for_placement_and_delete() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(4, 8);
+
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=t,f=24,s=1,v=1,I=71;EjRW\x1b\\",
+    );
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=p,I=71,p=1,c=1,r=1\x1b\\",
+    );
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=t,f=24,s=1,v=1,I=71;EjRW\x1b\\",
+    );
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=p,I=71,p=2,c=1,r=1\x1b\\",
+    );
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    let create_replies: Vec<_> = replies
+        .iter()
+        .filter(|reply| reply.contains("I=71;OK") && !reply.contains(",p="))
+        .collect();
+    assert_eq!(create_replies.len(), 2, "expected two create replies, got {replies:?}");
+    let first_image_id = kitty_reply_image_id(create_replies[0]).expect("first create reply should include i=");
+    let second_image_id = kitty_reply_image_id(create_replies[1]).expect("second create reply should include i=");
+    assert_ne!(
+        first_image_id, second_image_id,
+        "reusing the same I= should create a newer synthetic image id"
+    );
+
+    let before_delete = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(before_delete.len(), 2);
+    assert!(
+        before_delete.iter().any(|chunk| chunk.placement_id == Some(1)),
+        "expected placement 1 before delete"
+    );
+    assert!(
+        before_delete.iter().any(|chunk| chunk.placement_id == Some(2)),
+        "expected placement 2 before delete"
+    );
+
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Ga=d,d=n,I=71,p=2\x1b\\",
+    );
+
+    let after_delete = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(after_delete.len(), 1);
+    assert_eq!(after_delete[0].placement_id, Some(1));
+}
+
 #[test]
 fn kitty_placeholder_render_survives_grid_width_change() {
     let mut grid = create_grid_with_size_and_raw(8, 14, &kitty_virtual_rgba(8, 56, 56, 14, 7));

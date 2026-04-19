@@ -340,6 +340,7 @@ pub fn project_placement_to_viewport(
 pub struct ImageInsertionEffect {
     pub placement: ImagePlacement,
     pub cleared_placeholder_rows: Vec<usize>,
+    pub protocol_image_number: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -347,8 +348,13 @@ pub enum ImageSceneEffect {
     Placement(ImageInsertionEffect),
     AssetReplaced {
         cleared_placeholder_rows: Vec<usize>,
+        protocol_image_id: Option<u32>,
+        protocol_image_number: Option<u32>,
     },
-    AssetStored,
+    AssetStored {
+        protocol_image_id: Option<u32>,
+        protocol_image_number: Option<u32>,
+    },
 }
 
 static NEXT_IMAGE_ASSET_ID: AtomicU64 = AtomicU64::new(1);
@@ -471,7 +477,11 @@ impl PaneImageScene {
                 character_cell_size,
             )
             .map(|effect| match effect {
-                KittyApcEffect::AssetReplaced { asset_id } => {
+                KittyApcEffect::AssetReplaced {
+                    asset_id,
+                    protocol_image_id,
+                    protocol_image_number,
+                } => {
                     let cleared_placeholder_rows = self.remove_kitty_asset_placements(
                         asset_id,
                         scrollback_size_in_lines,
@@ -480,9 +490,17 @@ impl PaneImageScene {
                     );
                     ImageSceneEffect::AssetReplaced {
                         cleared_placeholder_rows,
+                        protocol_image_id,
+                        protocol_image_number,
                     }
                 },
-                KittyApcEffect::AssetStored => ImageSceneEffect::AssetStored,
+                KittyApcEffect::AssetStored {
+                    protocol_image_id,
+                    protocol_image_number,
+                } => ImageSceneEffect::AssetStored {
+                    protocol_image_id,
+                    protocol_image_number,
+                },
                 KittyApcEffect::Placement(insertion) => {
                     let insertion: KittyImageInsertion = insertion;
                     let cleared_placeholder_rows = if insertion.replaced_existing_asset {
@@ -584,6 +602,7 @@ impl PaneImageScene {
                     ImageSceneEffect::Placement(ImageInsertionEffect {
                         placement,
                         cleared_placeholder_rows,
+                        protocol_image_number: insertion.protocol_image_number,
                     })
                 },
             })
@@ -683,6 +702,18 @@ impl PaneImageScene {
             .delete_protocol_placement(protocol_image_id, placement_id);
     }
 
+    pub fn delete_kitty_image_number_placement(
+        &mut self,
+        image_number: u32,
+        placement_id: Option<u32>,
+    ) {
+        let Some(protocol_image_id) = self.kitty.protocol_image_id_for_image_number(image_number)
+        else {
+            return;
+        };
+        self.delete_kitty_protocol_placement(protocol_image_id, placement_id);
+    }
+
     pub fn visible_kitty_render_bundle<F>(
         &self,
         content_x: usize,
@@ -730,6 +761,10 @@ impl PaneImageScene {
             ) else {
                 continue;
             };
+            let clipped_by_projection = projection.clipped_left_cols > 0
+                || projection.clipped_top_rows > 0
+                || projection.columns != flavor.occupancy.columns
+                || projection.rows != flavor.occupancy.rows;
             if projection.clipped_left_cols > 0 {
                 source_x += scale_u32(source_width, projection.clipped_left_cols, columns);
             }
@@ -748,8 +783,8 @@ impl PaneImageScene {
                 cell_y: projection.cell_y,
                 columns,
                 rows,
-                columns_specified: flavor.columns_specified,
-                rows_specified: flavor.rows_specified,
+                columns_specified: flavor.columns_specified || clipped_by_projection,
+                rows_specified: flavor.rows_specified || clipped_by_projection,
                 source_x,
                 source_y,
                 source_width,

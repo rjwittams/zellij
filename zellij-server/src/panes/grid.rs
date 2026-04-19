@@ -125,8 +125,8 @@ use crate::output::{
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
 use crate::panes::kitty::{
-    kitty_delete_all_visible, kitty_delete_by_image_id, kitty_non_query_response,
-    kitty_query_response,
+    kitty_delete_all_visible, kitty_delete_by_image_id, kitty_delete_by_image_number,
+    kitty_non_query_response, kitty_query_response,
     PendingKittyPlaceholder, ResolvedKittyPlaceholder,
 };
 use crate::panes::link_handler::LinkHandler;
@@ -3794,6 +3794,13 @@ impl Perform for Grid {
                     self.mark_for_rerender();
                     return;
                 }
+                if let Some((image_number, placement_id)) = kitty_delete_by_image_number(&apc_bytes)
+                {
+                    self.image_scene
+                        .delete_kitty_image_number_placement(image_number, placement_id);
+                    self.mark_for_rerender();
+                    return;
+                }
                 let character_cell_size = *self.character_cell_size.borrow();
                 let lines_above = &self.lines_above;
                 let viewport = &self.viewport;
@@ -3808,7 +3815,28 @@ impl Perform for Grid {
                     self.height,
                     |anchor| Self::resolve_flow_anchor_in_buffers(anchor, lines_above, viewport, width),
                 );
-                if let Some(reply) = kitty_non_query_response(&apc_bytes, image_effect.is_some()) {
+                let (resolved_image_id, resolved_image_number) = match &image_effect {
+                    Some(ImageSceneEffect::Placement(image_effect)) => (
+                        image_effect.placement.kitty_protocol_identity().and_then(|(image_id, _)| image_id),
+                        image_effect.protocol_image_number,
+                    ),
+                    Some(ImageSceneEffect::AssetStored {
+                        protocol_image_id,
+                        protocol_image_number,
+                    }) => (*protocol_image_id, *protocol_image_number),
+                    Some(ImageSceneEffect::AssetReplaced {
+                        protocol_image_id,
+                        protocol_image_number,
+                        ..
+                    }) => (*protocol_image_id, *protocol_image_number),
+                    None => (None, None),
+                };
+                if let Some(reply) = kitty_non_query_response(
+                    &apc_bytes,
+                    image_effect.is_some(),
+                    resolved_image_id,
+                    resolved_image_number,
+                ) {
                     self.queue_pending_message_to_pty(reply.to_apc_response());
                 }
                 if let Some(image_effect) = image_effect {
@@ -3828,12 +3856,13 @@ impl Perform for Grid {
                         },
                         ImageSceneEffect::AssetReplaced {
                             cleared_placeholder_rows,
+                            ..
                         } => {
                             for row in cleared_placeholder_rows {
                                 self.output_buffer.update_line(row);
                             }
                         },
-                        ImageSceneEffect::AssetStored => {},
+                        ImageSceneEffect::AssetStored { .. } => {},
                     }
                     self.mark_for_rerender();
                 }
