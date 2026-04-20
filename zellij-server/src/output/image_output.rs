@@ -31,20 +31,95 @@ struct CurrentImageState {
 }
 
 #[derive(Clone, Debug, Default)]
-struct LastRenderedImageState {
-    image_state: RenderedImageState,
-    scene_state: Option<KittySceneState>,
+struct ClientImageRenderState {
+    current: CurrentImageState,
+    last_rendered_image_state: RenderedImageState,
+    last_rendered_scene_state: Option<KittySceneState>,
 }
 
-#[derive(Clone, Debug, Default)]
-struct ClientImageState {
-    current: CurrentImageState,
-    last_rendered: LastRenderedImageState,
+impl ClientImageRenderState {
+    fn set_last_rendered_state(
+        &mut self,
+        image_state: RenderedImageState,
+        scene_state: Option<KittySceneState>,
+    ) {
+        self.last_rendered_image_state = image_state;
+        self.last_rendered_scene_state = scene_state;
+    }
+
+    fn last_rendered_image_state(&self) -> &RenderedImageState {
+        &self.last_rendered_image_state
+    }
+
+    fn last_rendered_scene_state(&self) -> Option<&KittySceneState> {
+        self.last_rendered_scene_state.as_ref()
+    }
+
+    fn clone_last_rendered_image_state(&self) -> RenderedImageState {
+        self.last_rendered_image_state.clone()
+    }
+
+    fn clone_last_rendered_scene_state(&self) -> Option<KittySceneState> {
+        self.last_rendered_scene_state.clone()
+    }
+
+    fn take_last_rendered_image_state(&mut self) -> Option<RenderedImageState> {
+        let had_state = self.last_rendered_image_state != RenderedImageState::default();
+        let image_state = std::mem::take(&mut self.last_rendered_image_state);
+        self.last_rendered_scene_state = None;
+        had_state.then_some(image_state)
+    }
+
+    fn pending_has_rendered_assets(&self) -> bool {
+        !self.current.sixel_chunks.is_empty()
+            || !self.current.kitty_chunks.is_empty()
+            || !self.current.kitty_placeholder_renders.is_empty()
+    }
+
+    fn push_fragment(&mut self, fragment: ImageFragment) {
+        match fragment {
+            ImageFragment::Sixel(sixel_chunk) => self.current.sixel_chunks.push(sixel_chunk),
+            ImageFragment::KittyExplicit(kitty_chunk) => self.current.kitty_chunks.push(kitty_chunk),
+            ImageFragment::KittyPlaceholder(placeholder_render) => {
+                self.current
+                    .kitty_placeholder_renders
+                    .push(placeholder_render)
+            },
+        }
+    }
+
+    fn add_changed_rects(&mut self, changed_rects: HashMap<usize, usize>) {
+        for (start_row, line_count) in changed_rects {
+            self.current
+                .changed_rects
+                .entry(start_row)
+                .and_modify(|current_line_count| {
+                    *current_line_count = (*current_line_count).max(line_count);
+                })
+                .or_insert(line_count);
+        }
+    }
+
+    fn take_current_render_state(
+        &mut self,
+    ) -> (
+        Vec<SixelImageChunk>,
+        Vec<KittyImageChunk>,
+        Vec<KittyPlaceholderRender>,
+        HashMap<usize, usize>,
+    ) {
+        (
+            std::mem::take(&mut self.current.sixel_chunks),
+            std::mem::take(&mut self.current.kitty_chunks),
+            std::mem::take(&mut self.current.kitty_placeholder_renders),
+            std::mem::take(&mut self.current.changed_rects),
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ImageOutput {
-    client_image_states: HashMap<ClientId, ClientImageState>,
+    client_image_states: HashMap<ClientId, ClientImageRenderState>,
     pub(crate) sixel_image_store: Rc<RefCell<SixelImageStore>>,
     pub(crate) kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
@@ -145,7 +220,7 @@ impl ImageOutput {
         }
     }
 
-    fn client_image_state_mut(&mut self, client_id: ClientId) -> &mut ClientImageState {
+    fn client_image_state_mut(&mut self, client_id: ClientId) -> &mut ClientImageRenderState {
         self.client_image_states.entry(client_id).or_default()
     }
 
@@ -347,9 +422,9 @@ impl ImageOutput {
     fn kitty_scene_is_dirty(&self) -> bool {
         self.client_image_states.values().any(|client_state| {
             client_state.current.kitty_chunks
-                != client_state.last_rendered.image_state.explicit_chunks
+                != client_state.last_rendered_image_state().explicit_chunks
                 || client_state.current.kitty_placeholder_renders
-                    != client_state.last_rendered.image_state.placeholder_renders
+                    != client_state.last_rendered_image_state().placeholder_renders
                 || client_state
                     .current
                     .kitty_chunks
@@ -371,8 +446,7 @@ impl ImageOutput {
                             return false;
                         };
                         client_state
-                            .last_rendered
-                            .image_state
+                            .last_rendered_image_state()
                             .resident_asset_generations
                             .get(&image_id)
                             != Some(&current_image_data)
@@ -424,8 +498,7 @@ impl ImageOutput {
             &scene_input.placeholder_renders,
             &kitty_asset_store,
         );
-        client_state.last_rendered.image_state = normalized_state;
-        client_state.last_rendered.scene_state = scene_state;
+        client_state.set_last_rendered_state(normalized_state, scene_state);
     }
 
     pub fn set_last_rendered_image_states(
@@ -448,13 +521,9 @@ impl ImageOutput {
     pub fn take_last_rendered_image_states(&mut self) -> HashMap<ClientId, RenderedImageState> {
         let mut last_rendered_image_states = HashMap::new();
         for (client_id, client_state) in &mut self.client_image_states {
-            if client_state.last_rendered.image_state != RenderedImageState::default() {
-                last_rendered_image_states.insert(
-                    *client_id,
-                    std::mem::take(&mut client_state.last_rendered.image_state),
-                );
+            if let Some(image_state) = client_state.take_last_rendered_image_state() {
+                last_rendered_image_states.insert(*client_id, image_state);
             }
-            client_state.last_rendered.scene_state = None;
         }
         last_rendered_image_states
     }
@@ -464,10 +533,7 @@ impl ImageOutput {
         client_id: ClientId,
     ) -> Option<RenderedImageState> {
         let client_state = self.client_image_states.get_mut(&client_id)?;
-        let had_state = client_state.last_rendered.image_state != RenderedImageState::default();
-        let image_state = std::mem::take(&mut client_state.last_rendered.image_state);
-        client_state.last_rendered.scene_state = None;
-        had_state.then_some(image_state)
+        client_state.take_last_rendered_image_state()
     }
 
     fn add_changed_rects_to_client(
@@ -476,16 +542,7 @@ impl ImageOutput {
         changed_rects: HashMap<usize, usize>,
     ) {
         let client_state = self.client_image_state_mut(client_id);
-        for (start_row, line_count) in changed_rects {
-            client_state
-                .current
-                .changed_rects
-                .entry(start_row)
-                .and_modify(|current_line_count| {
-                    *current_line_count = (*current_line_count).max(line_count);
-                })
-                .or_insert(line_count);
-        }
+        client_state.add_changed_rects(changed_rects);
     }
 
     fn add_changed_rects_to_multiple_clients(
@@ -512,18 +569,7 @@ impl ImageOutput {
         );
         let client_state = self.client_image_state_mut(client_id);
         for fragment in visible_fragments {
-            match fragment {
-                ImageFragment::Sixel(sixel_chunk) => {
-                    client_state.current.sixel_chunks.push(sixel_chunk)
-                },
-                ImageFragment::KittyExplicit(kitty_explicit_chunk) => {
-                    client_state.current.kitty_chunks.push(kitty_explicit_chunk)
-                },
-                ImageFragment::KittyPlaceholder(kitty_placeholder_render) => client_state
-                    .current
-                    .kitty_placeholder_renders
-                    .push(kitty_placeholder_render),
-            }
+            client_state.push_fragment(fragment);
         }
         self.add_changed_rects_to_client(client_id, pane_image_output.changed_rects);
     }
@@ -544,18 +590,7 @@ impl ImageOutput {
         for client_id in client_ids.iter().copied() {
             let client_state = self.client_image_state_mut(client_id);
             for fragment in visible_fragments.iter().cloned() {
-                match fragment {
-                    ImageFragment::Sixel(sixel_chunk) => {
-                        client_state.current.sixel_chunks.push(sixel_chunk)
-                    },
-                    ImageFragment::KittyExplicit(kitty_explicit_chunk) => {
-                        client_state.current.kitty_chunks.push(kitty_explicit_chunk)
-                    },
-                    ImageFragment::KittyPlaceholder(kitty_placeholder_render) => client_state
-                        .current
-                        .kitty_placeholder_renders
-                        .push(kitty_placeholder_render),
-                }
+                client_state.push_fragment(fragment);
             }
         }
         self.add_changed_rects_to_multiple_clients(
@@ -578,13 +613,19 @@ impl ImageOutput {
             last_rendered_kitty_scene,
         ) = {
             let client_state = self.client_image_state_mut(client_id);
+            let (
+                sixel_chunks,
+                current_kitty_chunks,
+                current_kitty_placeholder_renders,
+                changed_rects,
+            ) = client_state.take_current_render_state();
             (
-                std::mem::take(&mut client_state.current.sixel_chunks),
-                std::mem::take(&mut client_state.current.kitty_chunks),
-                std::mem::take(&mut client_state.current.kitty_placeholder_renders),
-                std::mem::take(&mut client_state.current.changed_rects),
-                client_state.last_rendered.image_state.clone(),
-                client_state.last_rendered.scene_state.clone(),
+                sixel_chunks,
+                current_kitty_chunks,
+                current_kitty_placeholder_renders,
+                changed_rects,
+                client_state.clone_last_rendered_image_state(),
+                client_state.clone_last_rendered_scene_state(),
             )
         };
 
@@ -608,8 +649,8 @@ impl ImageOutput {
                 let client_state = self.client_image_state_mut(client_id);
                 Self::kitty_scene_state_from_rendered(
                     &last_rendered_image_state.resident_asset_generations,
-                    &client_state.last_rendered.image_state.explicit_chunks,
-                    &client_state.last_rendered.image_state.placeholder_renders,
+                    &client_state.last_rendered_image_state().explicit_chunks,
+                    &client_state.last_rendered_image_state().placeholder_renders,
                     &kitty_asset_store,
                 )
             })
@@ -696,13 +737,7 @@ impl ImageOutput {
         let previous_resident_assets = self
             .client_image_states
             .get(&client_id)
-            .map(|client_state| {
-                client_state
-                    .last_rendered
-                    .image_state
-                    .resident_asset_generations
-                    .clone()
-            })
+            .map(|client_state| client_state.last_rendered_image_state().resident_asset_generations.clone())
             .unwrap_or_default();
         let mut next_resident_assets = HashMap::new();
         match kitty_plan {
@@ -748,27 +783,48 @@ impl ImageOutput {
             );
         }
         let client_state = self.client_image_state_mut(client_id);
-        client_state.last_rendered.image_state = RenderedImageState {
-            explicit_chunks: current_kitty_chunks,
-            placeholder_renders: current_kitty_placeholder_renders,
-            resident_asset_generations: next_resident_assets,
-        };
-        client_state.last_rendered.scene_state = current_kitty_scene;
+        client_state.set_last_rendered_state(
+            RenderedImageState {
+                explicit_chunks: current_kitty_chunks,
+                placeholder_renders: current_kitty_placeholder_renders,
+                resident_asset_generations: next_resident_assets,
+            },
+            current_kitty_scene,
+        );
     }
 
     pub fn is_dirty(&self) -> bool {
         self.client_image_states.values().any(|client_state| {
-            !client_state.current.sixel_chunks.is_empty()
-                || !client_state.current.kitty_chunks.is_empty()
-                || !client_state.current.kitty_placeholder_renders.is_empty()
+            client_state.pending_has_rendered_assets()
         }) || self.kitty_scene_is_dirty()
     }
 
     pub fn has_rendered_assets(&self) -> bool {
         self.client_image_states.values().any(|client_state| {
-            !client_state.current.sixel_chunks.is_empty()
-                || !client_state.current.kitty_chunks.is_empty()
-                || !client_state.current.kitty_placeholder_renders.is_empty()
+            client_state.pending_has_rendered_assets()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_image_render_state_round_trips_and_drains_last_rendered_state() {
+        let mut client_state = ClientImageRenderState::default();
+        let expected_state = RenderedImageState {
+            resident_asset_generations: HashMap::from([(9, 42)]),
+            ..Default::default()
+        };
+
+        client_state.set_last_rendered_state(expected_state.clone(), Some(KittySceneState::default()));
+
+        assert_eq!(
+            client_state.take_last_rendered_image_state(),
+            Some(expected_state),
+        );
+        assert_eq!(client_state.take_last_rendered_image_state(), None);
+        assert!(client_state.last_rendered_scene_state().is_none());
     }
 }
