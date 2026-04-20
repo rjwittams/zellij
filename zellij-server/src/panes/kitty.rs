@@ -2127,16 +2127,27 @@ mod tests {
     #[test]
     fn kitty_query_response_rejects_unsupported_transmission_media() {
         let cases = [
-            (b"Gq=0,a=q,t=f,f=24,s=1,v=1,i=45;L3RtcC9raXR0eS1xdWVyeS1maWxl" as &[u8], 45u32),
-            (b"Gq=0,a=q,t=t,f=24,s=1,v=1,i=46;L3RtcC9raXR0eS1xdWVyeS10ZW1w" as &[u8], 46u32),
-            (b"Gq=0,a=q,t=s,f=24,s=1,v=1,i=47;a2l0dHktcXVlcnktc2ht" as &[u8], 47u32),
+            (
+                b"Gq=0,a=q,t=f,f=24,s=1,v=1,i=45;L3RtcC9raXR0eS1xdWVyeS1maWxl" as &[u8],
+                45u32,
+            ),
+            (
+                b"Gq=0,a=q,t=t,f=24,s=1,v=1,i=46;L3RtcC9raXR0eS1xdWVyeS10ZW1w" as &[u8],
+                46u32,
+            ),
+            (
+                b"Gq=0,a=q,t=s,f=24,s=1,v=1,i=47;a2l0dHktcXVlcnktc2ht" as &[u8],
+                47u32,
+            ),
         ];
 
         for (query, image_id) in cases {
             let reply = kitty_query_response(query).unwrap();
             let response = reply.to_apc_response();
             assert!(
-                response.contains(&format!("i={image_id};EINVAL:Unsupported transmission medium")),
+                response.contains(&format!(
+                    "i={image_id};EINVAL:Unsupported transmission medium"
+                )),
                 "expected unsupported-medium query reply for i={image_id}, got {response:?}",
             );
         }

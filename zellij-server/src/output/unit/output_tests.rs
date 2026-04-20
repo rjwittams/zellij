@@ -1,7 +1,4 @@
-use super::super::image_fragment::{
-    visible_image_fragments, ImageFragment, KittyExplicitFragment, KittyPlaceholderFragment,
-    SixelFragment,
-};
+use super::super::image_fragment::{visible_image_fragments, ImageFragment};
 use super::super::kitty_diff::{
     plan_kitty_scene, KittyAssetOp, KittyPlacementKey, KittyPlacementOp, KittyScenePlan,
     KittySceneState, PlannedKittyPlacement,
@@ -1087,7 +1084,7 @@ fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_plac
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
     assert!(
-        client_output.contains("\u{1b}_Ga=d,d=i,i=1,p=10\u{1b}\\"),
+        client_output.contains("\u{1b}_Ga=d,d=i,i=1,p=2147483649\u{1b}\\"),
         "shared asset replacement should delete the explicit placement before recreating it"
     );
     assert!(
@@ -1095,7 +1092,7 @@ fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_plac
         "shared asset replacement should delete the placeholder placement before recreating it"
     );
     assert!(
-        client_output.contains("\u{1b}_Ga=p,i=1,p=10"),
+        client_output.contains("\u{1b}_Ga=p,i=1,p=2147483649"),
         "shared asset replacement should recreate the explicit placement"
     );
     assert!(
@@ -1166,7 +1163,7 @@ fn test_kitty_diff_serialization_deletes_single_placement_without_delete_all() {
         "single-placement delete should not use kitty delete-all"
     );
     assert!(
-        client_output.contains("\u{1b}_Ga=d,d=i,i=2,p=20\u{1b}\\"),
+        client_output.contains("\u{1b}_Ga=d,d=i,i=2,p=2147483650\u{1b}\\"),
         "single-placement delete should target only the removed placement"
     );
 }
@@ -1322,7 +1319,7 @@ fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes(
 
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
-    let delete_pos = client_output.find("a=d,d=i,i=77,p=10").unwrap();
+    let delete_pos = client_output.find("a=d,d=i,i=77,p=2147483649").unwrap();
     let text_pos = client_output.find("TEXT-PHASE").unwrap();
 
     assert!(
@@ -1425,8 +1422,8 @@ fn test_prepare_render_body_derives_sixel_fragments() {
     let prepared = output.image_output.prepare_render_body_for_client(1, false);
     assert_eq!(prepared.after_text.fragments.len(), 1);
     match &prepared.after_text.fragments[0] {
-        ImageFragment::Sixel(fragment) => {
-            assert_eq!(fragment.chunk.sixel_image_id, 1);
+        ImageFragment::Sixel(chunk) => {
+            assert_eq!(chunk.sixel_image_id, 1);
         },
         other => panic!("expected sixel fragment, got {other:?}"),
     }
@@ -1448,22 +1445,34 @@ fn test_prepare_render_body_derives_kitty_explicit_fragments() {
     let prepared = output.image_output.prepare_render_body_for_client(1, false);
     assert!(prepared.before_text_vte.is_none());
     assert!(prepared.after_text.fragments.is_empty());
-    assert_eq!(
-        prepared.after_text.kitty_plan,
+    match prepared.after_text.kitty_plan {
         KittyScenePlan::Diff {
-            asset_ops: vec![KittyAssetOp::EnsureResident {
-                image_id: 91,
-                generation: 1,
-            }],
-            placement_ops: vec![KittyPlacementOp::PlaceExplicit {
-                key: KittyPlacementKey {
+            asset_ops,
+            placement_ops,
+        } => {
+            assert_eq!(
+                asset_ops,
+                vec![KittyAssetOp::EnsureResident {
                     image_id: 91,
-                    placement_id: 91,
+                    generation: 1,
+                }]
+            );
+            assert_eq!(placement_ops.len(), 1);
+            match &placement_ops[0] {
+                KittyPlacementOp::PlaceExplicit { key, chunk } => {
+                    assert_eq!(key.image_id, 91);
+                    assert_ne!(
+                        key.placement_id, 91,
+                        "output placement ids should be mux-owned, not the source placement id",
+                    );
+                    assert_eq!(chunk.placement_id, Some(91));
+                    assert_eq!(*chunk, create_kitty_chunk(91, 2, 2));
                 },
-                chunk: create_kitty_chunk(91, 2, 2),
-            }],
-        }
-    );
+                other => panic!("expected explicit placement op, got {other:?}"),
+            }
+        },
+        other => panic!("expected diff kitty plan, got {other:?}"),
+    }
 }
 
 #[test]
@@ -1788,18 +1797,45 @@ fn test_clip_kitty_explicit_fragment_against_covering_pane() {
     };
     let fragments = visible_image_fragments(
         &stack,
-        vec![ImageFragment::KittyExplicit(KittyExplicitFragment {
-            chunk,
-        })],
+        vec![ImageFragment::KittyExplicit(chunk)],
         Some(0),
         None,
     );
 
     assert_eq!(fragments.len(), 1);
     match &fragments[0] {
-        ImageFragment::KittyExplicit(fragment) => {
-            assert_eq!(fragment.chunk.cell_x, 0);
-            assert_eq!(fragment.chunk.columns, 1);
+        ImageFragment::KittyExplicit(chunk) => {
+            assert_eq!(chunk.cell_x, 0);
+            assert_eq!(chunk.columns, 1);
+        },
+        other => panic!("expected kitty explicit fragment, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_clip_kitty_explicit_fragment_preserves_source_placement_id() {
+    let stack = FloatingPanesStack {
+        layers: vec![create_pane_geom(1, 0, 1, 2)],
+    };
+    let chunk = KittyImageChunk {
+        cell_x: 0,
+        cell_y: 0,
+        columns: 2,
+        rows: 2,
+        placement_id: Some(777),
+        ..create_kitty_chunk(194, 2, 2)
+    };
+    let fragments = visible_image_fragments(
+        &stack,
+        vec![ImageFragment::KittyExplicit(chunk)],
+        Some(0),
+        None,
+    );
+
+    assert_eq!(fragments.len(), 1);
+    match &fragments[0] {
+        ImageFragment::KittyExplicit(chunk) => {
+            assert_eq!(chunk.placement_id, Some(777));
         },
         other => panic!("expected kitty explicit fragment, got {other:?}"),
     }
@@ -1837,9 +1873,7 @@ fn test_clip_kitty_explicit_fragment_against_two_covering_panes() {
 
     let fragments = visible_image_fragments(
         &stack,
-        vec![ImageFragment::KittyExplicit(KittyExplicitFragment {
-            chunk,
-        })],
+        vec![ImageFragment::KittyExplicit(chunk)],
         Some(0),
         None,
     );
@@ -1847,7 +1881,7 @@ fn test_clip_kitty_explicit_fragment_against_two_covering_panes() {
     let actual = fragments
         .into_iter()
         .map(|fragment| match fragment {
-            ImageFragment::KittyExplicit(fragment) => fragment.chunk,
+            ImageFragment::KittyExplicit(chunk) => chunk,
             other => panic!("expected kitty explicit fragment, got {other:?}"),
         })
         .collect::<Vec<_>>();
@@ -1888,9 +1922,7 @@ fn test_clip_cropped_kitty_explicit_fragment_against_two_covering_panes() {
 
     let fragments = visible_image_fragments(
         &stack,
-        vec![ImageFragment::KittyExplicit(KittyExplicitFragment {
-            chunk,
-        })],
+        vec![ImageFragment::KittyExplicit(chunk)],
         Some(0),
         None,
     );
@@ -1898,7 +1930,7 @@ fn test_clip_cropped_kitty_explicit_fragment_against_two_covering_panes() {
     let actual = fragments
         .into_iter()
         .map(|fragment| match fragment {
-            ImageFragment::KittyExplicit(fragment) => fragment.chunk,
+            ImageFragment::KittyExplicit(chunk) => chunk,
             other => panic!("expected kitty explicit fragment, got {other:?}"),
         })
         .collect::<Vec<_>>();
@@ -1912,16 +1944,14 @@ fn test_clip_sixel_fragment_against_covering_pane() {
     };
     let fragments = visible_image_fragments(
         &stack,
-        vec![ImageFragment::Sixel(SixelFragment {
-            chunk: SixelImageChunk {
-                cell_x: 0,
-                cell_y: 0,
-                sixel_image_pixel_x: 0,
-                sixel_image_pixel_y: 0,
-                sixel_image_pixel_width: 20,
-                sixel_image_pixel_height: 40,
-                sixel_image_id: 1,
-            },
+        vec![ImageFragment::Sixel(SixelImageChunk {
+            cell_x: 0,
+            cell_y: 0,
+            sixel_image_pixel_x: 0,
+            sixel_image_pixel_y: 0,
+            sixel_image_pixel_width: 20,
+            sixel_image_pixel_height: 40,
+            sixel_image_id: 1,
         })],
         Some(0),
         Some(&SizeInPixels {
@@ -1958,18 +1988,16 @@ fn test_clip_kitty_placeholder_fragment_against_covering_pane() {
     ];
     let fragments = visible_image_fragments(
         &stack,
-        vec![ImageFragment::KittyPlaceholder(KittyPlaceholderFragment {
-            render,
-        })],
+        vec![ImageFragment::KittyPlaceholder(render)],
         Some(0),
         None,
     );
 
     assert_eq!(fragments.len(), 1);
     match &fragments[0] {
-        ImageFragment::KittyPlaceholder(fragment) => {
-            assert_eq!(fragment.render.cells.len(), 1);
-            assert_eq!(fragment.render.cells[0].cell_x, 1);
+        ImageFragment::KittyPlaceholder(render) => {
+            assert_eq!(render.cells.len(), 1);
+            assert_eq!(render.cells[0].cell_x, 1);
         },
         other => panic!("expected kitty placeholder fragment, got {other:?}"),
     }
