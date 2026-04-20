@@ -1,10 +1,10 @@
-use super::{KittyImageChunk, KittyPlaceholderRender};
+use super::{KittyImageChunk, KittyPlaceholderRender, PlacementId};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct KittyPlacementKey {
     pub image_id: u32,
-    pub placement_id: u32,
+    pub placement_id: PlacementId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -3,7 +3,7 @@ use miniz_oxide::inflate::decompress_to_vec_zlib;
 use zellij_utils::pane_size::SizeInPixels;
 
 use crate::output::{
-    KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyPlaceholderRender,
+    KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyPlaceholderRender, PlacementId,
 };
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::kitty_placeholder::{
@@ -22,7 +22,7 @@ use std::rc::Rc;
 #[derive(Clone, Debug, Default)]
 pub struct PendingKittyPlaceholder {
     image_id_low_bits: Option<u32>,
-    placement_id: Option<u32>,
+    placement_id: Option<PlacementId>,
     row_diacritic: Option<char>,
     column_diacritic: Option<char>,
     image_id_high_byte_diacritic: Option<char>,
@@ -32,7 +32,7 @@ pub struct PendingKittyPlaceholder {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedKittyPlaceholder {
     pub image_id: u32,
-    pub placement_id: Option<u32>,
+    pub placement_id: Option<PlacementId>,
     pub placeholder_row: u16,
     pub placeholder_col: u16,
     pub anchor: FlowAnchor,
@@ -151,11 +151,13 @@ fn kitty_placeholder_image_id_from_styles(styles: &RcCharacterStyles) -> Option<
     }
 }
 
-fn kitty_placeholder_placement_id_from_styles(styles: &RcCharacterStyles) -> Option<u32> {
+fn kitty_placeholder_placement_id_from_styles(styles: &RcCharacterStyles) -> Option<PlacementId> {
     match styles.underline_color {
-        Some(AnsiCode::ColorIndex(index)) => Some(index as u32),
+        Some(AnsiCode::ColorIndex(index)) => Some(PlacementId::Protocol(index as u32)),
         Some(AnsiCode::RgbCode((r, g, b))) => {
-            Some(((r as u32) << 16) | ((g as u32) << 8) | (b as u32))
+            Some(PlacementId::Protocol(
+                ((r as u32) << 16) | ((g as u32) << 8) | (b as u32),
+            ))
         },
         _ => None,
     }
@@ -164,7 +166,7 @@ fn kitty_placeholder_placement_id_from_styles(styles: &RcCharacterStyles) -> Opt
 #[derive(Clone, Debug)]
 pub struct KittyPlacement {
     pub image_id: u32,
-    pub placement_id: Option<u32>,
+    pub placement_id: Option<PlacementId>,
     pub placement_mode: KittyImagePlacementMode,
     pub cursor_movement_policy: KittyCursorMovementPolicy,
     pub anchor: FlowAnchor,
@@ -274,7 +276,7 @@ pub struct KittyImageInsertion {
     pub geometry: ImagePlacementGeometry,
     pub protocol_image_id: Option<u32>,
     pub protocol_image_number: Option<u32>,
-    pub protocol_placement_id: Option<u32>,
+    pub protocol_placement_id: Option<PlacementId>,
     pub placement_mode: KittyImagePlacementMode,
     pub cursor_movement_policy: KittyCursorMovementPolicy,
     pub replaced_existing_asset: bool,
@@ -380,7 +382,11 @@ impl KittyImageState {
         self.kitty_asset_store.borrow().image_dimensions(image_id)
     }
 
-    pub fn placement(&self, image_id: u32, placement_id: Option<u32>) -> Option<&KittyPlacement> {
+    pub fn placement(
+        &self,
+        image_id: u32,
+        placement_id: Option<PlacementId>,
+    ) -> Option<&KittyPlacement> {
         self.placements.iter().find(|placement| {
             placement.image_id == image_id && placement.placement_id == placement_id
         })
@@ -838,7 +844,7 @@ impl KittyImageState {
     pub fn delete_protocol_placement(
         &mut self,
         protocol_image_id: u32,
-        placement_id: Option<u32>,
+        placement_id: Option<PlacementId>,
         free_image_data: bool,
     ) {
         let Some(internal_image_id) = self
@@ -900,7 +906,10 @@ impl KittyImageState {
         }
 
         for (placement_index, chunk) in chunks.iter().enumerate() {
-            let placement_id = chunk.placement_id.unwrap_or(placement_index as u32 + 1);
+            let placement_id = chunk
+                .placement_id
+                .unwrap_or(PlacementId::Synthetic(placement_index as u32 + 1))
+                .wire_value();
             raw_vte_output.push_str(&Self::serialize_explicit_placement(chunk, placement_id));
         }
         raw_vte_output.push_str("\u{1b}[u");
@@ -932,7 +941,10 @@ impl KittyImageState {
         }
 
         for (placement_index, render) in renders.iter().enumerate() {
-            let placement_id = render.placement_id.unwrap_or(placement_index as u32 + 1);
+            let placement_id = render
+                .placement_id
+                .unwrap_or(PlacementId::Synthetic(placement_index as u32 + 1))
+                .wire_value();
             raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
         }
         raw_vte_output.push_str("\u{1b}[u");
@@ -973,17 +985,23 @@ impl KittyImageState {
             let placement_id = chunk.placement_id.unwrap_or_else(|| {
                 let placement_id = next_synthesized_placement_id;
                 next_synthesized_placement_id += 1;
-                placement_id
+                PlacementId::Synthetic(placement_id)
             });
-            raw_vte_output.push_str(&Self::serialize_explicit_placement(chunk, placement_id));
+            raw_vte_output.push_str(&Self::serialize_explicit_placement(
+                chunk,
+                placement_id.wire_value(),
+            ));
         }
         for render in renders {
             let placement_id = render.placement_id.unwrap_or_else(|| {
                 let placement_id = next_synthesized_placement_id;
                 next_synthesized_placement_id += 1;
-                placement_id
+                PlacementId::Synthetic(placement_id)
             });
-            raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
+            raw_vte_output.push_str(&Self::serialize_placeholder_render(
+                render,
+                placement_id.wire_value(),
+            ));
         }
         raw_vte_output.push_str("\u{1b}[u");
         raw_vte_output
@@ -1321,11 +1339,11 @@ pub enum KittyDeleteSelector {
     AllVisible,
     ImageId {
         image_id: u32,
-        placement_id: Option<u32>,
+        placement_id: Option<PlacementId>,
     },
     ImageNumber {
         image_number: u32,
-        placement_id: Option<u32>,
+        placement_id: Option<PlacementId>,
     },
     Geometry(KittyGeometrySelector),
     Range {
@@ -1361,7 +1379,10 @@ pub fn kitty_delete_request(apc_bytes: &[u8]) -> Option<KittyDeleteRequest> {
         },
         _ => return None,
     };
-    let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
+    let placement_id = kv
+        .get("p")
+        .and_then(|p| p.parse::<u32>().ok())
+        .map(PlacementId::Protocol);
     let selector = match delete_selector {
         "a" | "A" => KittyDeleteSelector::AllVisible,
         "i" | "I" => KittyDeleteSelector::ImageId {
@@ -1411,7 +1432,7 @@ pub fn kitty_delete_all_visible(apc_bytes: &[u8]) -> bool {
     )
 }
 
-pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<u32>, bool)> {
+pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<PlacementId>, bool)> {
     match kitty_delete_request(apc_bytes)? {
         KittyDeleteRequest {
             selector:
@@ -1429,7 +1450,9 @@ pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<u32>, b
     }
 }
 
-pub fn kitty_delete_by_image_number(apc_bytes: &[u8]) -> Option<(u32, Option<u32>, bool)> {
+pub fn kitty_delete_by_image_number(
+    apc_bytes: &[u8],
+) -> Option<(u32, Option<PlacementId>, bool)> {
     match kitty_delete_request(apc_bytes)? {
         KittyDeleteRequest {
             selector:
@@ -1711,7 +1734,10 @@ impl ParsedKittyCommand {
         if let Some(action) = kv.get("a") {
             let placement = KittyPlacement {
                 image_id: 0,
-                placement_id: kv.get("p").and_then(|p| p.parse::<u32>().ok()),
+                placement_id: kv
+                    .get("p")
+                    .and_then(|p| p.parse::<u32>().ok())
+                    .map(PlacementId::Protocol),
                 placement_mode: if kv.get("U").copied() == Some("1") {
                     KittyImagePlacementMode::Placeholder
                 } else {
@@ -1970,6 +1996,10 @@ fn serialize_virtual_placeholder_placement(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pid(value: u32) -> PlacementId {
+        PlacementId::Protocol(value)
+    }
 
     fn assert_delete_request(apc_bytes: &[u8], expected: KittyDeleteRequest) {
         assert_eq!(kitty_delete_request(apc_bytes), Some(expected));
@@ -2253,7 +2283,7 @@ mod tests {
         for (columns, rows, expected_columns, expected_rows, expect_c, expect_r) in cases {
             let placement = KittyPlacement {
                 image_id: 1,
-                placement_id: Some(7),
+                placement_id: Some(pid(7)),
                 placement_mode: KittyImagePlacementMode::Explicit,
                 cursor_movement_policy: KittyCursorMovementPolicy::AfterPlacement,
                 anchor: FlowAnchor::LogicalRow {
@@ -2280,7 +2310,7 @@ mod tests {
 
             let chunk = KittyImageChunk {
                 image_id: 1,
-                placement_id: Some(7),
+                placement_id: Some(pid(7)),
                 placement_mode: KittyImagePlacementMode::Explicit,
                 cell_x: 0,
                 cell_y: 0,
@@ -2313,7 +2343,7 @@ mod tests {
 
         let columns_only = KittyPlacement {
             image_id: 1,
-            placement_id: Some(7),
+            placement_id: Some(pid(7)),
             placement_mode: KittyImagePlacementMode::Explicit,
             cursor_movement_policy: KittyCursorMovementPolicy::AfterPlacement,
             anchor: FlowAnchor::LogicalRow {
@@ -2365,7 +2395,7 @@ mod tests {
         // starting at the top-left and leaving trailing slack in the final row.
         let bounded_chunk = KittyImageChunk {
             image_id: 1,
-            placement_id: Some(7),
+            placement_id: Some(pid(7)),
             placement_mode: KittyImagePlacementMode::Explicit,
             cell_x: 0,
             cell_y: 0,

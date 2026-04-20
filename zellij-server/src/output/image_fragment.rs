@@ -1,6 +1,6 @@
 use super::{
     kitty_diff::{KittyScenePlan, KittySceneState},
-    FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender, SixelImageChunk,
+    FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender, PlacementId, SixelImageChunk,
 };
 use crate::ClientId;
 use zellij_utils::pane_size::{PaneGeom, SizeInPixels};
@@ -52,6 +52,32 @@ fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
     }
 }
 
+fn remap_split_fragment_placement_id(chunk: &KittyImageChunk) -> Option<PlacementId> {
+    let base = match chunk.placement_id? {
+        PlacementId::Protocol(value) | PlacementId::Synthetic(value) => value,
+    };
+    let mut hash = (base as u64) ^ 0x9e37_79b9_7f4a_7c15;
+    let fields = [
+        chunk.cell_x as u64,
+        chunk.cell_y as u64,
+        chunk.columns as u64,
+        chunk.rows as u64,
+        chunk.source_x as u64,
+        chunk.source_y as u64,
+        chunk.source_width as u64,
+        chunk.source_height as u64,
+        chunk.x_offset as u64,
+        chunk.y_offset as u64,
+    ];
+    for field in fields {
+        hash ^= field
+            .wrapping_add(0x9e37_79b9_7f4a_7c15)
+            .wrapping_add(hash << 6)
+            .wrapping_add(hash >> 2);
+    }
+    Some(PlacementId::Synthetic((hash & 0xffff_ffff) as u32))
+}
+
 fn promote_split_explicit_chunk_to_bounded_geometry(chunk: KittyImageChunk) -> KittyImageChunk {
     KittyImageChunk {
         columns_specified: true,
@@ -98,8 +124,12 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
+        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
         uncovered.push(ImageFragment::KittyExplicit(
-            promote_split_explicit_chunk_to_bounded_geometry(chunk),
+            KittyImageChunk {
+                placement_id: remap_split_fragment_placement_id(&chunk),
+                ..chunk
+            },
         ));
     }
     if intersection_bottom < chunk_bottom_edge {
@@ -112,8 +142,12 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
+        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
         uncovered.push(ImageFragment::KittyExplicit(
-            promote_split_explicit_chunk_to_bounded_geometry(chunk),
+            KittyImageChunk {
+                placement_id: remap_split_fragment_placement_id(&chunk),
+                ..chunk
+            },
         ));
     }
     if intersection_left > chunk_left_edge {
@@ -133,8 +167,12 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
+        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
         uncovered.push(ImageFragment::KittyExplicit(
-            promote_split_explicit_chunk_to_bounded_geometry(chunk),
+            KittyImageChunk {
+                placement_id: remap_split_fragment_placement_id(&chunk),
+                ..chunk
+            },
         ));
     }
     if intersection_right < chunk_right_edge {
@@ -157,8 +195,12 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
+        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
         uncovered.push(ImageFragment::KittyExplicit(
-            promote_split_explicit_chunk_to_bounded_geometry(chunk),
+            KittyImageChunk {
+                placement_id: remap_split_fragment_placement_id(&chunk),
+                ..chunk
+            },
         ));
     }
     uncovered

@@ -1,6 +1,5 @@
 use super::super::Grid;
-use crate::output::KittyImageData;
-use crate::output::Output;
+use crate::output::{KittyImageData, Output, PlacementId};
 use crate::panes::grid::SixelImageStore;
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::link_handler::LinkHandler;
@@ -16,6 +15,10 @@ use zellij_utils::{
 };
 
 use std::fmt::Write;
+
+fn pid(value: u32) -> PlacementId {
+    PlacementId::Protocol(value)
+}
 
 fn read_fixture(fixture_name: &str) -> Vec<u8> {
     let mut path_to_file = std::path::PathBuf::new();
@@ -5857,7 +5860,7 @@ fn visible_kitty_placement_ids(grid: &Grid) -> Vec<u32> {
     let mut placement_ids: Vec<u32> = grid
         .visible_kitty_image_chunks(0, 0)
         .into_iter()
-        .filter_map(|chunk| chunk.placement_id)
+        .filter_map(|chunk| chunk.placement_id.map(PlacementId::wire_value))
         .collect();
     placement_ids.sort_unstable();
     placement_ids
@@ -6940,7 +6943,7 @@ fn kitty_image_number_upload_and_placement_commands_emit_replies_and_render() {
 
     let visible = grid.visible_kitty_image_chunks(0, 0);
     assert_eq!(visible.len(), 1);
-    assert_eq!(visible[0].placement_id, Some(1));
+    assert_eq!(visible[0].placement_id, Some(pid(1)));
 }
 
 #[test]
@@ -7012,13 +7015,13 @@ fn kitty_image_number_targets_newest_image_for_placement_and_delete() {
     assert!(
         before_delete
             .iter()
-            .any(|chunk| chunk.placement_id == Some(1)),
+            .any(|chunk| chunk.placement_id == Some(pid(1))),
         "expected placement 1 before delete"
     );
     assert!(
         before_delete
             .iter()
-            .any(|chunk| chunk.placement_id == Some(2)),
+            .any(|chunk| chunk.placement_id == Some(pid(2))),
         "expected placement 2 before delete"
     );
 
@@ -7026,7 +7029,7 @@ fn kitty_image_number_targets_newest_image_for_placement_and_delete() {
 
     let after_delete = grid.visible_kitty_image_chunks(0, 0);
     assert_eq!(after_delete.len(), 1);
-    assert_eq!(after_delete[0].placement_id, Some(1));
+    assert_eq!(after_delete[0].placement_id, Some(pid(1)));
 }
 
 #[test]
@@ -7449,8 +7452,8 @@ fn kitty_retransmit_then_recreate_restores_shared_placeholder_and_explicit_place
     let explicit_chunks = grid.visible_kitty_image_chunks(0, 0);
     assert_eq!(placeholder_renders.len(), 1);
     assert_eq!(explicit_chunks.len(), 1);
-    assert_eq!(placeholder_renders[0].placement_id, Some(1));
-    assert_eq!(explicit_chunks[0].placement_id, Some(2));
+    assert_eq!(placeholder_renders[0].placement_id, Some(pid(1)));
+    assert_eq!(explicit_chunks[0].placement_id, Some(pid(2)));
 }
 
 #[test]

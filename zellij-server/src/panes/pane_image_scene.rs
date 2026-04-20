@@ -4,6 +4,7 @@ use zellij_utils::pane_size::SizeInPixels;
 
 use crate::output::{
     KittyImageChunk, KittyImagePlacementMode, KittyPlaceholderCellRender, KittyPlaceholderRender,
+    PlacementId,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -85,14 +86,14 @@ pub struct LogicalPlacementId(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct KittyProtocolPlacementKey {
     pub image_id: u32,
-    pub placement_id: Option<u32>,
+    pub placement_id: Option<PlacementId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProtocolPlacementIdentity {
     Kitty {
         image_id: Option<u32>,
-        placement_id: Option<u32>,
+        placement_id: Option<PlacementId>,
     },
 }
 
@@ -234,7 +235,7 @@ impl ImagePlacement {
         }
     }
 
-    pub fn kitty_protocol_identity(&self) -> Option<(Option<u32>, Option<u32>)> {
+    pub fn kitty_protocol_identity(&self) -> Option<(Option<u32>, Option<PlacementId>)> {
         match &self.protocol_identity {
             Some(ProtocolPlacementIdentity::Kitty {
                 image_id,
@@ -651,7 +652,7 @@ impl PaneImageScene {
     pub fn kitty_logical_placement_id(
         &self,
         image_id: u32,
-        placement_id: Option<u32>,
+        placement_id: Option<PlacementId>,
     ) -> Option<LogicalPlacementId> {
         self.kitty_logical_placement_ids
             .get(&KittyProtocolPlacementKey {
@@ -755,7 +756,7 @@ impl PaneImageScene {
     pub fn delete_kitty_protocol_placement(
         &mut self,
         protocol_image_id: u32,
-        placement_id: Option<u32>,
+        placement_id: Option<PlacementId>,
         free_image_data: bool,
     ) {
         let logical_placement_ids_to_remove: Vec<_> = self
@@ -794,7 +795,7 @@ impl PaneImageScene {
     pub fn delete_kitty_image_number_placement(
         &mut self,
         image_number: u32,
-        placement_id: Option<u32>,
+        placement_id: Option<PlacementId>,
         free_image_data: bool,
     ) {
         let Some(protocol_image_id) = self.kitty.protocol_image_id_for_image_number(image_number)
@@ -807,7 +808,7 @@ impl PaneImageScene {
     fn kitty_explicit_protocol_match<F>(
         placement: &ImagePlacement,
         resolve_anchor: &F,
-    ) -> Option<(u32, Option<u32>, i32, PlacementRect)>
+    ) -> Option<(u32, Option<PlacementId>, i32, PlacementRect)>
     where
         F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
     {
@@ -838,7 +839,7 @@ impl PaneImageScene {
         cursor: (usize, usize),
         scrollback_size_in_lines: usize,
         resolve_anchor: &F,
-    ) -> Option<(u32, Option<u32>)>
+    ) -> Option<(u32, Option<PlacementId>)>
     where
         F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
     {

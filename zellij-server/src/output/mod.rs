@@ -933,6 +933,20 @@ pub enum KittyImagePlacementMode {
     Placeholder,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum PlacementId {
+    Protocol(u32),
+    Synthetic(u32),
+}
+
+impl PlacementId {
+    pub fn wire_value(self) -> u32 {
+        match self {
+            PlacementId::Protocol(value) | PlacementId::Synthetic(value) => value,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KittyPlaceholderCellRender {
     pub cell_x: usize,
@@ -944,7 +958,7 @@ pub struct KittyPlaceholderCellRender {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KittyPlaceholderRender {
     pub image_id: u32,
-    pub placement_id: Option<u32>,
+    pub placement_id: Option<PlacementId>,
     pub columns: usize,
     pub rows: usize,
     pub source_x: u32,
@@ -979,7 +993,7 @@ pub struct PaneRenderOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KittyImageChunk {
     pub image_id: u32,
-    pub placement_id: Option<u32>,
+    pub placement_id: Option<PlacementId>,
     pub placement_mode: KittyImagePlacementMode,
     pub cell_x: usize,
     pub cell_y: usize,

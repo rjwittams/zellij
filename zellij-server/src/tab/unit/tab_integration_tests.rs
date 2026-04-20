@@ -3954,8 +3954,8 @@ fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
         Some(state1),
     );
     assert!(
-        frame2_output.contains("\u{1b}_Ga=d,d=i,i=2,"),
-        "smoke-style p delete should remove the top-right placement, got: {frame2_output:?}"
+        frame2_output.contains("\u{1b}_Ga=d,d=i,i=2,p=1\u{1b}\\"),
+        "smoke-style p delete should remove the top-right placement using its original protocol placement id, got: {frame2_output:?}"
     );
 
     tab.handle_pty_bytes(1, smoke_geometry_delete_scene_bytes())
@@ -3986,8 +3986,8 @@ fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
         "later smoke-style geometry deletes should not fall back to delete-all"
     );
     assert!(
-        frame4_output.contains("\u{1b}_Ga=d,d=i,i=8,"),
-        "smoke-style q delete should target the recreated bottom-right placement after the redraw, got: {frame4_output:?}"
+        frame4_output.contains("\u{1b}_Ga=d,d=i,i=8,p=1\u{1b}\\"),
+        "smoke-style q delete should target the recreated bottom-right placement with its original protocol placement id after the redraw, got: {frame4_output:?}"
     );
 }
 

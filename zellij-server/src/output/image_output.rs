@@ -36,52 +36,10 @@ struct LastRenderedImageState {
     scene_state: Option<KittySceneState>,
 }
 
-const FIRST_SYNTHETIC_KITTY_PLACEMENT_ID: u32 = 0x8000_0001;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-struct KittyExplicitOutputKey {
-    image_id: u32,
-    source_placement_id: u32,
-    source_x: u32,
-    source_y: u32,
-    source_width: u32,
-    source_height: u32,
-    x_offset: u32,
-    y_offset: u32,
-}
-
-impl KittyExplicitOutputKey {
-    fn from_chunk(chunk: &KittyImageChunk) -> Option<Self> {
-        Some(Self {
-            image_id: chunk.image_id,
-            source_placement_id: chunk.placement_id?,
-            source_x: chunk.source_x,
-            source_y: chunk.source_y,
-            source_width: chunk.source_width,
-            source_height: chunk.source_height,
-            x_offset: chunk.x_offset,
-            y_offset: chunk.y_offset,
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct ClientImageState {
     current: CurrentImageState,
     last_rendered: LastRenderedImageState,
-    explicit_output_placement_ids: HashMap<KittyExplicitOutputKey, u32>,
-    next_synthetic_kitty_placement_id: u32,
-}
-
-impl Default for ClientImageState {
-    fn default() -> Self {
-        Self {
-            current: CurrentImageState::default(),
-            last_rendered: LastRenderedImageState::default(),
-            explicit_output_placement_ids: HashMap::new(),
-            next_synthetic_kitty_placement_id: FIRST_SYNTHETIC_KITTY_PLACEMENT_ID,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -191,29 +149,11 @@ impl ImageOutput {
         self.client_image_states.entry(client_id).or_default()
     }
 
-    fn allocate_explicit_output_placement_id(
-        explicit_output_placement_ids: &mut HashMap<KittyExplicitOutputKey, u32>,
-        next_synthetic_kitty_placement_id: &mut u32,
-        key: KittyExplicitOutputKey,
-    ) -> u32 {
-        if let Some(existing) = explicit_output_placement_ids.get(&key) {
-            *existing
-        } else {
-            let allocated = *next_synthetic_kitty_placement_id;
-            *next_synthetic_kitty_placement_id =
-                next_synthetic_kitty_placement_id.saturating_add(1);
-            explicit_output_placement_ids.insert(key, allocated);
-            allocated
-        }
-    }
-
     fn kitty_scene_state_from_rendered(
         resident_kitty_asset_generations: &HashMap<u32, u64>,
         chunks: &[KittyImageChunk],
         placeholder_renders: &[KittyPlaceholderRender],
         kitty_asset_store: &KittyAssetStore,
-        explicit_output_placement_ids: &mut HashMap<KittyExplicitOutputKey, u32>,
-        next_synthetic_kitty_placement_id: &mut u32,
     ) -> Option<KittySceneState> {
         let mut scene = KittySceneState {
             resident_asset_generations: resident_kitty_asset_generations
@@ -224,12 +164,7 @@ impl ImageOutput {
         };
         let mut referenced_asset_ids: BTreeSet<u32> = BTreeSet::new();
         for chunk in chunks {
-            let explicit_output_key = KittyExplicitOutputKey::from_chunk(chunk)?;
-            let placement_id = Self::allocate_explicit_output_placement_id(
-                explicit_output_placement_ids,
-                next_synthetic_kitty_placement_id,
-                explicit_output_key,
-            );
+            let placement_id = chunk.placement_id?;
             referenced_asset_ids.insert(chunk.image_id);
             scene.insert_placement(PlannedKittyPlacement::Explicit {
                 key: KittyPlacementKey {
@@ -290,7 +225,7 @@ impl ImageOutput {
             if let KittyPlacementOp::Delete { key } = placement_op {
                 vte_output.push_str(&KittyImageState::serialize_delete_placement(
                     key.image_id,
-                    key.placement_id,
+                    key.placement_id.wire_value(),
                 ));
             }
         }
@@ -336,12 +271,15 @@ impl ImageOutput {
                     match placement_op {
                         KittyPlacementOp::Delete { .. } => {},
                         KittyPlacementOp::PlaceExplicit { key, chunk } => vte_output.push_str(
-                            &KittyImageState::serialize_explicit_placement(chunk, key.placement_id),
+                            &KittyImageState::serialize_explicit_placement(
+                                chunk,
+                                key.placement_id.wire_value(),
+                            ),
                         ),
                         KittyPlacementOp::PlacePlaceholder { key, render } => {
                             vte_output.push_str(&KittyImageState::serialize_placeholder_render(
                                 render,
-                                key.placement_id,
+                                key.placement_id.wire_value(),
                             ))
                         },
                     }
@@ -485,8 +423,6 @@ impl ImageOutput {
             &scene_input.explicit_chunks,
             &scene_input.placeholder_renders,
             &kitty_asset_store,
-            &mut client_state.explicit_output_placement_ids,
-            &mut client_state.next_synthetic_kitty_placement_id,
         );
         client_state.last_rendered.image_state = normalized_state;
         client_state.last_rendered.scene_state = scene_state;
@@ -657,14 +593,11 @@ impl ImageOutput {
         let kitty_asset_store = self.kitty_asset_store.clone();
         let desired_kitty_scene = {
             let kitty_asset_store = kitty_asset_store.borrow();
-            let client_state = self.client_image_state_mut(client_id);
             Self::kitty_scene_state_from_rendered(
                 &empty_resident_assets,
                 &current_kitty_chunks,
                 &current_kitty_placeholder_renders,
                 &kitty_asset_store,
-                &mut client_state.explicit_output_placement_ids,
-                &mut client_state.next_synthetic_kitty_placement_id,
             )
         };
         let assumed_kitty_scene = if pre_vte_clears_display {
@@ -678,8 +611,6 @@ impl ImageOutput {
                     &client_state.last_rendered.image_state.explicit_chunks,
                     &client_state.last_rendered.image_state.placeholder_renders,
                     &kitty_asset_store,
-                    &mut client_state.explicit_output_placement_ids,
-                    &mut client_state.next_synthetic_kitty_placement_id,
                 )
             })
         };

@@ -5,7 +5,7 @@ use super::super::kitty_diff::{
 };
 use super::super::{
     CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, Output, OutputBuffer,
-    PaneImageRenderOutput, RenderedImageState, SixelImageChunk,
+    PaneImageRenderOutput, PlacementId, RenderedImageState, SixelImageChunk,
 };
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::pane_image_scene::KittyRenderBundle;
@@ -18,6 +18,10 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 use zellij_utils::pane_size::{Dimension, PaneGeom, Size, SizeInPixels};
+
+fn pid(value: u32) -> PlacementId {
+    PlacementId::Protocol(value)
+}
 
 /// Helper to create a simple Output instance for testing
 fn create_test_output() -> Output {
@@ -71,7 +75,7 @@ fn create_character_chunk_from_str(text: &str, x: usize, y: usize) -> CharacterC
 fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageChunk {
     KittyImageChunk {
         image_id,
-        placement_id: Some(image_id),
+        placement_id: Some(pid(image_id)),
         placement_mode: crate::output::KittyImagePlacementMode::Explicit,
         cell_x: 0,
         cell_y: 0,
@@ -268,7 +272,7 @@ fn create_kitty_generation(_image_id: u32) -> u64 {
 fn create_kitty_placeholder_render(image_id: u32) -> crate::output::KittyPlaceholderRender {
     crate::output::KittyPlaceholderRender {
         image_id,
-        placement_id: Some(image_id),
+        placement_id: Some(pid(image_id)),
         columns: 1,
         rows: 1,
         source_x: 0,
@@ -293,11 +297,11 @@ fn create_kitty_diff_explicit_placement(
     rows: usize,
 ) -> PlannedKittyPlacement {
     let mut chunk = create_kitty_chunk(image_id, columns, rows);
-    chunk.placement_id = Some(placement_id);
+    chunk.placement_id = Some(pid(placement_id));
     PlannedKittyPlacement::Explicit {
         key: KittyPlacementKey {
             image_id,
-            placement_id,
+            placement_id: pid(placement_id),
         },
         chunk,
     }
@@ -308,11 +312,11 @@ fn create_kitty_diff_placeholder_placement(
     placement_id: u32,
 ) -> PlannedKittyPlacement {
     let mut render = create_kitty_placeholder_render(image_id);
-    render.placement_id = Some(placement_id);
+    render.placement_id = Some(pid(placement_id));
     PlannedKittyPlacement::Placeholder {
         key: KittyPlacementKey {
             image_id,
-            placement_id,
+            placement_id: pid(placement_id),
         },
         render,
     }
@@ -536,7 +540,7 @@ fn test_kitty_diff_deletes_removed_placement() {
             placement_ops: vec![KittyPlacementOp::Delete {
                 key: KittyPlacementKey {
                     image_id: 1,
-                    placement_id: 10,
+                    placement_id: pid(10),
                 },
             }],
         }
@@ -560,11 +564,11 @@ fn test_kitty_diff_places_resident_asset_without_retransmit() {
             placement_ops: vec![KittyPlacementOp::PlaceExplicit {
                 key: KittyPlacementKey {
                     image_id: 1,
-                    placement_id: 10,
+                    placement_id: pid(10),
                 },
                 chunk: {
                     let mut chunk = create_kitty_chunk(1, 2, 2);
-                    chunk.placement_id = Some(10);
+                    chunk.placement_id = Some(pid(10));
                     chunk
                 },
             }],
@@ -589,11 +593,11 @@ fn test_kitty_diff_retransmits_missing_asset_before_place() {
             placement_ops: vec![KittyPlacementOp::PlaceExplicit {
                 key: KittyPlacementKey {
                     image_id: 1,
-                    placement_id: 10,
+                    placement_id: pid(10),
                 },
                 chunk: {
                     let mut chunk = create_kitty_chunk(1, 2, 2);
-                    chunk.placement_id = Some(10);
+                    chunk.placement_id = Some(pid(10));
                     chunk
                 },
             }],
@@ -616,17 +620,17 @@ fn test_kitty_diff_replaces_geometry_change_with_delete_and_place() {
                 KittyPlacementOp::Delete {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 10,
+                        placement_id: pid(10),
                     },
                 },
                 KittyPlacementOp::PlaceExplicit {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 10,
+                        placement_id: pid(10),
                     },
                     chunk: {
                         let mut chunk = create_kitty_chunk(1, 3, 2);
-                        chunk.placement_id = Some(10);
+                        chunk.placement_id = Some(pid(10));
                         chunk
                     },
                 },
@@ -642,21 +646,21 @@ fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
         create_kitty_diff_explicit_placement(1, 11, 2, 2),
     ]);
     let mut changed_chunk = create_kitty_chunk(1, 2, 2);
-    changed_chunk.placement_id = Some(10);
+    changed_chunk.placement_id = Some(pid(10));
     let mut changed_chunk_two = changed_chunk.clone();
-    changed_chunk_two.placement_id = Some(11);
+    changed_chunk_two.placement_id = Some(pid(11));
     let mut desired = create_kitty_scene_state(vec![
         PlannedKittyPlacement::Explicit {
             key: KittyPlacementKey {
                 image_id: 1,
-                placement_id: 10,
+                placement_id: pid(10),
             },
             chunk: changed_chunk.clone(),
         },
         PlannedKittyPlacement::Explicit {
             key: KittyPlacementKey {
                 image_id: 1,
-                placement_id: 11,
+                placement_id: pid(11),
             },
             chunk: changed_chunk_two.clone(),
         },
@@ -676,26 +680,26 @@ fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
                 KittyPlacementOp::Delete {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 10,
+                        placement_id: pid(10),
                     },
                 },
                 KittyPlacementOp::Delete {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 11,
+                        placement_id: pid(11),
                     },
                 },
                 KittyPlacementOp::PlaceExplicit {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 10,
+                        placement_id: pid(10),
                     },
                     chunk: changed_chunk,
                 },
                 KittyPlacementOp::PlaceExplicit {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 11,
+                        placement_id: pid(11),
                     },
                     chunk: changed_chunk_two,
                 },
@@ -711,21 +715,21 @@ fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
         create_kitty_diff_placeholder_placement(1, 20),
     ]);
     let mut changed_chunk = create_kitty_chunk(1, 2, 2);
-    changed_chunk.placement_id = Some(10);
+    changed_chunk.placement_id = Some(pid(10));
     let mut changed_render = create_kitty_placeholder_render(1);
-    changed_render.placement_id = Some(20);
+    changed_render.placement_id = Some(pid(20));
     let mut desired = create_kitty_scene_state(vec![
         PlannedKittyPlacement::Explicit {
             key: KittyPlacementKey {
                 image_id: 1,
-                placement_id: 10,
+                placement_id: pid(10),
             },
             chunk: changed_chunk.clone(),
         },
         PlannedKittyPlacement::Placeholder {
             key: KittyPlacementKey {
                 image_id: 1,
-                placement_id: 20,
+                placement_id: pid(20),
             },
             render: changed_render.clone(),
         },
@@ -745,26 +749,26 @@ fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
                 KittyPlacementOp::Delete {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 10,
+                        placement_id: pid(10),
                     },
                 },
                 KittyPlacementOp::Delete {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 20,
+                        placement_id: pid(20),
                     },
                 },
                 KittyPlacementOp::PlaceExplicit {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 10,
+                        placement_id: pid(10),
                     },
                     chunk: changed_chunk,
                 },
                 KittyPlacementOp::PlacePlaceholder {
                     key: KittyPlacementKey {
                         image_id: 1,
-                        placement_id: 20,
+                        placement_id: pid(20),
                     },
                     render: changed_render,
                 },
@@ -905,9 +909,9 @@ fn test_serialize_emits_kitty_damage_redraw_without_scene_change() {
 fn test_image_output_adds_placement_without_full_scene_reset() {
     let client_ids = create_test_clients(1);
     let mut first_chunk = create_kitty_chunk(1, 2, 2);
-    first_chunk.placement_id = Some(10);
+    first_chunk.placement_id = Some(pid(10));
     let mut second_chunk = create_kitty_chunk(2, 2, 2);
-    second_chunk.placement_id = Some(20);
+    second_chunk.placement_id = Some(pid(20));
     second_chunk.cell_x = 5;
 
     let mut output = create_test_output();
@@ -935,9 +939,9 @@ fn test_image_output_adds_placement_without_full_scene_reset() {
 fn test_image_output_removes_single_placement_without_delete_all() {
     let client_ids = create_test_clients(1);
     let mut first_chunk = create_kitty_chunk(1, 2, 2);
-    first_chunk.placement_id = Some(10);
+    first_chunk.placement_id = Some(pid(10));
     let mut second_chunk = create_kitty_chunk(2, 2, 2);
-    second_chunk.placement_id = Some(20);
+    second_chunk.placement_id = Some(pid(20));
     second_chunk.cell_x = 5;
 
     let mut output = create_test_output();
@@ -965,9 +969,9 @@ fn test_image_output_removes_single_placement_without_delete_all() {
 fn test_image_output_replaces_changed_geometry_without_resetting_unrelated_placements() {
     let client_ids = create_test_clients(1);
     let mut first_chunk = create_kitty_chunk(1, 2, 2);
-    first_chunk.placement_id = Some(10);
+    first_chunk.placement_id = Some(pid(10));
     let mut second_chunk = create_kitty_chunk(2, 2, 2);
-    second_chunk.placement_id = Some(20);
+    second_chunk.placement_id = Some(pid(20));
     second_chunk.cell_x = 5;
 
     let mut changed_second_chunk = second_chunk.clone();
@@ -998,12 +1002,12 @@ fn test_image_output_replaces_changed_geometry_without_resetting_unrelated_place
 fn test_image_output_asset_change_invalidates_all_referencing_placements() {
     let client_ids = create_test_clients(1);
     let mut first_chunk = create_kitty_chunk(1, 2, 2);
-    first_chunk.placement_id = Some(10);
+    first_chunk.placement_id = Some(pid(10));
     let mut second_chunk = create_kitty_chunk(1, 2, 2);
-    second_chunk.placement_id = Some(11);
+    second_chunk.placement_id = Some(pid(11));
     second_chunk.cell_x = 5;
     let mut other_asset_chunk = create_kitty_chunk(2, 2, 2);
-    other_asset_chunk.placement_id = Some(20);
+    other_asset_chunk.placement_id = Some(pid(20));
     other_asset_chunk.cell_x = 10;
     let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
         create_test_output_with_state();
@@ -1051,10 +1055,10 @@ fn test_image_output_asset_change_invalidates_all_referencing_placements() {
 fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_placements() {
     let client_ids = create_test_clients(1);
     let mut explicit_chunk = create_kitty_chunk(1, 2, 2);
-    explicit_chunk.placement_id = Some(10);
+    explicit_chunk.placement_id = Some(pid(10));
     explicit_chunk.cell_x = 5;
     let mut placeholder_render = create_kitty_placeholder_render(1);
-    placeholder_render.placement_id = Some(20);
+    placeholder_render.placement_id = Some(pid(20));
 
     let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
         create_test_output_with_state();
@@ -1097,7 +1101,7 @@ fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_plac
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
     assert!(
-        client_output.contains("\u{1b}_Ga=d,d=i,i=1,p=2147483649\u{1b}\\"),
+        client_output.contains("\u{1b}_Ga=d,d=i,i=1,p=10\u{1b}\\"),
         "shared asset replacement should delete the explicit placement before recreating it"
     );
     assert!(
@@ -1105,7 +1109,7 @@ fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_plac
         "shared asset replacement should delete the placeholder placement before recreating it"
     );
     assert!(
-        client_output.contains("\u{1b}_Ga=p,i=1,p=2147483649"),
+        client_output.contains("\u{1b}_Ga=p,i=1,p=10"),
         "shared asset replacement should recreate the explicit placement"
     );
     assert!(
@@ -1118,7 +1122,7 @@ fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_plac
 fn test_image_output_pre_vte_clear_invalidates_assumed_kitty_scene() {
     let client_ids = create_test_clients(1);
     let mut chunk = create_kitty_chunk(1, 2, 2);
-    chunk.placement_id = Some(10);
+    chunk.placement_id = Some(pid(10));
 
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
@@ -1154,9 +1158,9 @@ fn test_image_output_pre_vte_clear_invalidates_assumed_kitty_scene() {
 fn test_kitty_diff_serialization_deletes_single_placement_without_delete_all() {
     let client_ids = create_test_clients(1);
     let mut first_chunk = create_kitty_chunk(1, 2, 2);
-    first_chunk.placement_id = Some(10);
+    first_chunk.placement_id = Some(pid(10));
     let mut second_chunk = create_kitty_chunk(2, 2, 2);
-    second_chunk.placement_id = Some(20);
+    second_chunk.placement_id = Some(pid(20));
 
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
@@ -1178,7 +1182,7 @@ fn test_kitty_diff_serialization_deletes_single_placement_without_delete_all() {
         "single-placement delete should not use kitty delete-all"
     );
     assert!(
-        client_output.contains("\u{1b}_Ga=d,d=i,i=2,p=2147483650\u{1b}\\"),
+        client_output.contains("\u{1b}_Ga=d,d=i,i=2,p=20\u{1b}\\"),
         "single-placement delete should target only the removed placement"
     );
 }
@@ -1192,7 +1196,7 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
         z_index: i32,
     ) -> KittyImageChunk {
         let mut chunk = create_kitty_chunk(image_id, 12, 4);
-        chunk.placement_id = Some(1);
+        chunk.placement_id = Some(pid(1));
         chunk.cell_x = cell_x;
         chunk.cell_y = cell_y;
         chunk.z_index = z_index;
@@ -1237,8 +1241,8 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
     let frame2_serialized = output2.serialize().unwrap();
     let frame2_client_output = frame2_serialized.get(&1).unwrap();
     assert!(
-        frame2_client_output.contains("\u{1b}_Ga=d,d=i,i=202,"),
-        "frame 2 should delete only the removed top-right placement"
+        frame2_client_output.contains("\u{1b}_Ga=d,d=i,i=202,p=1\u{1b}\\"),
+        "frame 2 should delete the removed top-right placement using its original protocol placement id, got: {frame2_client_output:?}"
     );
     let state2 = output2.take_last_rendered_image_states();
 
@@ -1265,8 +1269,8 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
         "later targeted deletes should not fall back to delete-all after state handoff"
     );
     assert!(
-        frame4_client_output.contains("\u{1b}_Ga=d,d=i,i=201,"),
-        "frame 4 should still emit a targeted delete for the removed top-left placement"
+        frame4_client_output.contains("\u{1b}_Ga=d,d=i,i=201,p=1\u{1b}\\"),
+        "frame 4 should still emit a targeted delete for the removed top-left placement using its original protocol placement id, got: {frame4_client_output:?}"
     );
 }
 
@@ -1274,7 +1278,7 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
 fn test_kitty_diff_serialization_places_resident_asset_without_retransmit() {
     let client_ids = create_test_clients(1);
     let mut chunk = create_kitty_chunk(1, 2, 2);
-    chunk.placement_id = Some(10);
+    chunk.placement_id = Some(pid(10));
 
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
@@ -1310,7 +1314,7 @@ fn test_kitty_diff_serialization_places_resident_asset_without_retransmit() {
 fn test_kitty_diff_serialization_transmits_asset_before_new_placement() {
     let client_ids = create_test_clients(1);
     let mut chunk = create_kitty_chunk(1, 2, 2);
-    chunk.placement_id = Some(10);
+    chunk.placement_id = Some(pid(10));
 
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
@@ -1406,7 +1410,7 @@ fn test_kitty_full_reset_assigns_distinct_synthesized_ids_across_modes() {
 fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes() {
     let client_ids = create_test_clients(1);
     let mut base_chunk = create_kitty_chunk(77, 2, 2);
-    base_chunk.placement_id = Some(10);
+    base_chunk.placement_id = Some(pid(10));
     let mut changed_chunk = base_chunk.clone();
     changed_chunk.columns = 3;
     let mut output = create_test_output();
@@ -1429,7 +1433,7 @@ fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes(
 
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
-    let delete_pos = client_output.find("a=d,d=i,i=77,p=2147483649").unwrap();
+    let delete_pos = client_output.find("a=d,d=i,i=77,p=10").unwrap();
     let text_pos = client_output.find("TEXT-PHASE").unwrap();
 
     assert!(
@@ -1442,9 +1446,9 @@ fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes(
 fn test_output_round_trips_last_rendered_image_state_for_single_client() {
     let mut output = create_test_output();
     let mut explicit_chunk = create_kitty_chunk(9, 2, 2);
-    explicit_chunk.placement_id = Some(19);
+    explicit_chunk.placement_id = Some(pid(19));
     let mut placeholder_render = create_kitty_placeholder_render(9);
-    placeholder_render.placement_id = Some(29);
+    placeholder_render.placement_id = Some(pid(29));
     let expected_state = RenderedImageState {
         explicit_chunks: vec![explicit_chunk.clone()],
         placeholder_renders: vec![placeholder_render.clone()],
@@ -1606,11 +1610,8 @@ fn test_prepare_render_body_derives_kitty_explicit_fragments() {
             match &placement_ops[0] {
                 KittyPlacementOp::PlaceExplicit { key, chunk } => {
                     assert_eq!(key.image_id, 91);
-                    assert_ne!(
-                        key.placement_id, 91,
-                        "output placement ids should be mux-owned, not the source placement id",
-                    );
-                    assert_eq!(chunk.placement_id, Some(91));
+                    assert_eq!(key.placement_id, PlacementId::Protocol(91));
+                    assert_eq!(chunk.placement_id, Some(PlacementId::Protocol(91)));
                     assert_eq!(*chunk, create_kitty_chunk(91, 2, 2));
                 },
                 other => panic!("expected explicit placement op, got {other:?}"),
@@ -1632,7 +1633,7 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments()
 
     let chunk = KittyImageChunk {
         image_id: 97,
-        placement_id: Some(97),
+        placement_id: Some(pid(97)),
         placement_mode: crate::output::KittyImagePlacementMode::Explicit,
         cell_x: 0,
         cell_y: 0,
@@ -1718,7 +1719,7 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_w
 
     let expected_geometry = KittyImageChunk {
         image_id: 98,
-        placement_id: Some(98),
+        placement_id: Some(pid(98)),
         placement_mode: crate::output::KittyImagePlacementMode::Explicit,
         cell_x: 0,
         cell_y: 0,
@@ -1812,7 +1813,7 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_w
 
     let expected_geometry = KittyImageChunk {
         image_id: 99,
-        placement_id: Some(99),
+        placement_id: Some(pid(99)),
         placement_mode: crate::output::KittyImagePlacementMode::Explicit,
         cell_x: 0,
         cell_y: 0,
@@ -1920,7 +1921,7 @@ fn test_prepare_render_body_derives_kitty_placeholder_fragments() {
             placement_ops: vec![KittyPlacementOp::PlacePlaceholder {
                 key: KittyPlacementKey {
                     image_id: 92,
-                    placement_id: 92,
+                    placement_id: pid(92),
                 },
                 render: create_kitty_placeholder_render(92),
             }],
@@ -1958,7 +1959,7 @@ fn test_clip_kitty_explicit_fragment_against_covering_pane() {
 }
 
 #[test]
-fn test_clip_kitty_explicit_fragment_preserves_source_placement_id() {
+fn test_clip_kitty_explicit_fragment_assigns_distinct_split_placement_id() {
     let stack = FloatingPanesStack {
         layers: vec![create_pane_geom(1, 0, 1, 2)],
     };
@@ -1967,7 +1968,7 @@ fn test_clip_kitty_explicit_fragment_preserves_source_placement_id() {
         cell_y: 0,
         columns: 2,
         rows: 2,
-        placement_id: Some(777),
+        placement_id: Some(pid(777)),
         ..create_kitty_chunk(194, 2, 2)
     };
     let fragments = visible_image_fragments(
@@ -1980,7 +1981,10 @@ fn test_clip_kitty_explicit_fragment_preserves_source_placement_id() {
     assert_eq!(fragments.len(), 1);
     match &fragments[0] {
         ImageFragment::KittyExplicit(chunk) => {
-            assert_eq!(chunk.placement_id, Some(777));
+            assert!(matches!(
+                chunk.placement_id,
+                Some(PlacementId::Synthetic(_))
+            ));
         },
         other => panic!("expected kitty explicit fragment, got {other:?}"),
     }
