@@ -30,6 +30,110 @@ struct CurrentImageState {
     changed_rects: HashMap<usize, usize>,
 }
 
+#[derive(Clone, Debug)]
+struct PreparedKittyRenderPlan {
+    desired_scene: Option<KittySceneState>,
+    kitty_plan: KittyScenePlan,
+    before_text_vte: Option<String>,
+}
+
+impl PreparedKittyRenderPlan {
+    fn new(
+        kitty_asset_store: &KittyAssetStore,
+        current_kitty_chunks: &[KittyImageChunk],
+        current_kitty_placeholder_renders: &[KittyPlaceholderRender],
+        changed_rects: HashMap<usize, usize>,
+        last_rendered_image_state: &RenderedImageState,
+        last_rendered_kitty_scene: Option<&KittySceneState>,
+        pre_vte_clears_display: bool,
+    ) -> Self {
+        let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
+        let empty_resident_assets = HashMap::new();
+        let desired_scene = ImageOutput::kitty_scene_state_from_rendered(
+            &empty_resident_assets,
+            current_kitty_chunks,
+            current_kitty_placeholder_renders,
+            kitty_asset_store,
+        );
+        let assumed_kitty_scene = if pre_vte_clears_display {
+            Some(KittySceneState::default())
+        } else {
+            last_rendered_kitty_scene.cloned().or_else(|| {
+                ImageOutput::kitty_scene_state_from_rendered(
+                    &last_rendered_image_state.resident_asset_generations,
+                    &last_rendered_image_state.explicit_chunks,
+                    &last_rendered_image_state.placeholder_renders,
+                    kitty_asset_store,
+                )
+            })
+        };
+        let kitty_plan = match (assumed_kitty_scene, desired_scene.clone()) {
+            (Some(assumed_kitty_scene), Some(desired_kitty_scene)) => {
+                let mut kitty_plan = plan_kitty_scene(&assumed_kitty_scene, &desired_kitty_scene);
+                if let KittyScenePlan::Diff {
+                    asset_ops: _,
+                    placement_ops,
+                } = &mut kitty_plan
+                {
+                    let place_keys: BTreeSet<KittyPlacementKey> = placement_ops
+                        .iter()
+                        .filter_map(|placement_op| match placement_op {
+                            KittyPlacementOp::PlaceExplicit { key, .. }
+                            | KittyPlacementOp::PlacePlaceholder { key, .. } => Some(*key),
+                            KittyPlacementOp::Delete { .. } => None,
+                        })
+                        .collect();
+                    for (key, placement) in desired_kitty_scene.placements.iter() {
+                        if place_keys.contains(key)
+                            || !ImageOutput::placement_intersects_damage(
+                                placement,
+                                &kitty_damage_redraw,
+                            )
+                        {
+                            continue;
+                        }
+                        placement_ops.push(match placement {
+                            PlannedKittyPlacement::Explicit { key, chunk } => {
+                                KittyPlacementOp::PlaceExplicit {
+                                    key: *key,
+                                    chunk: chunk.clone(),
+                                }
+                            },
+                            PlannedKittyPlacement::Placeholder { key, render } => {
+                                KittyPlacementOp::PlacePlaceholder {
+                                    key: *key,
+                                    render: render.clone(),
+                                }
+                            },
+                        });
+                    }
+                }
+                kitty_plan
+            },
+            _ => {
+                ImageOutput::render_full_reset_plan(
+                    current_kitty_chunks,
+                    current_kitty_placeholder_renders,
+                )
+            },
+        };
+        let before_text_vte = match &kitty_plan {
+            KittyScenePlan::Diff {
+                asset_ops: _,
+                placement_ops,
+            } => ImageOutput::serialize_kitty_delete_ops(placement_ops),
+            KittyScenePlan::FullResetAndResend { .. } => {
+                (!pre_vte_clears_display).then(kitty_clear_before_text_vte)
+            },
+        };
+        Self {
+            desired_scene,
+            kitty_plan,
+            before_text_vte,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct ClientImageRenderState {
     current: CurrentImageState,
@@ -305,6 +409,48 @@ impl ImageOutput {
             }
         }
         (!vte_output.is_empty()).then_some(vte_output)
+    }
+
+    fn next_resident_assets_for_plan(
+        kitty_asset_store: &KittyAssetStore,
+        previous_resident_assets: HashMap<u32, u64>,
+        kitty_plan: &KittyScenePlan,
+    ) -> HashMap<u32, u64> {
+        let mut next_resident_assets = HashMap::new();
+        match kitty_plan {
+            KittyScenePlan::Diff {
+                asset_ops,
+                placement_ops: _,
+            } => {
+                next_resident_assets = previous_resident_assets;
+                for asset_op in asset_ops {
+                    match asset_op {
+                        KittyAssetOp::EnsureResident {
+                            image_id,
+                            generation,
+                        } => {
+                            next_resident_assets.insert(*image_id, *generation);
+                        },
+                    }
+                }
+            },
+            KittyScenePlan::FullResetAndResend {
+                explicit_chunks,
+                placeholder_renders,
+            } => {
+                for chunk in explicit_chunks {
+                    if let Some(generation) = kitty_asset_store.generation(chunk.image_id) {
+                        next_resident_assets.insert(chunk.image_id, generation);
+                    }
+                }
+                for render in placeholder_renders {
+                    if let Some(generation) = kitty_asset_store.generation(render.image_id) {
+                        next_resident_assets.insert(render.image_id, generation);
+                    }
+                }
+            },
+        }
+        next_resident_assets
     }
 
     fn serialize_kitty_plan(&mut self, kitty_plan: &KittyScenePlan) -> String {
@@ -629,97 +775,29 @@ impl ImageOutput {
             )
         };
 
-        let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
-        let empty_resident_assets = HashMap::new();
-        let kitty_asset_store = self.kitty_asset_store.clone();
-        let desired_kitty_scene = {
-            let kitty_asset_store = kitty_asset_store.borrow();
-            Self::kitty_scene_state_from_rendered(
-                &empty_resident_assets,
-                &current_kitty_chunks,
-                &current_kitty_placeholder_renders,
+        let prepared_kitty_render_plan = {
+            let kitty_asset_store = self.kitty_asset_store.borrow();
+            PreparedKittyRenderPlan::new(
                 &kitty_asset_store,
-            )
-        };
-        let assumed_kitty_scene = if pre_vte_clears_display {
-            Some(KittySceneState::default())
-        } else {
-            last_rendered_kitty_scene.or_else(|| {
-                let kitty_asset_store = kitty_asset_store.borrow();
-                let client_state = self.client_image_state_mut(client_id);
-                Self::kitty_scene_state_from_rendered(
-                    &last_rendered_image_state.resident_asset_generations,
-                    &client_state.last_rendered_image_state().explicit_chunks,
-                    &client_state.last_rendered_image_state().placeholder_renders,
-                    &kitty_asset_store,
-                )
-            })
-        };
-        let kitty_plan = match (assumed_kitty_scene, desired_kitty_scene.clone()) {
-            (Some(assumed_kitty_scene), Some(desired_kitty_scene)) => {
-                let mut kitty_plan = plan_kitty_scene(&assumed_kitty_scene, &desired_kitty_scene);
-                if let KittyScenePlan::Diff {
-                    asset_ops: _,
-                    placement_ops,
-                } = &mut kitty_plan
-                {
-                    let place_keys: BTreeSet<KittyPlacementKey> = placement_ops
-                        .iter()
-                        .filter_map(|placement_op| match placement_op {
-                            KittyPlacementOp::PlaceExplicit { key, .. }
-                            | KittyPlacementOp::PlacePlaceholder { key, .. } => Some(*key),
-                            KittyPlacementOp::Delete { .. } => None,
-                        })
-                        .collect();
-                    for (key, placement) in desired_kitty_scene.placements.iter() {
-                        if place_keys.contains(key)
-                            || !Self::placement_intersects_damage(placement, &kitty_damage_redraw)
-                        {
-                            continue;
-                        }
-                        placement_ops.push(match placement {
-                            PlannedKittyPlacement::Explicit { key, chunk } => {
-                                KittyPlacementOp::PlaceExplicit {
-                                    key: *key,
-                                    chunk: chunk.clone(),
-                                }
-                            },
-                            PlannedKittyPlacement::Placeholder { key, render } => {
-                                KittyPlacementOp::PlacePlaceholder {
-                                    key: *key,
-                                    render: render.clone(),
-                                }
-                            },
-                        });
-                    }
-                }
-                kitty_plan
-            },
-            _ => Self::render_full_reset_plan(
                 &current_kitty_chunks,
                 &current_kitty_placeholder_renders,
-            ),
+                changed_rects,
+                &last_rendered_image_state,
+                last_rendered_kitty_scene.as_ref(),
+                pre_vte_clears_display,
+            )
         };
 
         let mut fragments = vec![];
         fragments.extend(sixel_chunks.iter().cloned().map(ImageFragment::Sixel));
-        let before_text_vte = match &kitty_plan {
-            KittyScenePlan::Diff {
-                asset_ops: _,
-                placement_ops,
-            } => Self::serialize_kitty_delete_ops(placement_ops),
-            KittyScenePlan::FullResetAndResend { .. } => {
-                (!pre_vte_clears_display).then(kitty_clear_before_text_vte)
-            },
-        };
 
         PreparedImageOutput {
-            before_text_vte,
+            before_text_vte: prepared_kitty_render_plan.before_text_vte,
             after_text: PreparedAfterTextImages {
                 client_id,
                 fragments,
-                kitty_plan,
-                current_kitty_scene: desired_kitty_scene,
+                kitty_plan: prepared_kitty_render_plan.kitty_plan,
+                current_kitty_scene: prepared_kitty_render_plan.desired_scene,
                 current_kitty_chunks,
                 current_kitty_placeholder_renders,
             },
@@ -739,41 +817,14 @@ impl ImageOutput {
             .get(&client_id)
             .map(|client_state| client_state.last_rendered_image_state().resident_asset_generations.clone())
             .unwrap_or_default();
-        let mut next_resident_assets = HashMap::new();
-        match kitty_plan {
-            KittyScenePlan::Diff {
-                asset_ops,
-                placement_ops: _,
-            } => {
-                next_resident_assets = previous_resident_assets;
-                for asset_op in asset_ops {
-                    match asset_op {
-                        KittyAssetOp::EnsureResident {
-                            image_id,
-                            generation,
-                        } => {
-                            next_resident_assets.insert(*image_id, *generation);
-                        },
-                    }
-                }
-            },
-            KittyScenePlan::FullResetAndResend {
-                explicit_chunks,
-                placeholder_renders,
-            } => {
-                let kitty_asset_store = self.kitty_asset_store.borrow();
-                for chunk in explicit_chunks {
-                    if let Some(generation) = kitty_asset_store.generation(chunk.image_id) {
-                        next_resident_assets.insert(chunk.image_id, generation);
-                    }
-                }
-                for render in placeholder_renders {
-                    if let Some(generation) = kitty_asset_store.generation(render.image_id) {
-                        next_resident_assets.insert(render.image_id, generation);
-                    }
-                }
-            },
-        }
+        let next_resident_assets = {
+            let kitty_asset_store = self.kitty_asset_store.borrow();
+            Self::next_resident_assets_for_plan(
+                &kitty_asset_store,
+                previous_resident_assets,
+                kitty_plan,
+            )
+        };
         if let Some(scene_state) = current_kitty_scene.as_mut() {
             scene_state.resident_asset_generations.clear();
             scene_state.resident_asset_generations.extend(
@@ -810,6 +861,32 @@ impl ImageOutput {
 mod tests {
     use super::*;
 
+    fn test_kitty_chunk(
+        image_id: u32,
+        placement_id: u32,
+        cell_y: usize,
+        rows: usize,
+    ) -> KittyImageChunk {
+        KittyImageChunk {
+            image_id,
+            placement_id: Some(crate::output::PlacementId::Protocol(placement_id)),
+            placement_mode: crate::output::KittyImagePlacementMode::Explicit,
+            cell_x: 0,
+            cell_y,
+            columns: 1,
+            rows,
+            columns_specified: true,
+            rows_specified: true,
+            source_x: 0,
+            source_y: 0,
+            source_width: 10,
+            source_height: 10,
+            z_index: 0,
+            x_offset: 0,
+            y_offset: 0,
+        }
+    }
+
     #[test]
     fn client_image_render_state_round_trips_and_drains_last_rendered_state() {
         let mut client_state = ClientImageRenderState::default();
@@ -826,5 +903,56 @@ mod tests {
         );
         assert_eq!(client_state.take_last_rendered_image_state(), None);
         assert!(client_state.last_rendered_scene_state().is_none());
+    }
+
+    #[test]
+    fn prepared_kitty_render_plan_resends_unchanged_placements_that_intersect_damage() {
+        let mut kitty_asset_store = KittyAssetStore::default();
+        for image_id in [11, 12] {
+            kitty_asset_store.insert_asset(
+                image_id,
+                crate::output::KittyImageData::Png {
+                    data: vec![image_id as u8],
+                    width: 1,
+                    height: 1,
+                },
+            );
+        }
+        let top_chunk = test_kitty_chunk(11, 11, 0, 1);
+        let bottom_chunk = test_kitty_chunk(12, 12, 5, 1);
+        let last_rendered_image_state = RenderedImageState {
+            explicit_chunks: vec![top_chunk.clone(), bottom_chunk.clone()],
+            resident_asset_generations: HashMap::from([(11, 1), (12, 1)]),
+            ..Default::default()
+        };
+
+        let planned = PreparedKittyRenderPlan::new(
+            &kitty_asset_store,
+            &[top_chunk.clone(), bottom_chunk.clone()],
+            &[],
+            HashMap::from([(0, 1)]),
+            &last_rendered_image_state,
+            None,
+            false,
+        );
+
+        assert!(planned.before_text_vte.is_none());
+        match planned.kitty_plan {
+            KittyScenePlan::Diff {
+                asset_ops,
+                placement_ops,
+            } => {
+                assert!(asset_ops.is_empty());
+                assert_eq!(placement_ops.len(), 1);
+                match &placement_ops[0] {
+                    KittyPlacementOp::PlaceExplicit { key, chunk } => {
+                        assert_eq!(key.image_id, top_chunk.image_id);
+                        assert_eq!(*chunk, top_chunk);
+                    },
+                    other => panic!("expected explicit resend, got {other:?}"),
+                }
+            },
+            other => panic!("expected diff kitty plan, got {other:?}"),
+        }
     }
 }
