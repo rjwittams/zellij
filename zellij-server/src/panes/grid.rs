@@ -36,6 +36,43 @@ pub struct GridChanges {
     pub changed_rects: HashMap<usize, usize>,
 }
 
+#[derive(Clone, Default)]
+struct GridImagePlaceholderTracker {
+    pending_placeholder: Option<PendingKittyPlaceholder>,
+    last_resolved_placeholder: Option<ResolvedKittyPlaceholder>,
+}
+
+impl GridImagePlaceholderTracker {
+    fn reset(&mut self) {
+        self.pending_placeholder = None;
+        self.last_resolved_placeholder = None;
+    }
+
+    fn begin_placeholder(&mut self, styles: &RcCharacterStyles, anchor: FlowAnchor) {
+        self.pending_placeholder = Some(PendingKittyPlaceholder::new(styles, anchor));
+    }
+
+    fn pending_placeholder_mut(&mut self) -> Option<&mut PendingKittyPlaceholder> {
+        self.pending_placeholder.as_mut()
+    }
+
+    fn take_pending_placeholder(&mut self) -> Option<PendingKittyPlaceholder> {
+        self.pending_placeholder.take()
+    }
+
+    fn previous_resolved_placeholder(&self) -> Option<&ResolvedKittyPlaceholder> {
+        self.last_resolved_placeholder.as_ref()
+    }
+
+    fn remember_resolved_placeholder(&mut self, resolved: ResolvedKittyPlaceholder) {
+        self.last_resolved_placeholder = Some(resolved);
+    }
+
+    fn clear_last_resolved_placeholder(&mut self) {
+        self.last_resolved_placeholder = None;
+    }
+}
+
 /// Rewrites OSC 99 metadata for multiplexer forwarding:
 ///
 /// 1. Namespaces the `i=` value with a pane ID prefix and flags so responses
@@ -621,8 +658,7 @@ pub struct Grid {
     scroll_region: (usize, usize),
     active_charset: CharsetIndex,
     preceding_char: Option<TerminalCharacter>,
-    pending_kitty_placeholder: Option<PendingKittyPlaceholder>,
-    last_resolved_kitty_placeholder: Option<ResolvedKittyPlaceholder>,
+    image_placeholder_tracker: GridImagePlaceholderTracker,
     #[allow(dead_code)]
     terminal_emulator_colors: Rc<RefCell<Palette>>,
     #[allow(dead_code)]
@@ -958,8 +994,7 @@ impl Grid {
             saved_cursor_position: None,
             scroll_region: (0, rows.saturating_sub(1)),
             preceding_char: None,
-            pending_kitty_placeholder: None,
-            last_resolved_kitty_placeholder: None,
+            image_placeholder_tracker: GridImagePlaceholderTracker::default(),
             width: columns,
             height: rows,
             should_render: true,
@@ -2088,7 +2123,7 @@ impl Grid {
         );
         if !(self.insert_mode || should_insert_character) {
             let logical_row = self.lines_above.len() + self.cursor.y;
-            self.remove_kitty_placeholder_cells_in_logical_row_range(
+            self.erase_embedded_image_placeholders_in_logical_row_range(
                 logical_row,
                 self.cursor.x,
                 self.cursor.x + terminal_character.width(),
@@ -2172,7 +2207,7 @@ impl Grid {
         let count_to_move = std::cmp::min(count, self.width.saturating_sub(self.cursor.x));
         self.cursor.x += count_to_move;
     }
-    fn remove_kitty_placeholder_cells_in_logical_row_range(
+    fn erase_embedded_image_placeholders_in_logical_row_range(
         &mut self,
         logical_row: usize,
         start_column: usize,
@@ -2189,14 +2224,14 @@ impl Grid {
                 .remove_kitty_placeholder_cell_at_anchor(&anchor);
         }
     }
-    fn remove_kitty_placeholder_cells_in_viewport_row_range(
+    fn erase_embedded_image_placeholders_in_viewport_row_range(
         &mut self,
         viewport_row_start: usize,
         viewport_row_end_exclusive: usize,
     ) {
         let logical_row_offset = self.lines_above.len();
         for viewport_row in viewport_row_start..viewport_row_end_exclusive {
-            self.remove_kitty_placeholder_cells_in_logical_row_range(
+            self.erase_embedded_image_placeholders_in_logical_row_range(
                 logical_row_offset + viewport_row,
                 0,
                 self.width,
@@ -2205,7 +2240,7 @@ impl Grid {
     }
     pub fn replace_characters_in_line_after_cursor(&mut self, replace_with: TerminalCharacter) {
         let logical_row = self.lines_above.len() + self.cursor.y;
-        self.remove_kitty_placeholder_cells_in_logical_row_range(
+        self.erase_embedded_image_placeholders_in_logical_row_range(
             logical_row,
             self.cursor.x,
             self.width,
@@ -2217,7 +2252,11 @@ impl Grid {
     }
     pub fn replace_characters_in_line_before_cursor(&mut self, replace_with: TerminalCharacter) {
         let logical_row = self.lines_above.len() + self.cursor.y;
-        self.remove_kitty_placeholder_cells_in_logical_row_range(logical_row, 0, self.cursor.x + 1);
+        self.erase_embedded_image_placeholders_in_logical_row_range(
+            logical_row,
+            0,
+            self.cursor.x + 1,
+        );
         let row = self.viewport.get_mut(self.cursor.y).unwrap();
         row.replace_and_pad_beginning(self.cursor.x, replace_with);
         self.output_buffer.update_line(self.cursor.y);
@@ -2227,7 +2266,7 @@ impl Grid {
             cursor_row.truncate(self.cursor.x);
             let replace_with_columns = VecDeque::from(vec![replace_with.clone(); self.width]);
             self.replace_characters_in_line_after_cursor(replace_with);
-            self.remove_kitty_placeholder_cells_in_viewport_row_range(
+            self.erase_embedded_image_placeholders_in_viewport_row_range(
                 self.cursor.y + 1,
                 self.viewport.len(),
             );
@@ -2241,7 +2280,7 @@ impl Grid {
         if self.viewport.get(self.cursor.y).is_some() {
             let replace_with_columns = VecDeque::from(vec![replace_with.clone(); self.width]);
             self.replace_characters_in_line_before_cursor(replace_with);
-            self.remove_kitty_placeholder_cells_in_viewport_row_range(0, self.cursor.y);
+            self.erase_embedded_image_placeholders_in_viewport_row_range(0, self.cursor.y);
             for row in self.viewport.iter_mut().take(self.cursor.y) {
                 row.replace_columns(replace_with_columns.clone());
             }
@@ -2250,7 +2289,7 @@ impl Grid {
     }
     pub fn clear_cursor_line(&mut self) {
         let logical_row = self.lines_above.len() + self.cursor.y;
-        self.remove_kitty_placeholder_cells_in_logical_row_range(logical_row, 0, self.width);
+        self.erase_embedded_image_placeholders_in_logical_row_range(logical_row, 0, self.width);
         if let Some(viewport_line) = self.viewport.get_mut(self.cursor.y) {
             viewport_line.truncate(0);
             self.output_buffer.update_line(self.cursor.y);
@@ -2258,7 +2297,7 @@ impl Grid {
     }
     pub fn clear_all(&mut self, replace_with: TerminalCharacter) {
         let replace_with_columns = VecDeque::from(vec![replace_with.clone(); self.width]);
-        self.remove_kitty_placeholder_cells_in_viewport_row_range(0, self.viewport.len());
+        self.erase_embedded_image_placeholders_in_viewport_row_range(0, self.viewport.len());
         self.replace_characters_in_line_after_cursor(replace_with);
         for row in &mut self.viewport {
             row.replace_columns(replace_with_columns.clone());
@@ -2487,7 +2526,7 @@ impl Grid {
         empty_character.styles = empty_char_style;
         let pad_until = std::cmp::min(self.width, self.cursor.x + count);
         let logical_row = self.lines_above.len() + self.cursor.y;
-        self.remove_kitty_placeholder_cells_in_logical_row_range(
+        self.erase_embedded_image_placeholders_in_logical_row_range(
             logical_row,
             self.cursor.x,
             pad_until,
@@ -2576,6 +2615,7 @@ impl Grid {
         if let Some(images_to_reap) = self.sixel_grid.clear() {
             self.sixel_grid.reap_images(images_to_reap);
         }
+        self.image_placeholder_tracker.reset();
         self.image_scene.clear();
     }
     fn set_preceding_character(&mut self, terminal_character: TerminalCharacter) {
@@ -2585,34 +2625,39 @@ impl Grid {
     fn consume_kitty_placeholder_char(&mut self, c: char) -> bool {
         if c == KITTY_UNICODE_PLACEHOLDER_CHAR {
             self.finalize_pending_kitty_placeholder();
-            self.pending_kitty_placeholder = Some(PendingKittyPlaceholder::new(
+            self.image_placeholder_tracker.begin_placeholder(
                 &self.cursor.pending_styles,
                 self.kitty_cursor_flow_anchor(),
-            ));
+            );
             self.move_cursor_forward_until_edge(1);
             return true;
         }
 
-        if let Some(pending) = self.pending_kitty_placeholder.as_mut() {
+        if let Some(pending) = self.image_placeholder_tracker.pending_placeholder_mut() {
             if c.width().unwrap_or(0) == 0 && pending.absorb_diacritic(c) {
                 return true;
             }
             self.finalize_pending_kitty_placeholder();
-            self.last_resolved_kitty_placeholder = None;
+            self.image_placeholder_tracker
+                .clear_last_resolved_placeholder();
         } else if c.width().unwrap_or(0) != 0 {
-            self.last_resolved_kitty_placeholder = None;
+            self.image_placeholder_tracker
+                .clear_last_resolved_placeholder();
         }
         false
     }
 
     fn finalize_pending_kitty_placeholder(&mut self) {
-        let Some(pending) = self.pending_kitty_placeholder.take() else {
+        let Some(pending) = self.image_placeholder_tracker.take_pending_placeholder() else {
             return;
         };
-        let Some(resolved) =
-            pending.resolve_with_previous(self.last_resolved_kitty_placeholder.as_ref())
+        let Some(resolved) = pending.resolve_with_previous(
+            self.image_placeholder_tracker
+                .previous_resolved_placeholder(),
+        )
         else {
-            self.last_resolved_kitty_placeholder = None;
+            self.image_placeholder_tracker
+                .clear_last_resolved_placeholder();
             return;
         };
         let Some(logical_placement_id) = self
@@ -2624,7 +2669,8 @@ impl Grid {
                 resolved.image_id,
                 resolved.placement_id
             );
-            self.last_resolved_kitty_placeholder = None;
+            self.image_placeholder_tracker
+                .clear_last_resolved_placeholder();
             return;
         };
         self.image_scene
@@ -2634,7 +2680,8 @@ impl Grid {
                 placeholder_col: resolved.placeholder_col,
                 anchor: resolved.anchor.clone(),
             });
-        self.last_resolved_kitty_placeholder = Some(resolved);
+        self.image_placeholder_tracker
+            .remember_resolved_placeholder(resolved);
     }
     /// Called by the server-side handler for SetPaneRegexHighlights.
     /// Upserts highlights keyed by pattern string for the given plugin.
@@ -3772,7 +3819,8 @@ impl Grid {
 impl Perform for Grid {
     fn apc_start(&mut self) {
         self.finalize_pending_kitty_placeholder();
-        self.last_resolved_kitty_placeholder = None;
+        self.image_placeholder_tracker
+            .clear_last_resolved_placeholder();
         self.apc_bytes = Some(vec![]);
     }
 
@@ -3947,7 +3995,8 @@ impl Perform for Grid {
 
     fn hook(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, c: char) {
         self.finalize_pending_kitty_placeholder();
-        self.last_resolved_kitty_placeholder = None;
+        self.image_placeholder_tracker
+            .clear_last_resolved_placeholder();
         if c == 'q' {
             // we only process sixel images if we know the pixel size of each character cell,
             // otherwise we can't reliably display them
@@ -3997,7 +4046,8 @@ impl Perform for Grid {
 
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
         self.finalize_pending_kitty_placeholder();
-        self.last_resolved_kitty_placeholder = None;
+        self.image_placeholder_tracker
+            .clear_last_resolved_placeholder();
         let terminator = if bell_terminated { "\x07" } else { "\x1b\\" };
 
         if params.is_empty() || params[0].is_empty() {
@@ -4266,7 +4316,8 @@ impl Perform for Grid {
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, c: char) {
         self.finalize_pending_kitty_placeholder();
-        self.last_resolved_kitty_placeholder = None;
+        self.image_placeholder_tracker
+            .clear_last_resolved_placeholder();
         let mut params_iter = params.iter();
         let mut next_param_or = |default: u16| {
             params_iter
@@ -4912,7 +4963,8 @@ impl Perform for Grid {
 
     fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
         self.finalize_pending_kitty_placeholder();
-        self.last_resolved_kitty_placeholder = None;
+        self.image_placeholder_tracker
+            .clear_last_resolved_placeholder();
         match (byte, intermediates.get(0)) {
             (b'A', charset_index_symbol) => {
                 let charset_index: CharsetIndex = match charset_index_symbol {
