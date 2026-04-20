@@ -1472,6 +1472,7 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
     let image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
     let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
     let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok());
+    let transport = kv.get("t").copied().unwrap_or("d");
 
     let reply = if image_id.is_some() && image_number.is_some() {
         KittyQueryResponse::Error {
@@ -1479,6 +1480,13 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
             placement_id,
             image_number,
             message: "EINVAL:Must not specify both i and I".to_string(),
+        }
+    } else if transport != "d" {
+        KittyQueryResponse::Error {
+            image_id,
+            placement_id,
+            image_number,
+            message: "EINVAL:Unsupported transmission medium".to_string(),
         }
     } else {
         let payload = match decode_kitty_payload(payload_b64, kv.get("o").copied()) {
@@ -2113,6 +2121,31 @@ mod tests {
         assert!(quiet_success.is_none());
 
         let quiet_failure = kitty_query_response(b"Gq=2,a=q,t=d,f=24,s=1,v=1,i=44,I=1;EjRW");
+        assert!(quiet_failure.is_none());
+    }
+
+    #[test]
+    fn kitty_query_response_rejects_unsupported_transmission_media() {
+        let cases = [
+            (b"Gq=0,a=q,t=f,f=24,s=1,v=1,i=45;L3RtcC9raXR0eS1xdWVyeS1maWxl" as &[u8], 45u32),
+            (b"Gq=0,a=q,t=t,f=24,s=1,v=1,i=46;L3RtcC9raXR0eS1xdWVyeS10ZW1w" as &[u8], 46u32),
+            (b"Gq=0,a=q,t=s,f=24,s=1,v=1,i=47;a2l0dHktcXVlcnktc2ht" as &[u8], 47u32),
+        ];
+
+        for (query, image_id) in cases {
+            let reply = kitty_query_response(query).unwrap();
+            let response = reply.to_apc_response();
+            assert!(
+                response.contains(&format!("i={image_id};EINVAL:Unsupported transmission medium")),
+                "expected unsupported-medium query reply for i={image_id}, got {response:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn kitty_query_response_suppresses_unsupported_media_failures_for_q2() {
+        let quiet_failure =
+            kitty_query_response(b"Gq=2,a=q,t=f,f=24,s=1,v=1,i=48;L3RtcC9raXR0eS1xdWVyeS1maWxl");
         assert!(quiet_failure.is_none());
     }
 
