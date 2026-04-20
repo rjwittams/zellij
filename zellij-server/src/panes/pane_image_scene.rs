@@ -67,7 +67,8 @@ impl KittyDamageRedraw {
 }
 
 use crate::panes::kitty::{
-    KittyApcEffect, KittyCursorMovementPolicy, KittyImageInsertion, KittyImageState,
+    KittyApcEffect, KittyCursorMovementPolicy, KittyDeleteRequest, KittyDeleteSelector,
+    KittyGeometrySelector, KittyImageInsertion, KittyImageState,
 };
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use std::cell::RefCell;
@@ -131,7 +132,7 @@ pub struct PlacementOccupancy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImageContentFlow {
     NoCursorMovement,
-    MoveCursorByCells { rows: usize },
+    MoveCursorByCells { columns: usize, rows: usize },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -384,6 +385,37 @@ pub struct PaneImageScene {
     kitty_logical_placement_ids: HashMap<KittyProtocolPlacementKey, LogicalPlacementId>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PlacementRect {
+    left: usize,
+    top: usize,
+    right_exclusive: usize,
+    bottom_exclusive: usize,
+}
+
+impl PlacementRect {
+    fn contains_cell(&self, column: usize, row: usize) -> bool {
+        column >= self.left
+            && column < self.right_exclusive
+            && row >= self.top
+            && row < self.bottom_exclusive
+    }
+
+    fn intersects_column(&self, column: usize) -> bool {
+        column >= self.left && column < self.right_exclusive
+    }
+
+    fn intersects_row(&self, row: usize) -> bool {
+        row >= self.top && row < self.bottom_exclusive
+    }
+}
+
+fn one_indexed_protocol_cell_to_zero_based(value: u32) -> Option<usize> {
+    value
+        .checked_sub(1)
+        .and_then(|value| usize::try_from(value).ok())
+}
+
 impl PaneImageScene {
     pub fn empty_clone(&self) -> Self {
         Self::new(self.kitty.kitty_asset_store())
@@ -410,8 +442,7 @@ impl PaneImageScene {
             .kitty_placeholder_cells
             .iter()
             .filter_map(|placeholder_cell| {
-                if !logical_placement_ids_to_remove
-                    .contains(&placeholder_cell.logical_placement_id)
+                if !logical_placement_ids_to_remove.contains(&placeholder_cell.logical_placement_id)
                 {
                     return None;
                 }
@@ -514,18 +545,17 @@ impl PaneImageScene {
                         vec![]
                     };
                     let geometry = insertion.geometry;
-                    let content_flow = match (
-                        insertion.placement_mode,
-                        insertion.cursor_movement_policy,
-                    ) {
-                        (
-                            KittyImagePlacementMode::Explicit,
-                            KittyCursorMovementPolicy::AfterPlacement,
-                        ) if geometry.rows > 0 => ImageContentFlow::MoveCursorByCells {
-                            rows: geometry.rows,
-                        },
-                        _ => ImageContentFlow::NoCursorMovement,
-                    };
+                    let content_flow =
+                        match (insertion.placement_mode, insertion.cursor_movement_policy) {
+                            (
+                                KittyImagePlacementMode::Explicit,
+                                KittyCursorMovementPolicy::AfterPlacement,
+                            ) if geometry.rows > 0 => ImageContentFlow::MoveCursorByCells {
+                                columns: geometry.columns,
+                                rows: geometry.rows,
+                            },
+                            _ => ImageContentFlow::NoCursorMovement,
+                        };
                     let protocol_identity = Some(ProtocolPlacementIdentity::Kitty {
                         image_id: insertion.protocol_image_id,
                         placement_id: insertion.protocol_placement_id,
@@ -565,9 +595,8 @@ impl PaneImageScene {
                         },
                     };
                     if let Some(kitty_protocol_placement_key) =
-                        protocol_identity
-                            .as_ref()
-                            .and_then(|protocol_identity| match protocol_identity {
+                        protocol_identity.as_ref().and_then(|protocol_identity| {
+                            match protocol_identity {
                                 ProtocolPlacementIdentity::Kitty {
                                     image_id: Some(image_id),
                                     placement_id,
@@ -576,7 +605,8 @@ impl PaneImageScene {
                                     placement_id: *placement_id,
                                 }),
                                 _ => None,
-                            })
+                            }
+                        })
                     {
                         if let Some(previous_logical_placement_id) = self
                             .kitty_logical_placement_ids
@@ -638,6 +668,54 @@ impl PaneImageScene {
             .retain(|placeholder_cell| &placeholder_cell.anchor != anchor);
     }
 
+    pub fn delete_and_shift_kitty_placeholder_cells_in_row<F>(
+        &mut self,
+        logical_row: usize,
+        delete_start_column: usize,
+        delete_end_column_exclusive: usize,
+        shift_left_count: usize,
+        resolve_anchor: F,
+    ) where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
+        let mut updated_cells = Vec::with_capacity(self.kitty_placeholder_cells.len());
+        for mut placeholder_cell in std::mem::take(&mut self.kitty_placeholder_cells) {
+            let Some((cell_logical_row, cell_column)) = resolve_anchor(&placeholder_cell.anchor)
+            else {
+                updated_cells.push(placeholder_cell);
+                continue;
+            };
+            if cell_logical_row != logical_row {
+                updated_cells.push(placeholder_cell);
+                continue;
+            }
+            if cell_column >= delete_start_column && cell_column < delete_end_column_exclusive {
+                continue;
+            }
+            if cell_column >= delete_end_column_exclusive {
+                let shift_left_count = shift_left_count.min(cell_column);
+                placeholder_cell.anchor = match placeholder_cell.anchor {
+                    FlowAnchor::LogicalRow {
+                        logical_row,
+                        column,
+                    } => FlowAnchor::LogicalRow {
+                        logical_row,
+                        column: column.saturating_sub(shift_left_count),
+                    },
+                    FlowAnchor::CanonicalLine {
+                        canonical_line_index,
+                        offset_in_line,
+                    } => FlowAnchor::CanonicalLine {
+                        canonical_line_index,
+                        offset_in_line: offset_in_line.saturating_sub(shift_left_count),
+                    },
+                };
+            }
+            updated_cells.push(placeholder_cell);
+        }
+        self.kitty_placeholder_cells = updated_cells;
+    }
+
     pub fn kitty_placeholder_anchors_in_range<F>(
         &self,
         logical_row: usize,
@@ -668,6 +746,7 @@ impl PaneImageScene {
         &mut self,
         protocol_image_id: u32,
         placement_id: Option<u32>,
+        free_image_data: bool,
     ) {
         let logical_placement_ids_to_remove: Vec<_> = self
             .placements
@@ -699,19 +778,122 @@ impl PaneImageScene {
                     || logical_placement_ids_to_remove.contains(logical_placement_id))
             });
         self.kitty
-            .delete_protocol_placement(protocol_image_id, placement_id);
+            .delete_protocol_placement(protocol_image_id, placement_id, free_image_data);
     }
 
     pub fn delete_kitty_image_number_placement(
         &mut self,
         image_number: u32,
         placement_id: Option<u32>,
+        free_image_data: bool,
     ) {
         let Some(protocol_image_id) = self.kitty.protocol_image_id_for_image_number(image_number)
         else {
             return;
         };
-        self.delete_kitty_protocol_placement(protocol_image_id, placement_id);
+        self.delete_kitty_protocol_placement(protocol_image_id, placement_id, free_image_data);
+    }
+
+    fn kitty_explicit_protocol_match<F>(
+        placement: &ImagePlacement,
+        resolve_anchor: &F,
+    ) -> Option<(u32, Option<u32>, i32, PlacementRect)>
+    where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
+        let flavor = placement.kitty_explicit_flavor()?;
+        let (protocol_image_id, placement_id) = placement.kitty_protocol_identity()?;
+        let Some(protocol_image_id) = protocol_image_id else {
+            return None;
+        };
+        let (logical_row, column) = resolve_anchor(&placement.anchor)?;
+        let right_exclusive = column.checked_add(flavor.occupancy.columns)?;
+        let bottom_exclusive = logical_row.checked_add(flavor.occupancy.rows)?;
+        Some((
+            protocol_image_id,
+            placement_id,
+            flavor.z_index,
+            PlacementRect {
+                left: column,
+                top: logical_row,
+                right_exclusive,
+                bottom_exclusive,
+            },
+        ))
+    }
+
+    fn kitty_request_matches_placement<F>(
+        request: &KittyDeleteRequest,
+        placement: &ImagePlacement,
+        cursor: (usize, usize),
+        scrollback_size_in_lines: usize,
+        resolve_anchor: &F,
+    ) -> Option<(u32, Option<u32>)>
+    where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
+        let (protocol_image_id, placement_id, z_index, rect) =
+            Self::kitty_explicit_protocol_match(placement, resolve_anchor)?;
+        let matches = match request.selector {
+            KittyDeleteSelector::AllVisible => false,
+            KittyDeleteSelector::ImageId { .. } | KittyDeleteSelector::ImageNumber { .. } => false,
+            KittyDeleteSelector::Geometry(KittyGeometrySelector::Cursor) => {
+                rect.contains_cell(cursor.0, cursor.1)
+            },
+            KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell { x, y, z }) => {
+                let column = one_indexed_protocol_cell_to_zero_based(x)?;
+                let row = one_indexed_protocol_cell_to_zero_based(y)?
+                    .checked_add(scrollback_size_in_lines)?;
+                rect.contains_cell(column, row)
+                    && z.map(|target_z| target_z == z_index).unwrap_or(true)
+            },
+            KittyDeleteSelector::Geometry(KittyGeometrySelector::Column { x }) => {
+                let column = one_indexed_protocol_cell_to_zero_based(x)?;
+                rect.intersects_column(column)
+            },
+            KittyDeleteSelector::Geometry(KittyGeometrySelector::Row { y }) => {
+                let row = one_indexed_protocol_cell_to_zero_based(y)?
+                    .checked_add(scrollback_size_in_lines)?;
+                rect.intersects_row(row)
+            },
+            KittyDeleteSelector::Geometry(KittyGeometrySelector::Z { z }) => z == z_index,
+            KittyDeleteSelector::Range {
+                first_image_id,
+                last_image_id,
+            } => protocol_image_id >= first_image_id && protocol_image_id <= last_image_id,
+        };
+        matches.then_some((protocol_image_id, placement_id))
+    }
+
+    pub fn delete_kitty_by_request<F>(
+        &mut self,
+        request: &KittyDeleteRequest,
+        cursor: (usize, usize),
+        scrollback_size_in_lines: usize,
+        resolve_anchor: F,
+    ) where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
+        let placements_to_remove: Vec<_> = self
+            .placements
+            .values()
+            .filter_map(|placement| {
+                Self::kitty_request_matches_placement(
+                    request,
+                    placement,
+                    cursor,
+                    scrollback_size_in_lines,
+                    &resolve_anchor,
+                )
+            })
+            .collect();
+        for (protocol_image_id, placement_id) in placements_to_remove {
+            self.delete_kitty_protocol_placement(
+                protocol_image_id,
+                placement_id,
+                request.free_image_data(),
+            );
+        }
     }
 
     pub fn visible_kitty_render_bundle<F>(

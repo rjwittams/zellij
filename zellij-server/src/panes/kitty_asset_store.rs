@@ -61,6 +61,10 @@ impl KittyAssetStore {
         self.assets.get(&image_id)
     }
 
+    pub fn remove_asset(&mut self, image_id: u32) -> Option<KittyAsset> {
+        self.assets.remove(&image_id)
+    }
+
     pub fn image_data(&self, image_id: u32) -> Option<KittyImageData> {
         self.assets.get(&image_id).map(|asset| asset.image_data.clone())
     }

@@ -1,5 +1,5 @@
-use super::kitty_placeholder::KITTY_UNICODE_PLACEHOLDER_CHAR;
 use super::kitty_asset_store::KittyAssetStore;
+use super::kitty_placeholder::KITTY_UNICODE_PLACEHOLDER_CHAR;
 use super::sixel::{PixelRect, SixelGrid, SixelImageStore};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -125,8 +125,7 @@ use crate::output::{
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
 use crate::panes::kitty::{
-    kitty_delete_all_visible, kitty_delete_by_image_id, kitty_delete_by_image_number,
-    kitty_non_query_response, kitty_query_response,
+    kitty_delete_request, kitty_non_query_response, kitty_query_response, KittyDeleteSelector,
     PendingKittyPlaceholder, ResolvedKittyPlaceholder,
 };
 use crate::panes::link_handler::LinkHandler;
@@ -2121,6 +2120,14 @@ impl Grid {
             &mut self.lines_above,
             &mut self.link_handler.borrow_mut(),
         );
+        if !(self.insert_mode || should_insert_character) {
+            let logical_row = self.lines_above.len() + self.cursor.y;
+            self.remove_kitty_placeholder_cells_in_logical_row_range(
+                logical_row,
+                self.cursor.x,
+                self.cursor.x + terminal_character.width(),
+            );
+        }
         // this function assumes the current line has enough room for terminal_character (that its
         // width has been checked beforehand)
         match self.viewport.get_mut(self.cursor.y) {
@@ -2199,18 +2206,44 @@ impl Grid {
         let count_to_move = std::cmp::min(count, self.width.saturating_sub(self.cursor.x));
         self.cursor.x += count_to_move;
     }
-    pub fn replace_characters_in_line_after_cursor(&mut self, replace_with: TerminalCharacter) {
-        let logical_row = self.lines_above.len() + self.cursor.y;
+    fn remove_kitty_placeholder_cells_in_logical_row_range(
+        &mut self,
+        logical_row: usize,
+        start_column: usize,
+        end_column_exclusive: usize,
+    ) {
         let anchors_to_remove = self.image_scene.kitty_placeholder_anchors_in_range(
             logical_row,
-            self.cursor.x,
-            self.width,
+            start_column,
+            end_column_exclusive,
             |anchor| self.resolve_flow_anchor(anchor),
         );
         for anchor in anchors_to_remove {
             self.image_scene
                 .remove_kitty_placeholder_cell_at_anchor(&anchor);
         }
+    }
+    fn remove_kitty_placeholder_cells_in_viewport_row_range(
+        &mut self,
+        viewport_row_start: usize,
+        viewport_row_end_exclusive: usize,
+    ) {
+        let logical_row_offset = self.lines_above.len();
+        for viewport_row in viewport_row_start..viewport_row_end_exclusive {
+            self.remove_kitty_placeholder_cells_in_logical_row_range(
+                logical_row_offset + viewport_row,
+                0,
+                self.width,
+            );
+        }
+    }
+    pub fn replace_characters_in_line_after_cursor(&mut self, replace_with: TerminalCharacter) {
+        let logical_row = self.lines_above.len() + self.cursor.y;
+        self.remove_kitty_placeholder_cells_in_logical_row_range(
+            logical_row,
+            self.cursor.x,
+            self.width,
+        );
         if let Some(row) = self.viewport.get_mut(self.cursor.y) {
             row.replace_and_pad_end(self.cursor.x, self.width, replace_with);
         }
@@ -2218,16 +2251,7 @@ impl Grid {
     }
     pub fn replace_characters_in_line_before_cursor(&mut self, replace_with: TerminalCharacter) {
         let logical_row = self.lines_above.len() + self.cursor.y;
-        let anchors_to_remove = self.image_scene.kitty_placeholder_anchors_in_range(
-            logical_row,
-            0,
-            self.cursor.x + 1,
-            |anchor| self.resolve_flow_anchor(anchor),
-        );
-        for anchor in anchors_to_remove {
-            self.image_scene
-                .remove_kitty_placeholder_cell_at_anchor(&anchor);
-        }
+        self.remove_kitty_placeholder_cells_in_logical_row_range(logical_row, 0, self.cursor.x + 1);
         let row = self.viewport.get_mut(self.cursor.y).unwrap();
         row.replace_and_pad_beginning(self.cursor.x, replace_with);
         self.output_buffer.update_line(self.cursor.y);
@@ -2237,6 +2261,10 @@ impl Grid {
             cursor_row.truncate(self.cursor.x);
             let replace_with_columns = VecDeque::from(vec![replace_with.clone(); self.width]);
             self.replace_characters_in_line_after_cursor(replace_with);
+            self.remove_kitty_placeholder_cells_in_viewport_row_range(
+                self.cursor.y + 1,
+                self.viewport.len(),
+            );
             for row in self.viewport.iter_mut().skip(self.cursor.y + 1) {
                 row.replace_columns(replace_with_columns.clone());
             }
@@ -2247,6 +2275,7 @@ impl Grid {
         if self.viewport.get(self.cursor.y).is_some() {
             let replace_with_columns = VecDeque::from(vec![replace_with.clone(); self.width]);
             self.replace_characters_in_line_before_cursor(replace_with);
+            self.remove_kitty_placeholder_cells_in_viewport_row_range(0, self.cursor.y);
             for row in self.viewport.iter_mut().take(self.cursor.y) {
                 row.replace_columns(replace_with_columns.clone());
             }
@@ -2255,16 +2284,7 @@ impl Grid {
     }
     pub fn clear_cursor_line(&mut self) {
         let logical_row = self.lines_above.len() + self.cursor.y;
-        let anchors_to_remove = self.image_scene.kitty_placeholder_anchors_in_range(
-            logical_row,
-            0,
-            self.width,
-            |anchor| self.resolve_flow_anchor(anchor),
-        );
-        for anchor in anchors_to_remove {
-            self.image_scene
-                .remove_kitty_placeholder_cell_at_anchor(&anchor);
-        }
+        self.remove_kitty_placeholder_cells_in_logical_row_range(logical_row, 0, self.width);
         if let Some(viewport_line) = self.viewport.get_mut(self.cursor.y) {
             viewport_line.truncate(0);
             self.output_buffer.update_line(self.cursor.y);
@@ -2272,6 +2292,7 @@ impl Grid {
     }
     pub fn clear_all(&mut self, replace_with: TerminalCharacter) {
         let replace_with_columns = VecDeque::from(vec![replace_with.clone(); self.width]);
+        self.remove_kitty_placeholder_cells_in_viewport_row_range(0, self.viewport.len());
         self.replace_characters_in_line_after_cursor(replace_with);
         for row in &mut self.viewport {
             row.replace_columns(replace_with_columns.clone());
@@ -2499,6 +2520,12 @@ impl Grid {
         let mut empty_character = EMPTY_TERMINAL_CHARACTER;
         empty_character.styles = empty_char_style;
         let pad_until = std::cmp::min(self.width, self.cursor.x + count);
+        let logical_row = self.lines_above.len() + self.cursor.y;
+        self.remove_kitty_placeholder_cells_in_logical_row_range(
+            logical_row,
+            self.cursor.x,
+            pad_until,
+        );
         self.pad_current_line_until(pad_until, empty_character.clone());
         if let Some(current_row) = self.viewport.get_mut(self.cursor.y) {
             for i in 0..count {
@@ -2510,6 +2537,19 @@ impl Grid {
     fn erase_characters(&mut self, count: usize, empty_char_style: RcCharacterStyles) {
         let mut empty_character = EMPTY_TERMINAL_CHARACTER;
         empty_character.styles = empty_char_style;
+        let delete_end_column_exclusive = std::cmp::min(self.width, self.cursor.x + count);
+        let logical_row = self.lines_above.len() + self.cursor.y;
+        let width = self.width;
+        let lines_above = &self.lines_above;
+        let viewport = &self.viewport;
+        self.image_scene
+            .delete_and_shift_kitty_placeholder_cells_in_row(
+                logical_row,
+                self.cursor.x,
+                delete_end_column_exclusive,
+                delete_end_column_exclusive.saturating_sub(self.cursor.x),
+                |anchor| Self::resolve_flow_anchor_in_buffers(anchor, lines_above, viewport, width),
+            );
         if let Some(current_row) = self.viewport.get_mut(self.cursor.y) {
             // pad row if needed
             if current_row.width_cached() < self.width {
@@ -3783,23 +3823,58 @@ impl Perform for Grid {
                     self.queue_pending_message_to_pty(query_response.to_apc_response());
                     return;
                 }
-                if kitty_delete_all_visible(&apc_bytes) {
-                    self.image_scene.clear();
-                    self.mark_for_rerender();
-                    return;
-                }
-                if let Some((image_id, placement_id)) = kitty_delete_by_image_id(&apc_bytes) {
-                    self.image_scene
-                        .delete_kitty_protocol_placement(image_id, placement_id);
-                    self.mark_for_rerender();
-                    return;
-                }
-                if let Some((image_number, placement_id)) = kitty_delete_by_image_number(&apc_bytes)
-                {
-                    self.image_scene
-                        .delete_kitty_image_number_placement(image_number, placement_id);
-                    self.mark_for_rerender();
-                    return;
+                if let Some(delete_request) = kitty_delete_request(&apc_bytes) {
+                    match delete_request.selector {
+                        KittyDeleteSelector::AllVisible => {
+                            self.image_scene.clear();
+                            self.mark_for_rerender();
+                            return;
+                        },
+                        KittyDeleteSelector::ImageId {
+                            image_id,
+                            placement_id,
+                        } => {
+                            self.image_scene.delete_kitty_protocol_placement(
+                                image_id,
+                                placement_id,
+                                delete_request.free_image_data(),
+                            );
+                            self.mark_for_rerender();
+                            return;
+                        },
+                        KittyDeleteSelector::ImageNumber {
+                            image_number,
+                            placement_id,
+                        } => {
+                            self.image_scene.delete_kitty_image_number_placement(
+                                image_number,
+                                placement_id,
+                                delete_request.free_image_data(),
+                            );
+                            self.mark_for_rerender();
+                            return;
+                        },
+                        KittyDeleteSelector::Geometry(_) | KittyDeleteSelector::Range { .. } => {
+                            let lines_above = &self.lines_above;
+                            let viewport = &self.viewport;
+                            let width = self.width;
+                            self.image_scene.delete_kitty_by_request(
+                                &delete_request,
+                                (self.cursor.x, self.lines_above.len() + self.cursor.y),
+                                self.lines_above.len(),
+                                |anchor| {
+                                    Self::resolve_flow_anchor_in_buffers(
+                                        anchor,
+                                        lines_above,
+                                        viewport,
+                                        width,
+                                    )
+                                },
+                            );
+                            self.mark_for_rerender();
+                            return;
+                        },
+                    }
                 }
                 let character_cell_size = *self.character_cell_size.borrow();
                 let lines_above = &self.lines_above;
@@ -3813,11 +3888,16 @@ impl Perform for Grid {
                     character_cell_size,
                     self.lines_above.len(),
                     self.height,
-                    |anchor| Self::resolve_flow_anchor_in_buffers(anchor, lines_above, viewport, width),
+                    |anchor| {
+                        Self::resolve_flow_anchor_in_buffers(anchor, lines_above, viewport, width)
+                    },
                 );
                 let (resolved_image_id, resolved_image_number) = match &image_effect {
                     Some(ImageSceneEffect::Placement(image_effect)) => (
-                        image_effect.placement.kitty_protocol_identity().and_then(|(image_id, _)| image_id),
+                        image_effect
+                            .placement
+                            .kitty_protocol_identity()
+                            .and_then(|(image_id, _)| image_id),
                         image_effect.protocol_image_number,
                     ),
                     Some(ImageSceneEffect::AssetStored {
@@ -3847,11 +3927,12 @@ impl Perform for Grid {
                             }
                             match image_effect.placement.content_flow {
                                 ImageContentFlow::NoCursorMovement => {},
-                                ImageContentFlow::MoveCursorByCells { .. } => {
-                                    for _ in 0..image_effect.placement.rows() {
+                                ImageContentFlow::MoveCursorByCells { columns, rows } => {
+                                    self.move_cursor_forward_until_edge(columns);
+                                    for _ in 1..rows {
                                         self.add_canonical_line();
                                     }
-                                }
+                                },
                             }
                         },
                         ImageSceneEffect::AssetReplaced {

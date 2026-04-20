@@ -232,7 +232,8 @@ pub struct KittyImageState {
     kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     placements: Vec<KittyPlacement>,
     protocol_image_id_to_internal_id: HashMap<u32, u32>,
-    image_number_to_protocol_image_id: HashMap<u32, u32>,
+    image_number_to_protocol_image_ids: HashMap<u32, Vec<u32>>,
+    protocol_image_id_to_image_number: HashMap<u32, u32>,
     next_generated_protocol_image_id: u32,
     pending_transmit: Option<PendingKittyTransmit>,
 }
@@ -284,7 +285,8 @@ impl KittyImageState {
             kitty_asset_store,
             placements: vec![],
             protocol_image_id_to_internal_id: HashMap::new(),
-            image_number_to_protocol_image_id: HashMap::new(),
+            image_number_to_protocol_image_ids: HashMap::new(),
+            protocol_image_id_to_image_number: HashMap::new(),
             next_generated_protocol_image_id: 0x8000_0001,
             pending_transmit: None,
         }
@@ -310,8 +312,12 @@ impl KittyImageState {
             Some(protocol_image_id)
         } else if let Some(image_number) = image_number {
             let synthetic_id = self.next_synthetic_protocol_image_id();
-            self.image_number_to_protocol_image_id
-                .insert(image_number, synthetic_id);
+            self.image_number_to_protocol_image_ids
+                .entry(image_number)
+                .or_default()
+                .push(synthetic_id);
+            self.protocol_image_id_to_image_number
+                .insert(synthetic_id, image_number);
             Some(synthetic_id)
         } else {
             None
@@ -327,9 +333,9 @@ impl KittyImageState {
             Some(protocol_image_id)
         } else {
             image_number.and_then(|image_number| {
-                self.image_number_to_protocol_image_id
+                self.image_number_to_protocol_image_ids
                     .get(&image_number)
-                    .copied()
+                    .and_then(|protocol_image_ids| protocol_image_ids.last().copied())
             })
         }
     }
@@ -650,11 +656,34 @@ impl KittyImageState {
     pub fn clear(&mut self) {
         self.placements.clear();
         self.protocol_image_id_to_internal_id.clear();
-        self.image_number_to_protocol_image_id.clear();
+        self.image_number_to_protocol_image_ids.clear();
+        self.protocol_image_id_to_image_number.clear();
         self.pending_transmit = None;
     }
 
-    pub fn delete_protocol_placement(&mut self, protocol_image_id: u32, placement_id: Option<u32>) {
+    fn remove_protocol_image_references(&mut self, protocol_image_id: u32) {
+        self.protocol_image_id_to_internal_id.remove(&protocol_image_id);
+        if let Some(image_number) = self.protocol_image_id_to_image_number.remove(&protocol_image_id)
+        {
+            if let Some(protocol_image_ids) =
+                self.image_number_to_protocol_image_ids.get_mut(&image_number)
+            {
+                protocol_image_ids.retain(|existing_protocol_image_id| {
+                    *existing_protocol_image_id != protocol_image_id
+                });
+                if protocol_image_ids.is_empty() {
+                    self.image_number_to_protocol_image_ids.remove(&image_number);
+                }
+            }
+        }
+    }
+
+    pub fn delete_protocol_placement(
+        &mut self,
+        protocol_image_id: u32,
+        placement_id: Option<u32>,
+        free_image_data: bool,
+    ) {
         let Some(internal_image_id) = self
             .protocol_image_id_to_internal_id
             .get(&protocol_image_id)
@@ -671,10 +700,22 @@ impl KittyImageState {
                 None => false,
             }
         });
+        let has_remaining_references = self
+            .placements
+            .iter()
+            .any(|placement| placement.image_id == internal_image_id);
+        if free_image_data && !has_remaining_references {
+            self.kitty_asset_store
+                .borrow_mut()
+                .remove_asset(internal_image_id);
+            self.remove_protocol_image_references(protocol_image_id);
+        }
     }
 
     pub fn protocol_image_id_for_image_number(&self, image_number: u32) -> Option<u32> {
-        self.image_number_to_protocol_image_id.get(&image_number).copied()
+        self.image_number_to_protocol_image_ids
+            .get(&image_number)
+            .and_then(|protocol_image_ids| protocol_image_ids.last().copied())
     }
 
     pub fn serialize_chunks_with_asset_store(
@@ -1071,44 +1112,148 @@ fn parse_kitty_transport_compression(compression: Option<&str>) -> Option<Option
     }
 }
 
-pub fn kitty_delete_all_visible(apc_bytes: &[u8]) -> bool {
-    let Some(kv) = kitty_delete_header(apc_bytes) else {
-        return false;
-    };
-    kv.get("a").copied() == Some("d")
-        && matches!(kv.get("d").copied(), None | Some("a") | Some("A"))
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KittyDeleteMode {
+    PlacementsOnly,
+    PlacementsAndBackingData,
 }
 
-pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<u32>)> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KittyGeometrySelector {
+    Cursor,
+    Cell { x: u32, y: u32, z: Option<i32> },
+    Column { x: u32 },
+    Row { y: u32 },
+    Z { z: i32 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KittyDeleteSelector {
+    AllVisible,
+    ImageId {
+        image_id: u32,
+        placement_id: Option<u32>,
+    },
+    ImageNumber {
+        image_number: u32,
+        placement_id: Option<u32>,
+    },
+    Geometry(KittyGeometrySelector),
+    Range {
+        first_image_id: u32,
+        last_image_id: u32,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KittyDeleteRequest {
+    pub selector: KittyDeleteSelector,
+    pub mode: KittyDeleteMode,
+}
+
+impl KittyDeleteRequest {
+    pub fn free_image_data(&self) -> bool {
+        self.mode == KittyDeleteMode::PlacementsAndBackingData
+    }
+}
+
+pub fn kitty_delete_request(apc_bytes: &[u8]) -> Option<KittyDeleteRequest> {
     let kv = kitty_delete_header(apc_bytes)?;
-    if kv.get("a").copied() != Some("d") || kv.get("d").copied() != Some("i") {
+    if kv.get("a").copied() != Some("d") {
         return None;
     }
-    let image_id = kv.get("i")?.parse::<u32>().ok()?;
+    let delete_selector = kv.get("d").copied().unwrap_or("a");
+    let mode = match delete_selector {
+        "A" | "I" | "N" | "C" | "P" | "Q" | "R" | "X" | "Y" | "Z" => {
+            KittyDeleteMode::PlacementsAndBackingData
+        },
+        "a" | "i" | "n" | "c" | "p" | "q" | "r" | "x" | "y" | "z" => {
+            KittyDeleteMode::PlacementsOnly
+        },
+        _ => return None,
+    };
     let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
-    Some((image_id, placement_id))
+    let selector = match delete_selector {
+        "a" | "A" => KittyDeleteSelector::AllVisible,
+        "i" | "I" => KittyDeleteSelector::ImageId {
+            image_id: kv.get("i")?.parse::<u32>().ok()?,
+            placement_id,
+        },
+        "n" | "N" => KittyDeleteSelector::ImageNumber {
+            image_number: kv.get("I")?.parse::<u32>().ok()?,
+            placement_id,
+        },
+        "c" | "C" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cursor),
+        "p" | "P" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
+            x: kv.get("x")?.parse::<u32>().ok()?,
+            y: kv.get("y")?.parse::<u32>().ok()?,
+            z: None,
+        }),
+        "q" | "Q" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
+            x: kv.get("x")?.parse::<u32>().ok()?,
+            y: kv.get("y")?.parse::<u32>().ok()?,
+            z: Some(kv.get("z")?.parse::<i32>().ok()?),
+        }),
+        "x" | "X" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Column {
+            x: kv.get("x")?.parse::<u32>().ok()?,
+        }),
+        "y" | "Y" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Row {
+            y: kv.get("y")?.parse::<u32>().ok()?,
+        }),
+        "z" | "Z" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Z {
+            z: kv.get("z")?.parse::<i32>().ok()?,
+        }),
+        "r" | "R" => KittyDeleteSelector::Range {
+            first_image_id: kv.get("x")?.parse::<u32>().ok()?,
+            last_image_id: kv.get("y")?.parse::<u32>().ok()?,
+        },
+        _ => return None,
+    };
+    Some(KittyDeleteRequest { selector, mode })
 }
 
-pub fn kitty_delete_by_image_number(apc_bytes: &[u8]) -> Option<(u32, Option<u32>)> {
-    let rest = apc_bytes.strip_prefix(b"G")?;
-    let mut parts = rest.splitn(2, |b| *b == b';');
-    let header = std::str::from_utf8(parts.next()?).ok()?;
-    let mut kv = HashMap::new();
-    for part in header.split(',') {
-        if part.is_empty() {
-            continue;
-        }
-        let mut split = part.splitn(2, '=');
-        let key = split.next()?;
-        let value = split.next().unwrap_or("");
-        kv.insert(key, value);
+pub fn kitty_delete_all_visible(apc_bytes: &[u8]) -> bool {
+    matches!(
+        kitty_delete_request(apc_bytes),
+        Some(KittyDeleteRequest {
+            selector: KittyDeleteSelector::AllVisible,
+            ..
+        })
+    )
+}
+
+pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<u32>, bool)> {
+    match kitty_delete_request(apc_bytes)? {
+        KittyDeleteRequest {
+            selector: KittyDeleteSelector::ImageId {
+                image_id,
+                placement_id,
+            },
+            mode,
+        } => Some((
+            image_id,
+            placement_id,
+            mode == KittyDeleteMode::PlacementsAndBackingData,
+        )),
+        _ => None,
     }
-    if kv.get("a").copied() != Some("d") || kv.get("d").copied() != Some("n") {
-        return None;
+}
+
+pub fn kitty_delete_by_image_number(apc_bytes: &[u8]) -> Option<(u32, Option<u32>, bool)> {
+    match kitty_delete_request(apc_bytes)? {
+        KittyDeleteRequest {
+            selector: KittyDeleteSelector::ImageNumber {
+                image_number,
+                placement_id,
+            },
+            mode,
+        } => Some((
+            image_number,
+            placement_id,
+            mode == KittyDeleteMode::PlacementsAndBackingData,
+        )),
+        _ => None,
     }
-    let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok())?;
-    let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
-    Some((image_number, placement_id))
 }
 
 pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
@@ -1589,8 +1734,140 @@ fn serialize_virtual_placeholder_placement(
 mod tests {
     use super::*;
 
+    fn assert_delete_request(apc_bytes: &[u8], expected: KittyDeleteRequest) {
+        assert_eq!(kitty_delete_request(apc_bytes), Some(expected));
+    }
+
     fn test_image_dimensions(width: u32, height: u32) -> (u32, u32) {
         (width, height)
+    }
+
+    #[test]
+    fn kitty_delete_request_parses_geometry_selectors() {
+        assert_delete_request(
+            b"Ga=d,d=c",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cursor),
+                mode: KittyDeleteMode::PlacementsOnly,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=C",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cursor),
+                mode: KittyDeleteMode::PlacementsAndBackingData,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=p,x=24,y=11",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
+                    x: 24,
+                    y: 11,
+                    z: None,
+                }),
+                mode: KittyDeleteMode::PlacementsOnly,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=P,x=24,y=11",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
+                    x: 24,
+                    y: 11,
+                    z: None,
+                }),
+                mode: KittyDeleteMode::PlacementsAndBackingData,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=q,x=24,y=11,z=-1",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
+                    x: 24,
+                    y: 11,
+                    z: Some(-1),
+                }),
+                mode: KittyDeleteMode::PlacementsOnly,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=Q,x=24,y=11,z=-1",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
+                    x: 24,
+                    y: 11,
+                    z: Some(-1),
+                }),
+                mode: KittyDeleteMode::PlacementsAndBackingData,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=x,x=8",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Column { x: 8 }),
+                mode: KittyDeleteMode::PlacementsOnly,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=X,x=8",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Column { x: 8 }),
+                mode: KittyDeleteMode::PlacementsAndBackingData,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=y,y=11",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Row { y: 11 }),
+                mode: KittyDeleteMode::PlacementsOnly,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=Y,y=11",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Row { y: 11 }),
+                mode: KittyDeleteMode::PlacementsAndBackingData,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=z,z=-1",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Z { z: -1 }),
+                mode: KittyDeleteMode::PlacementsOnly,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=Z,z=-1",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Z { z: -1 }),
+                mode: KittyDeleteMode::PlacementsAndBackingData,
+            },
+        );
+    }
+
+    #[test]
+    fn kitty_delete_request_parses_range_selectors() {
+        assert_delete_request(
+            b"Ga=d,d=r,x=200,y=204",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Range {
+                    first_image_id: 200,
+                    last_image_id: 204,
+                },
+                mode: KittyDeleteMode::PlacementsOnly,
+            },
+        );
+        assert_delete_request(
+            b"Ga=d,d=R,x=200,y=204",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Range {
+                    first_image_id: 200,
+                    last_image_id: 204,
+                },
+                mode: KittyDeleteMode::PlacementsAndBackingData,
+            },
+        );
     }
 
     #[test]
@@ -1797,7 +2074,6 @@ mod tests {
 
     #[test]
     fn bounded_conversion_with_offsets_can_preserve_one_dimensional_rendered_pixel_size() {
-        let image_dimensions = test_image_dimensions(16, 9);
         let cell_size = SizeInPixels {
             width: 10,
             height: 20,
