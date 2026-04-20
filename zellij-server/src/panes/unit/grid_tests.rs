@@ -6396,6 +6396,40 @@ fn kitty_chunked_compressed_rgb_payload_is_decompressed_after_full_assembly() {
 }
 
 #[test]
+fn kitty_delete_aborts_inflight_chunked_upload_before_stale_final_chunk_arrives() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 12);
+
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=2,a=T,f=24,s=2,v=2,i=81,c=2,r=2,m=1;abcd\x1b\\",
+    );
+    feed_bytes(&mut grid, b"\x1b_Gm=1;efgh\x1b\\");
+    feed_bytes(&mut grid, b"\x1b_Gm=1;ijkl\x1b\\");
+    feed_bytes(&mut grid, b"\x1b_Ga=d\x1b\\");
+    feed_bytes(&mut grid, b"\x1b_Gm=0;mnop\x1b\\");
+
+    assert!(
+        grid.visible_kitty_image_chunks(0, 0).is_empty(),
+        "delete during chunked upload should abort the in-flight upload before a stale final chunk can finalize it"
+    );
+
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=T,f=24,s=2,v=2,i=81,c=2,r=2,m=1;abcd\x1b\\",
+    );
+    feed_bytes(&mut grid, b"\x1b_Gm=1;efgh\x1b\\");
+    feed_bytes(&mut grid, b"\x1b_Gm=1;ijkl\x1b\\");
+    feed_bytes(&mut grid, b"\x1b_Gm=0;1234\x1b\\");
+
+    assert_eq!(
+        grid.visible_kitty_image_chunks(0, 0).len(),
+        1,
+        "a fresh chunked upload should succeed after the earlier upload was aborted"
+    );
+}
+
+#[test]
 fn kitty_non_query_upload_and_placement_commands_emit_replies() {
     let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
         create_grid_with_shared_stores(4, 8);

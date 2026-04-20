@@ -475,6 +475,10 @@ impl PaneImageScene {
         }
     }
 
+    pub fn abort_pending_kitty_transmit(&mut self) {
+        self.kitty.abort_pending_transmit();
+    }
+
     pub fn rows_for_pixel_height(
         pixel_height: usize,
         character_cell_size: Option<SizeInPixels>,

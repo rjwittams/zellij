@@ -661,6 +661,10 @@ impl KittyImageState {
         self.pending_transmit = None;
     }
 
+    pub fn abort_pending_transmit(&mut self) {
+        self.pending_transmit = None;
+    }
+
     fn remove_protocol_image_references(&mut self, protocol_image_id: u32) {
         self.protocol_image_id_to_internal_id.remove(&protocol_image_id);
         if let Some(image_number) = self.protocol_image_id_to_image_number.remove(&protocol_image_id)

@@ -3824,6 +3824,7 @@ impl Perform for Grid {
                     return;
                 }
                 if let Some(delete_request) = kitty_delete_request(&apc_bytes) {
+                    self.image_scene.abort_pending_kitty_transmit();
                     match delete_request.selector {
                         KittyDeleteSelector::AllVisible => {
                             self.image_scene.clear();
