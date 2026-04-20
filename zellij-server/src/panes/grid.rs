@@ -125,8 +125,8 @@ use crate::output::{
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
 use crate::panes::kitty::{
-    kitty_delete_request, kitty_non_query_response, kitty_query_response, KittyDeleteSelector,
-    PendingKittyPlaceholder, ResolvedKittyPlaceholder,
+    kitty_delete_request, kitty_query_response, KittyDeleteSelector, PendingKittyPlaceholder,
+    ResolvedKittyPlaceholder,
 };
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::pane_image_scene::{
@@ -3893,34 +3893,10 @@ impl Perform for Grid {
                         Self::resolve_flow_anchor_in_buffers(anchor, lines_above, viewport, width)
                     },
                 );
-                let (resolved_image_id, resolved_image_number) = match &image_effect {
-                    Some(ImageSceneEffect::Placement(image_effect)) => (
-                        image_effect
-                            .placement
-                            .kitty_protocol_identity()
-                            .and_then(|(image_id, _)| image_id),
-                        image_effect.protocol_image_number,
-                    ),
-                    Some(ImageSceneEffect::AssetStored {
-                        protocol_image_id,
-                        protocol_image_number,
-                    }) => (*protocol_image_id, *protocol_image_number),
-                    Some(ImageSceneEffect::AssetReplaced {
-                        protocol_image_id,
-                        protocol_image_number,
-                        ..
-                    }) => (*protocol_image_id, *protocol_image_number),
-                    None => (None, None),
-                };
-                if let Some(reply) = kitty_non_query_response(
-                    &apc_bytes,
-                    image_effect.is_some(),
-                    resolved_image_id,
-                    resolved_image_number,
-                ) {
+                if let Some(reply) = image_effect.reply {
                     self.queue_pending_message_to_pty(reply.to_apc_response());
                 }
-                if let Some(image_effect) = image_effect {
+                if let Some(image_effect) = image_effect.effect {
                     match image_effect {
                         ImageSceneEffect::Placement(image_effect) => {
                             for row in image_effect.cleared_placeholder_rows {

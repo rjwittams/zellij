@@ -67,8 +67,9 @@ impl KittyDamageRedraw {
 }
 
 use crate::panes::kitty::{
-    KittyApcEffect, KittyCursorMovementPolicy, KittyDeleteRequest, KittyDeleteSelector,
-    KittyGeometrySelector, KittyImageInsertion, KittyImageState,
+    KittyApcEffect, KittyApcOutcome, KittyCursorMovementPolicy, KittyDeleteRequest,
+    KittyDeleteSelector, KittyGeometrySelector, KittyImageInsertion, KittyImageState,
+    KittyQueryResponse,
 };
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use std::cell::RefCell;
@@ -358,6 +359,12 @@ pub enum ImageSceneEffect {
     },
 }
 
+#[derive(Clone, Debug)]
+pub struct ImageSceneHandleResult {
+    pub effect: Option<ImageSceneEffect>,
+    pub reply: Option<KittyQueryResponse>,
+}
+
 static NEXT_IMAGE_ASSET_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_LOGICAL_PLACEMENT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -499,19 +506,18 @@ impl PaneImageScene {
         scrollback_size_in_lines: usize,
         viewport_height: usize,
         resolve_anchor: F,
-    ) -> Option<ImageSceneEffect>
+    ) -> ImageSceneHandleResult
     where
         F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
     {
-        self.kitty
-            .handle_apc(
-                apc_bytes,
-                anchor.clone(),
-                cursor_x,
-                scrollback_row,
-                character_cell_size,
-            )
-            .map(|effect| match effect {
+        let KittyApcOutcome { effect, reply } = self.kitty.handle_apc(
+            apc_bytes,
+            anchor.clone(),
+            cursor_x,
+            scrollback_row,
+            character_cell_size,
+        );
+        let effect = effect.map(|effect| match effect {
                 KittyApcEffect::AssetReplaced {
                     asset_id,
                     protocol_image_id,
@@ -639,7 +645,8 @@ impl PaneImageScene {
                         protocol_image_number: insertion.protocol_image_number,
                     })
                 },
-            })
+            });
+        ImageSceneHandleResult { effect, reply }
     }
 
     pub fn kitty_logical_placement_id(

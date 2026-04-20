@@ -6494,6 +6494,101 @@ fn kitty_reply_image_id(reply: &str) -> Option<u32> {
 }
 
 #[test]
+fn kitty_chunked_upload_emits_reply_only_on_terminal_chunk() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 12);
+
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=T,f=24,s=2,v=2,i=82,c=2,r=2,m=1;abcd\x1b\\",
+    );
+    assert!(
+        grid.pending_messages_to_pty.is_empty(),
+        "opening chunk should not emit an early reply"
+    );
+    feed_bytes(&mut grid, b"\x1b_Gm=1;efgh\x1b\\");
+    assert!(
+        grid.pending_messages_to_pty.is_empty(),
+        "intermediate chunk should not emit a reply"
+    );
+    feed_bytes(&mut grid, b"\x1b_Gm=1;ijkl\x1b\\");
+    assert!(
+        grid.pending_messages_to_pty.is_empty(),
+        "last intermediate chunk should still not emit a reply"
+    );
+    feed_bytes(&mut grid, b"\x1b_Gm=0;mnop\x1b\\");
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert_eq!(replies, vec!["\u{1b}_Gi=82;OK\u{1b}\\".to_string()]);
+}
+
+#[test]
+fn kitty_chunked_upload_with_image_number_emits_final_reply_with_resolved_id() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 12);
+
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=t,f=24,s=2,v=2,I=93,m=1;abcd\x1b\\",
+    );
+    feed_bytes(&mut grid, b"\x1b_Gm=1;efgh\x1b\\");
+    feed_bytes(&mut grid, b"\x1b_Gm=1;ijkx\x1b\\");
+    assert!(
+        grid.pending_messages_to_pty.is_empty(),
+        "intermediate chunks should not emit replies for image-number uploads"
+    );
+    feed_bytes(&mut grid, b"\x1b_Gm=0;mnop\x1b\\");
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 1, "expected only one final reply, got {replies:?}");
+    assert!(
+        replies[0].contains("I=93;OK"),
+        "final reply should preserve the image number, got {replies:?}"
+    );
+    let resolved_id =
+        kitty_reply_image_id(&replies[0]).expect("final reply should include a resolved i=");
+    assert!(
+        resolved_id >= 0x8000_0001,
+        "I= uploads should reply with a synthesized terminal image id, got {resolved_id}"
+    );
+}
+
+#[test]
+fn kitty_chunked_upload_emits_final_enodata_only_on_terminal_chunk() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 12);
+
+    feed_bytes(
+        &mut grid,
+        b"\x1b_Gq=0,a=t,f=32,s=2,v=2,i=84,m=1;abcd\x1b\\",
+    );
+    assert!(
+        grid.pending_messages_to_pty.is_empty(),
+        "opening chunk should not emit an early error reply"
+    );
+    feed_bytes(&mut grid, b"\x1b_Gm=0;mnop\x1b\\");
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert_eq!(replies.len(), 1, "expected one final failure reply, got {replies:?}");
+    assert!(
+        replies[0].contains("ENODATA:Insufficient image data: 6 < 16"),
+        "terminal chunk should report ENODATA with the expected byte counts, got {replies:?}"
+    );
+}
+
+#[test]
 fn kitty_image_number_upload_and_placement_commands_emit_replies_and_render() {
     let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
         create_grid_with_shared_stores(4, 8);
