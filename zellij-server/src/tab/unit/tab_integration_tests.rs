@@ -1,6 +1,7 @@
 use super::{Output, Tab};
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::sixel::SixelImageStore;
+use crate::output::RenderedImageState;
 use crate::screen::CopyOptions;
 use crate::Arc;
 
@@ -1109,6 +1110,27 @@ fn kitty_raw_proof_scene_bytes() -> Vec<u8> {
     bytes
 }
 
+fn smoke_geometry_delete_scene_bytes() -> Vec<u8> {
+    let mut bytes = b"\x1b[2J\x1b[H".to_vec();
+    bytes.extend_from_slice(&goto_bytes(3, 9));
+    bytes.extend_from_slice(&kitty_explicit_rgba_with_placement_and_z(
+        201, 1, 24, 16, 12, 4, -1,
+    ));
+    bytes.extend_from_slice(&goto_bytes(21, 9));
+    bytes.extend_from_slice(&kitty_explicit_rgba_with_placement_and_z(
+        202, 1, 24, 16, 12, 4, 1,
+    ));
+    bytes.extend_from_slice(&goto_bytes(3, 17));
+    bytes.extend_from_slice(&kitty_explicit_rgba_with_placement_and_z(
+        203, 1, 24, 16, 12, 4, 1,
+    ));
+    bytes.extend_from_slice(&goto_bytes(21, 17));
+    bytes.extend_from_slice(&kitty_explicit_rgba_with_placement_and_z(
+        204, 1, 24, 16, 12, 4, -1,
+    ));
+    bytes
+}
+
 fn placeholder_virtual_placement(
     image_id: u32,
     placement_id: u32,
@@ -1189,6 +1211,22 @@ fn kitty_explicit_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: 
     let payload_b64 = kitty_rgba_payload_b64(width, height);
     format!(
         "\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_explicit_rgba_with_placement_and_z(
+    image_id: u32,
+    placement_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+    z: i32,
+) -> Vec<u8> {
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
+    format!(
+        "\u{1b}_Ga=T,C=1,f=32,s={width},v={height},i={image_id},p={placement_id},c={cols},r={rows},z={z};{payload_b64}\u{1b}\\"
     )
     .into_bytes()
 }
@@ -3854,6 +3892,176 @@ fn floating_pane_above_sixel_image() {
     );
 
     assert_snapshot!(snapshot);
+}
+
+fn render_tab_with_last_state(
+    tab: &mut Tab,
+    sixel_image_store: Rc<RefCell<SixelImageStore>>,
+    kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+    last_state: Option<RenderedImageState>,
+) -> (String, RenderedImageState) {
+    let client_id = 1;
+    let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
+        width: 8,
+        height: 21,
+    })));
+    let mut output = Output::new(
+        sixel_image_store,
+        kitty_asset_store,
+        character_cell_size,
+        true,
+        true,
+    );
+    if let Some(last_state) = last_state {
+        output.set_last_rendered_image_state_for_client(client_id, last_state);
+    }
+    tab.render(&mut output, None).unwrap();
+    let serialized = output.serialize().unwrap();
+    let rendered = serialized.get(&client_id).cloned().unwrap_or_default();
+    let next_state = output
+        .take_last_rendered_image_state_for_client(client_id)
+        .unwrap_or_default();
+    (rendered, next_state)
+}
+
+#[test]
+fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
+
+    let size = Size { cols: 121, rows: 30 };
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+    let mut tab = create_new_tab_with_image_stores(
+        size,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+    );
+
+    tab.handle_pty_bytes(1, smoke_geometry_delete_scene_bytes())
+        .unwrap();
+    let (_frame1_output, state1) = render_tab_with_last_state(
+        &mut tab,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+        None,
+    );
+
+    tab.handle_pty_bytes(1, b"\x1b_Ga=d,d=p,x=24,y=11\x1b\\".to_vec())
+        .unwrap();
+    let (frame2_output, state2) = render_tab_with_last_state(
+        &mut tab,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+        Some(state1),
+    );
+    assert!(
+        frame2_output.contains("\u{1b}_Ga=d,d=i,i=2,"),
+        "smoke-style p delete should remove the top-right placement, got: {frame2_output:?}"
+    );
+
+    tab.handle_pty_bytes(1, smoke_geometry_delete_scene_bytes())
+        .unwrap();
+    let (frame3_output, state3) = render_tab_with_last_state(
+        &mut tab,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+        Some(state2),
+    );
+    assert!(
+        frame3_output.contains("\u{1b}_Ga=d,d=i,i=1,")
+            && frame3_output.contains("\u{1b}_Ga=d,d=i,i=3,")
+            && frame3_output.contains("\u{1b}_Ga=d,d=i,i=4,"),
+        "redrawing the smoke scene after pane-local clear should delete the previously rendered placements, got: {frame3_output:?}"
+    );
+
+    tab.handle_pty_bytes(1, b"\x1b_Ga=d,d=q,x=24,y=19,z=-1\x1b\\".to_vec())
+        .unwrap();
+    let (frame4_output, _state4) = render_tab_with_last_state(
+        &mut tab,
+        sixel_image_store,
+        kitty_asset_store,
+        Some(state3),
+    );
+    assert!(
+        !frame4_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "later smoke-style geometry deletes should not fall back to delete-all"
+    );
+    assert!(
+        frame4_output.contains("\u{1b}_Ga=d,d=i,i=8,"),
+        "smoke-style q delete should target the recreated bottom-right placement after the redraw, got: {frame4_output:?}"
+    );
+}
+
+#[test]
+fn kitty_ris_reset_emits_deletes_for_existing_images() {
+    let size = Size { cols: 121, rows: 30 };
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+    let mut tab = create_new_tab_with_image_stores(
+        size,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+    );
+
+    tab.handle_pty_bytes(1, smoke_geometry_delete_scene_bytes())
+        .unwrap();
+    let (_frame1_output, state1) = render_tab_with_last_state(
+        &mut tab,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+        None,
+    );
+
+    tab.handle_pty_bytes(1, b"\x1bc".to_vec()).unwrap();
+    let (frame2_output, _state2) = render_tab_with_last_state(
+        &mut tab,
+        sixel_image_store,
+        kitty_asset_store,
+        Some(state1),
+    );
+    assert!(
+        frame2_output.contains("\u{1b}_Ga=d,d=i,i=1,")
+            && frame2_output.contains("\u{1b}_Ga=d,d=i,i=2,")
+            && frame2_output.contains("\u{1b}_Ga=d,d=i,i=3,")
+            && frame2_output.contains("\u{1b}_Ga=d,d=i,i=4,"),
+        "RIS should trigger targeted deletes for previously rendered kitty placements, got: {frame2_output:?}"
+    );
+}
+
+#[test]
+fn kitty_alt_screen_exit_emits_deletes_for_existing_images() {
+    let size = Size { cols: 121, rows: 30 };
+    let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+    let mut tab = create_new_tab_with_image_stores(
+        size,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+    );
+
+    let mut bytes = b"\x1b[?1049h".to_vec();
+    bytes.extend_from_slice(&smoke_geometry_delete_scene_bytes());
+    tab.handle_pty_bytes(1, bytes).unwrap();
+    let (_frame1_output, state1) = render_tab_with_last_state(
+        &mut tab,
+        sixel_image_store.clone(),
+        kitty_asset_store.clone(),
+        None,
+    );
+
+    tab.handle_pty_bytes(1, b"\x1b[?1049l".to_vec()).unwrap();
+    let (frame2_output, _state2) = render_tab_with_last_state(
+        &mut tab,
+        sixel_image_store,
+        kitty_asset_store,
+        Some(state1),
+    );
+    assert!(
+        frame2_output.contains("\u{1b}_Ga=d,d=i,i=1,")
+            && frame2_output.contains("\u{1b}_Ga=d,d=i,i=2,")
+            && frame2_output.contains("\u{1b}_Ga=d,d=i,i=3,")
+            && frame2_output.contains("\u{1b}_Ga=d,d=i,i=4,"),
+        "alternate-screen exit should delete the previously rendered kitty placements, got: {frame2_output:?}"
+    );
 }
 
 #[test]

@@ -1184,6 +1184,93 @@ fn test_kitty_diff_serialization_deletes_single_placement_without_delete_all() {
 }
 
 #[test]
+fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_handoffs() {
+    fn smoke_style_chunk(
+        image_id: u32,
+        cell_x: usize,
+        cell_y: usize,
+        z_index: i32,
+    ) -> KittyImageChunk {
+        let mut chunk = create_kitty_chunk(image_id, 12, 4);
+        chunk.placement_id = Some(1);
+        chunk.cell_x = cell_x;
+        chunk.cell_y = cell_y;
+        chunk.z_index = z_index;
+        chunk
+    }
+
+    let client_ids = create_test_clients(1);
+    let top_left = smoke_style_chunk(201, 2, 8, -1);
+    let top_right = smoke_style_chunk(202, 20, 8, 1);
+    let bottom_left = smoke_style_chunk(203, 2, 16, 1);
+    let bottom_right = smoke_style_chunk(204, 20, 16, -1);
+
+    let frame1_scene = vec![
+        top_left.clone(),
+        top_right.clone(),
+        bottom_left.clone(),
+        bottom_right.clone(),
+    ];
+    let frame2_scene = vec![top_left.clone(), bottom_left.clone(), bottom_right.clone()];
+    let frame3_scene = vec![
+        top_left.clone(),
+        top_right.clone(),
+        bottom_left.clone(),
+        bottom_right.clone(),
+    ];
+    let frame4_scene = vec![top_right.clone(), bottom_left, bottom_right];
+
+    let (mut output1, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output1.add_clients(&client_ids, link_handler, None);
+    output1.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(frame1_scene), None);
+    let _ = output1.serialize().unwrap();
+    let state1 = output1.take_last_rendered_image_states();
+
+    let (mut output2, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output2.add_clients(&client_ids, link_handler, None);
+    output2.set_last_rendered_image_states(state1);
+    output2.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(frame2_scene), None);
+    let frame2_serialized = output2.serialize().unwrap();
+    let frame2_client_output = frame2_serialized.get(&1).unwrap();
+    assert!(
+        frame2_client_output.contains("\u{1b}_Ga=d,d=i,i=202,"),
+        "frame 2 should delete only the removed top-right placement"
+    );
+    let state2 = output2.take_last_rendered_image_states();
+
+    let (mut output3, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output3.add_clients(&client_ids, link_handler, None);
+    output3.set_last_rendered_image_states(state2);
+    output3.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(frame3_scene), None);
+    let _ = output3.serialize().unwrap();
+    let state3 = output3.take_last_rendered_image_states();
+
+    let (mut output4, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output4.add_clients(&client_ids, link_handler, None);
+    output4.set_last_rendered_image_states(state3);
+    output4.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(frame4_scene), None);
+
+    let frame4_serialized = output4.serialize().unwrap();
+    let frame4_client_output = frame4_serialized.get(&1).unwrap();
+    assert!(
+        !frame4_client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "later targeted deletes should not fall back to delete-all after state handoff"
+    );
+    assert!(
+        frame4_client_output.contains("\u{1b}_Ga=d,d=i,i=201,"),
+        "frame 4 should still emit a targeted delete for the removed top-left placement"
+    );
+}
+
+#[test]
 fn test_kitty_diff_serialization_places_resident_asset_without_retransmit() {
     let client_ids = create_test_clients(1);
     let mut chunk = create_kitty_chunk(1, 2, 2);
