@@ -46,10 +46,7 @@ impl KittySceneState {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum KittyAssetOp {
-    EnsureResident {
-        image_id: u32,
-        generation: u64,
-    },
+    EnsureResident { image_id: u32, generation: u64 },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,13 +84,12 @@ pub(crate) fn plan_kitty_scene(
     let changed_asset_ids: BTreeSet<u32> = desired
         .resident_asset_generations
         .iter()
-        .filter_map(
-            |(&image_id, desired_generation)| match assumed.resident_asset_generations.get(&image_id)
-            {
+        .filter_map(|(&image_id, desired_generation)| {
+            match assumed.resident_asset_generations.get(&image_id) {
                 Some(existing_generation) if existing_generation == desired_generation => None,
                 _ => Some(image_id),
-            },
-        )
+            }
+        })
         .collect();
 
     let mut asset_ops = vec![];
@@ -101,8 +97,7 @@ pub(crate) fn plan_kitty_scene(
         let generation = *desired
             .resident_asset_generations
             .get(image_id)
-            .expect("changed asset must exist in desired scene")
-            ;
+            .expect("changed asset must exist in desired scene");
         asset_ops.push(KittyAssetOp::EnsureResident {
             image_id: *image_id,
             generation,

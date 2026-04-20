@@ -66,7 +66,9 @@ impl KittyAssetStore {
     }
 
     pub fn image_data(&self, image_id: u32) -> Option<KittyImageData> {
-        self.assets.get(&image_id).map(|asset| asset.image_data.clone())
+        self.assets
+            .get(&image_id)
+            .map(|asset| asset.image_data.clone())
     }
 
     pub fn image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {

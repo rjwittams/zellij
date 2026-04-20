@@ -518,134 +518,133 @@ impl PaneImageScene {
             character_cell_size,
         );
         let effect = effect.map(|effect| match effect {
-                KittyApcEffect::AssetReplaced {
+            KittyApcEffect::AssetReplaced {
+                asset_id,
+                protocol_image_id,
+                protocol_image_number,
+            } => {
+                let cleared_placeholder_rows = self.remove_kitty_asset_placements(
                     asset_id,
+                    scrollback_size_in_lines,
+                    viewport_height,
+                    &resolve_anchor,
+                );
+                ImageSceneEffect::AssetReplaced {
+                    cleared_placeholder_rows,
                     protocol_image_id,
                     protocol_image_number,
-                } => {
-                    let cleared_placeholder_rows = self.remove_kitty_asset_placements(
-                        asset_id,
+                }
+            },
+            KittyApcEffect::AssetStored {
+                protocol_image_id,
+                protocol_image_number,
+            } => ImageSceneEffect::AssetStored {
+                protocol_image_id,
+                protocol_image_number,
+            },
+            KittyApcEffect::Placement(insertion) => {
+                let insertion: KittyImageInsertion = insertion;
+                let cleared_placeholder_rows = if insertion.replaced_existing_asset {
+                    self.remove_kitty_asset_placements(
+                        insertion.asset_id,
                         scrollback_size_in_lines,
                         viewport_height,
                         &resolve_anchor,
-                    );
-                    ImageSceneEffect::AssetReplaced {
-                        cleared_placeholder_rows,
-                        protocol_image_id,
-                        protocol_image_number,
-                    }
-                },
-                KittyApcEffect::AssetStored {
-                    protocol_image_id,
-                    protocol_image_number,
-                } => ImageSceneEffect::AssetStored {
-                    protocol_image_id,
-                    protocol_image_number,
-                },
-                KittyApcEffect::Placement(insertion) => {
-                    let insertion: KittyImageInsertion = insertion;
-                    let cleared_placeholder_rows = if insertion.replaced_existing_asset {
-                        self.remove_kitty_asset_placements(
-                            insertion.asset_id,
-                            scrollback_size_in_lines,
-                            viewport_height,
-                            &resolve_anchor,
-                        )
-                    } else {
-                        vec![]
+                    )
+                } else {
+                    vec![]
+                };
+                let geometry = insertion.geometry;
+                let content_flow =
+                    match (insertion.placement_mode, insertion.cursor_movement_policy) {
+                        (
+                            KittyImagePlacementMode::Explicit,
+                            KittyCursorMovementPolicy::AfterPlacement,
+                        ) if geometry.rows > 0 => ImageContentFlow::MoveCursorByCells {
+                            columns: geometry.columns,
+                            rows: geometry.rows,
+                        },
+                        _ => ImageContentFlow::NoCursorMovement,
                     };
-                    let geometry = insertion.geometry;
-                    let content_flow =
-                        match (insertion.placement_mode, insertion.cursor_movement_policy) {
-                            (
-                                KittyImagePlacementMode::Explicit,
-                                KittyCursorMovementPolicy::AfterPlacement,
-                            ) if geometry.rows > 0 => ImageContentFlow::MoveCursorByCells {
+                let protocol_identity = Some(ProtocolPlacementIdentity::Kitty {
+                    image_id: insertion.protocol_image_id,
+                    placement_id: insertion.protocol_placement_id,
+                });
+                let logical_placement_id = next_logical_placement_id();
+                let flavor = match insertion.placement_mode {
+                    KittyImagePlacementMode::Explicit => {
+                        PlacementFlavor::KittyExplicit(KittyExplicitPlacementFlavor {
+                            occupancy: PlacementOccupancy {
                                 columns: geometry.columns,
                                 rows: geometry.rows,
                             },
-                            _ => ImageContentFlow::NoCursorMovement,
-                        };
-                    let protocol_identity = Some(ProtocolPlacementIdentity::Kitty {
-                        image_id: insertion.protocol_image_id,
-                        placement_id: insertion.protocol_placement_id,
-                    });
-                    let logical_placement_id = next_logical_placement_id();
-                    let flavor = match insertion.placement_mode {
-                        KittyImagePlacementMode::Explicit => {
-                            PlacementFlavor::KittyExplicit(KittyExplicitPlacementFlavor {
-                                occupancy: PlacementOccupancy {
-                                    columns: geometry.columns,
-                                    rows: geometry.rows,
-                                },
-                                columns_specified: geometry.columns_specified,
-                                rows_specified: geometry.rows_specified,
-                                source_x: geometry.source_x,
-                                source_y: geometry.source_y,
-                                source_width: geometry.source_width,
-                                source_height: geometry.source_height,
-                                z_index: geometry.z_index,
-                                x_offset: geometry.x_offset,
-                                y_offset: geometry.y_offset,
-                            })
-                        },
-                        KittyImagePlacementMode::Placeholder => {
-                            PlacementFlavor::KittyPlaceholder(KittyVirtualPlacementFlavor {
-                                occupancy: PlacementOccupancy {
-                                    columns: geometry.columns,
-                                    rows: geometry.rows,
-                                },
-                                source_x: geometry.source_x,
-                                source_y: geometry.source_y,
-                                source_width: geometry.source_width,
-                                source_height: geometry.source_height,
-                                x_offset: geometry.x_offset,
-                                y_offset: geometry.y_offset,
-                            })
-                        },
-                    };
-                    if let Some(kitty_protocol_placement_key) =
-                        protocol_identity.as_ref().and_then(|protocol_identity| {
-                            match protocol_identity {
-                                ProtocolPlacementIdentity::Kitty {
-                                    image_id: Some(image_id),
-                                    placement_id,
-                                } => Some(KittyProtocolPlacementKey {
-                                    image_id: *image_id,
-                                    placement_id: *placement_id,
-                                }),
-                                _ => None,
-                            }
+                            columns_specified: geometry.columns_specified,
+                            rows_specified: geometry.rows_specified,
+                            source_x: geometry.source_x,
+                            source_y: geometry.source_y,
+                            source_width: geometry.source_width,
+                            source_height: geometry.source_height,
+                            z_index: geometry.z_index,
+                            x_offset: geometry.x_offset,
+                            y_offset: geometry.y_offset,
                         })
+                    },
+                    KittyImagePlacementMode::Placeholder => {
+                        PlacementFlavor::KittyPlaceholder(KittyVirtualPlacementFlavor {
+                            occupancy: PlacementOccupancy {
+                                columns: geometry.columns,
+                                rows: geometry.rows,
+                            },
+                            source_x: geometry.source_x,
+                            source_y: geometry.source_y,
+                            source_width: geometry.source_width,
+                            source_height: geometry.source_height,
+                            x_offset: geometry.x_offset,
+                            y_offset: geometry.y_offset,
+                        })
+                    },
+                };
+                if let Some(kitty_protocol_placement_key) =
+                    protocol_identity
+                        .as_ref()
+                        .and_then(|protocol_identity| match protocol_identity {
+                            ProtocolPlacementIdentity::Kitty {
+                                image_id: Some(image_id),
+                                placement_id,
+                            } => Some(KittyProtocolPlacementKey {
+                                image_id: *image_id,
+                                placement_id: *placement_id,
+                            }),
+                            _ => None,
+                        })
+                {
+                    if let Some(previous_logical_placement_id) = self
+                        .kitty_logical_placement_ids
+                        .insert(kitty_protocol_placement_key, logical_placement_id)
                     {
-                        if let Some(previous_logical_placement_id) = self
-                            .kitty_logical_placement_ids
-                            .insert(kitty_protocol_placement_key, logical_placement_id)
-                        {
-                            self.placements.remove(&previous_logical_placement_id);
-                            self.kitty_placeholder_cells.retain(|placeholder_cell| {
-                                placeholder_cell.logical_placement_id
-                                    != previous_logical_placement_id
-                            });
-                        }
+                        self.placements.remove(&previous_logical_placement_id);
+                        self.kitty_placeholder_cells.retain(|placeholder_cell| {
+                            placeholder_cell.logical_placement_id != previous_logical_placement_id
+                        });
                     }
-                    let placement = ImagePlacement {
-                        logical_placement_id,
-                        asset_id: insertion.asset_id,
-                        protocol_identity,
-                        anchor: insertion.anchor,
-                        flavor,
-                        content_flow,
-                    };
-                    self.placements
-                        .insert(logical_placement_id, placement.clone());
-                    ImageSceneEffect::Placement(ImageInsertionEffect {
-                        placement,
-                        cleared_placeholder_rows,
-                        protocol_image_number: insertion.protocol_image_number,
-                    })
-                },
-            });
+                }
+                let placement = ImagePlacement {
+                    logical_placement_id,
+                    asset_id: insertion.asset_id,
+                    protocol_identity,
+                    anchor: insertion.anchor,
+                    flavor,
+                    content_flow,
+                };
+                self.placements
+                    .insert(logical_placement_id, placement.clone());
+                ImageSceneEffect::Placement(ImageInsertionEffect {
+                    placement,
+                    cleared_placeholder_rows,
+                    protocol_image_number: insertion.protocol_image_number,
+                })
+            },
+        });
         ImageSceneHandleResult { effect, reply }
     }
 

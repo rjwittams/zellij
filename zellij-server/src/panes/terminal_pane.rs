@@ -1,6 +1,6 @@
 use crate::output::{CharacterChunk, PaneImageRenderOutput, PaneRenderOutput};
-use crate::panes::sixel::SixelImageStore;
 use crate::panes::kitty_asset_store::KittyAssetStore;
+use crate::panes::sixel::SixelImageStore;
 use crate::panes::LinkHandler;
 use crate::panes::{
     grid::Grid,

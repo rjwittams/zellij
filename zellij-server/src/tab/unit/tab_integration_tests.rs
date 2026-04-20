@@ -1005,10 +1005,23 @@ fn take_snapshot_and_cursor_position(
 }
 
 fn kitty_virtual_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
     format!(
-        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAAAAAAA=\u{1b}\\"
+        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};{payload_b64}\u{1b}\\"
     )
     .into_bytes()
+}
+
+fn kitty_raw_payload_b64(width: u32, height: u32, bytes_per_pixel: usize, byte: u8) -> String {
+    let payload_len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
+        .unwrap();
+    base64::encode(vec![byte; payload_len])
+}
+
+fn kitty_rgba_payload_b64(width: u32, height: u32) -> String {
+    kitty_raw_payload_b64(width, height, 4, 0)
 }
 
 fn kitty_virtual_rgba_with_placement_payload(
@@ -1056,20 +1069,22 @@ fn kitty_display_placement_crop(
 }
 
 fn kitty_raw_proof_scene_bytes() -> Vec<u8> {
+    let first_stored_payload = kitty_rgba_payload_b64(64, 32);
+    let second_stored_payload = kitty_raw_payload_b64(96, 64, 4, 0xFF);
     let mut bytes = b"\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b_Gq=2,a=d,d=A;\x1b\\".to_vec();
     bytes.extend_from_slice(&kitty_explicit_rgba(3001, 64, 32, 14, 7));
     bytes.extend_from_slice(&kitty_retransmit_rgba_with_payload(
         3002,
         64,
         32,
-        "AAAAAAAAAAA=",
+        &first_stored_payload,
     ));
     bytes.extend_from_slice(&kitty_display_placement(3002, 1, 14, 7));
     bytes.extend_from_slice(&kitty_retransmit_rgba_with_payload(
         3003,
         96,
         64,
-        "/////w==",
+        &second_stored_payload,
     ));
     bytes.extend_from_slice(&kitty_display_placement_crop(3003, 1, 14, 7, 0, 0, 48, 32));
     bytes.extend_from_slice(&kitty_display_placement(3003, 2, 14, 7));
@@ -1082,8 +1097,7 @@ fn placeholder_virtual_placement(
     cols: u32,
     rows: u32,
 ) -> Vec<u8> {
-    format!("\u{1b}_Ga=p,U=1,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\")
-        .into_bytes()
+    format!("\u{1b}_Ga=p,U=1,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
 }
 
 fn placeholder_rgba_text(image_id: u32, cols: usize, rows: usize) -> Vec<u8> {
@@ -1154,8 +1168,11 @@ fn placeholder_rgba_text_with_placement(
 }
 
 fn kitty_explicit_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
-    format!("\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAA==\u{1b}\\")
-        .into_bytes()
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
+    format!(
+        "\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
 }
 
 fn goto_bytes(x: usize, y: usize) -> Vec<u8> {
@@ -1209,7 +1226,7 @@ fn shared_asset_resize_scene_bytes() -> Vec<u8> {
         32,
         10,
         4,
-        "AAAAAAAAAAA=",
+        &kitty_rgba_payload_b64(48, 32),
     ));
     bytes.extend_from_slice(&goto_bytes(3, 8));
     bytes.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 10, 4));
@@ -10973,10 +10990,13 @@ fn kitty_placeholder_survives_tiled_pane_resize_and_render() {
 
 #[test]
 fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
-    let size = Size { cols: 120, rows: 24 };
+    let size = Size {
+        cols: 120,
+        rows: 24,
+    };
     let client_id = 1;
-    let initial_payload = "AAAAAAAAAAA=";
-    let updated_payload = "/////w==";
+    let initial_payload = kitty_rgba_payload_b64(16, 8);
+    let updated_payload = kitty_raw_payload_b64(16, 8, 4, 0xFF);
     let image_id = 122;
     let internal_image_id = 1;
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
@@ -10992,7 +11012,7 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
     );
 
     let mut initial_bytes =
-        kitty_virtual_rgba_with_placement_payload(image_id, 1, 16, 8, 4, 2, initial_payload);
+        kitty_virtual_rgba_with_placement_payload(image_id, 1, 16, 8, 4, 2, &initial_payload);
     initial_bytes.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 4, 2));
     initial_bytes.extend_from_slice(b"\r\n");
     initial_bytes.extend_from_slice(&kitty_display_placement(image_id, 2, 4, 2));
@@ -11009,11 +11029,11 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
     let first_render = output.serialize().unwrap();
     let first_render = first_render.get(&client_id).unwrap();
     assert!(
-        first_render.contains(initial_payload),
+        first_render.contains(&initial_payload),
         "initial tab render should transmit the initial payload"
     );
 
-    let mut replace_bytes = kitty_retransmit_rgba_with_payload(image_id, 16, 8, updated_payload);
+    let mut replace_bytes = kitty_retransmit_rgba_with_payload(image_id, 16, 8, &updated_payload);
     replace_bytes.extend_from_slice(&placeholder_virtual_placement(image_id, 1, 4, 2));
     replace_bytes.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 4, 2));
     replace_bytes.extend_from_slice(b"\r\n");
@@ -11024,7 +11044,7 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
     let second_render = output.serialize().unwrap();
     let second_render = second_render.get(&client_id).unwrap();
     assert!(
-        second_render.contains(updated_payload),
+        second_render.contains(&updated_payload),
         "replace frame should transmit the updated payload"
     );
     assert!(
@@ -11043,7 +11063,10 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
 
 #[test]
 fn kitty_shared_asset_scene_keeps_rows_stable_across_tab_resize_cycles() {
-    let size = Size { cols: 100, rows: 24 };
+    let size = Size {
+        cols: 100,
+        rows: 24,
+    };
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let mut tab = create_new_tab_with_image_stores(
@@ -11086,7 +11109,11 @@ fn kitty_shared_asset_scene_keeps_rows_stable_across_tab_resize_cycles() {
             .unwrap()
             .unwrap();
         assert_eq!(
-            pane_render.image_output.kitty_scene.placeholder_renders.len(),
+            pane_render
+                .image_output
+                .kitty_scene
+                .placeholder_renders
+                .len(),
             1,
             "placeholder render should still be present immediately after narrowing"
         );
@@ -11096,7 +11123,10 @@ fn kitty_shared_asset_scene_keeps_rows_stable_across_tab_resize_cycles() {
             "explicit chunk should still be present immediately after narrowing"
         );
 
-        let wide = Size { cols: 100, rows: 24 };
+        let wide = Size {
+            cols: 100,
+            rows: 24,
+        };
         tab.resize_whole_tab(wide).unwrap();
         pane_render = tab
             .get_pane_with_id_mut(PaneId::Terminal(1))
@@ -11105,7 +11135,11 @@ fn kitty_shared_asset_scene_keeps_rows_stable_across_tab_resize_cycles() {
             .unwrap()
             .unwrap();
         assert_eq!(
-            pane_render.image_output.kitty_scene.placeholder_renders.len(),
+            pane_render
+                .image_output
+                .kitty_scene
+                .placeholder_renders
+                .len(),
             1,
             "placeholder render should still be present immediately after widening"
         );
@@ -11116,7 +11150,11 @@ fn kitty_shared_asset_scene_keeps_rows_stable_across_tab_resize_cycles() {
         );
     }
 
-    let final_placeholder = pane_render.image_output.kitty_scene.placeholder_renders.clone();
+    let final_placeholder = pane_render
+        .image_output
+        .kitty_scene
+        .placeholder_renders
+        .clone();
     let final_explicit = pane_render.image_output.kitty_scene.explicit_chunks.clone();
     assert_eq!(final_placeholder.len(), 1);
     assert_eq!(final_explicit.len(), 1);
@@ -11140,7 +11178,10 @@ fn kitty_shared_asset_scene_keeps_rows_stable_across_tab_resize_cycles() {
 
 #[test]
 fn kitty_shared_asset_resize_followup_frames_retransmit_and_redraw_both_modes() {
-    let size = Size { cols: 100, rows: 24 };
+    let size = Size {
+        cols: 100,
+        rows: 24,
+    };
     let client_id = 1;
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
@@ -11166,7 +11207,13 @@ fn kitty_shared_asset_resize_followup_frames_retransmit_and_redraw_both_modes() 
     tab.render(&mut output, None).unwrap();
     let _ = output.serialize().unwrap();
 
-    for target_size in [Size { cols: 40, rows: 24 }, Size { cols: 100, rows: 24 }] {
+    for target_size in [
+        Size { cols: 40, rows: 24 },
+        Size {
+            cols: 100,
+            rows: 24,
+        },
+    ] {
         tab.resize_whole_tab(target_size).unwrap();
         tab.render(&mut output, None).unwrap();
         let render = output.serialize().unwrap();
@@ -11193,7 +11240,10 @@ fn kitty_shared_asset_resize_followup_frames_retransmit_and_redraw_both_modes() 
 #[test]
 fn kitty_alt_screen_proof_scene_retains_assets_in_shared_store() {
     let proof_bytes = kitty_raw_proof_scene_bytes();
-    let size = Size { cols: 120, rows: 24 };
+    let size = Size {
+        cols: 120,
+        rows: 24,
+    };
     let client_id = 1;
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));

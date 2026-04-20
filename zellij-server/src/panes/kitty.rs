@@ -83,7 +83,9 @@ impl PendingKittyPlaceholder {
                     logical_row: previous_row,
                     column: previous_column,
                 },
-            ) => current_row == previous_row && *current_column == previous_column.saturating_add(1),
+            ) => {
+                current_row == previous_row && *current_column == previous_column.saturating_add(1)
+            },
             (
                 FlowAnchor::CanonicalLine {
                     canonical_line_index: current_line,
@@ -93,7 +95,10 @@ impl PendingKittyPlaceholder {
                     canonical_line_index: previous_line,
                     offset_in_line: previous_offset,
                 },
-            ) => current_line == previous_line && *current_offset == previous_offset.saturating_add(1),
+            ) => {
+                current_line == previous_line
+                    && *current_offset == previous_offset.saturating_add(1)
+            },
             _ => false,
         }
     }
@@ -213,7 +218,6 @@ struct PendingKittyTransmit {
     height: u32,
     placement: Option<KittyPlacement>,
     reply_context: PendingKittyReplyContext,
-    validate_payload_size: bool,
     payload: Vec<u8>,
 }
 
@@ -318,9 +322,14 @@ impl KittyImageState {
     fn next_synthetic_protocol_image_id(&mut self) -> u32 {
         loop {
             let candidate = self.next_generated_protocol_image_id;
-            self.next_generated_protocol_image_id =
-                self.next_generated_protocol_image_id.wrapping_add(1).max(0x8000_0001);
-            if !self.protocol_image_id_to_internal_id.contains_key(&candidate) {
+            self.next_generated_protocol_image_id = self
+                .next_generated_protocol_image_id
+                .wrapping_add(1)
+                .max(0x8000_0001);
+            if !self
+                .protocol_image_id_to_internal_id
+                .contains_key(&candidate)
+            {
                 return candidate;
             }
         }
@@ -514,8 +523,9 @@ impl KittyImageState {
                 let resolved_protocol_image_id =
                     self.protocol_image_id_for_create(protocol_image_id, image_number);
                 let image_id = if let Some(protocol_image_id) = resolved_protocol_image_id {
-                    if let Some(existing_image_id) =
-                        self.protocol_image_id_to_internal_id.get(&protocol_image_id)
+                    if let Some(existing_image_id) = self
+                        .protocol_image_id_to_internal_id
+                        .get(&protocol_image_id)
                     {
                         *existing_image_id
                     } else {
@@ -546,7 +556,6 @@ impl KittyImageState {
                     height,
                     placement,
                     reply_context,
-                    validate_payload_size: more,
                     payload,
                 });
                 if more {
@@ -555,12 +564,12 @@ impl KittyImageState {
                         reply: None,
                     }
                 } else {
-                        self.finalize_pending_transmit(
-                            anchor,
-                            cursor_x,
-                            scrollback_row,
-                            character_cell_size,
-                        )
+                    self.finalize_pending_transmit(
+                        anchor,
+                        cursor_x,
+                        scrollback_row,
+                        character_cell_size,
+                    )
                 }
             },
             ParsedKittyCommand::DisplayPlacement {
@@ -606,21 +615,21 @@ impl KittyImageState {
                         };
                     },
                 };
-                let image_dimensions = match self.kitty_asset_store.borrow().image_dimensions(image_id)
-                {
-                    Some(image_dimensions) => image_dimensions,
-                    None => {
-                        return KittyApcOutcome {
-                            effect: None,
-                            reply: build_non_query_reply(
-                                &reply_context,
-                                Some(resolved_protocol_image_id),
-                                image_number,
-                                Some(non_query_failure_message(reply_context.kind).to_string()),
-                            ),
-                        };
-                    },
-                };
+                let image_dimensions =
+                    match self.kitty_asset_store.borrow().image_dimensions(image_id) {
+                        Some(image_dimensions) => image_dimensions,
+                        None => {
+                            return KittyApcOutcome {
+                                effect: None,
+                                reply: build_non_query_reply(
+                                    &reply_context,
+                                    Some(resolved_protocol_image_id),
+                                    image_number,
+                                    Some(non_query_failure_message(reply_context.kind).to_string()),
+                                ),
+                            };
+                        },
+                    };
                 placement.image_id = image_id;
                 placement.anchor = anchor;
                 self.placements.retain(|p| {
@@ -672,7 +681,6 @@ impl KittyImageState {
                 if let Some(quiet) = parse_chunk_quiet(apc_bytes) {
                     pending.reply_context.quiet = quiet;
                 }
-                pending.validate_payload_size = true;
                 pending.payload.extend(payload);
                 if more {
                     KittyApcOutcome {
@@ -806,17 +814,22 @@ impl KittyImageState {
     }
 
     fn remove_protocol_image_references(&mut self, protocol_image_id: u32) {
-        self.protocol_image_id_to_internal_id.remove(&protocol_image_id);
-        if let Some(image_number) = self.protocol_image_id_to_image_number.remove(&protocol_image_id)
+        self.protocol_image_id_to_internal_id
+            .remove(&protocol_image_id);
+        if let Some(image_number) = self
+            .protocol_image_id_to_image_number
+            .remove(&protocol_image_id)
         {
-            if let Some(protocol_image_ids) =
-                self.image_number_to_protocol_image_ids.get_mut(&image_number)
+            if let Some(protocol_image_ids) = self
+                .image_number_to_protocol_image_ids
+                .get_mut(&image_number)
             {
                 protocol_image_ids.retain(|existing_protocol_image_id| {
                     *existing_protocol_image_id != protocol_image_id
                 });
                 if protocol_image_ids.is_empty() {
-                    self.image_number_to_protocol_image_ids.remove(&image_number);
+                    self.image_number_to_protocol_image_ids
+                        .remove(&image_number);
                 }
             }
         }
@@ -1190,8 +1203,9 @@ impl PendingKittyTransmit {
         };
         Ok(match self.image_format {
             KittyImageFormat::Png => {
-                let (width, height) = parse_png_dimensions(&payload)
-                    .ok_or_else(|| "EINVAL:Invalid image payload for requested format".to_string())?;
+                let (width, height) = parse_png_dimensions(&payload).ok_or_else(|| {
+                    "EINVAL:Invalid image payload for requested format".to_string()
+                })?;
                 KittyImageData::Png {
                     data: payload,
                     width,
@@ -1199,9 +1213,7 @@ impl PendingKittyTransmit {
                 }
             },
             KittyImageFormat::Rgb => {
-                if self.validate_payload_size {
-                    validate_raw_payload_size(payload.len(), self.width, self.height, 3)?;
-                }
+                validate_raw_payload_size(payload.len(), self.width, self.height, 3)?;
                 KittyImageData::Rgb {
                     data: payload,
                     width: self.width,
@@ -1209,9 +1221,7 @@ impl PendingKittyTransmit {
                 }
             },
             KittyImageFormat::Rgba => {
-                if self.validate_payload_size {
-                    validate_raw_payload_size(payload.len(), self.width, self.height, 4)?;
-                }
+                validate_raw_payload_size(payload.len(), self.width, self.height, 4)?;
                 KittyImageData::Rgba {
                     data: payload,
                     width: self.width,
@@ -1281,7 +1291,9 @@ fn decode_kitty_transport_payload(payload_b64: &[u8]) -> Option<Vec<u8>> {
     base64::decode(payload_b64).ok()
 }
 
-fn parse_kitty_transport_compression(compression: Option<&str>) -> Option<Option<KittyTransportCompression>> {
+fn parse_kitty_transport_compression(
+    compression: Option<&str>,
+) -> Option<Option<KittyTransportCompression>> {
     match compression {
         Some("z") => Some(Some(KittyTransportCompression::Zlib)),
         Some(_) => None,
@@ -1402,10 +1414,11 @@ pub fn kitty_delete_all_visible(apc_bytes: &[u8]) -> bool {
 pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<u32>, bool)> {
     match kitty_delete_request(apc_bytes)? {
         KittyDeleteRequest {
-            selector: KittyDeleteSelector::ImageId {
-                image_id,
-                placement_id,
-            },
+            selector:
+                KittyDeleteSelector::ImageId {
+                    image_id,
+                    placement_id,
+                },
             mode,
         } => Some((
             image_id,
@@ -1419,10 +1432,11 @@ pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<u32>, b
 pub fn kitty_delete_by_image_number(apc_bytes: &[u8]) -> Option<(u32, Option<u32>, bool)> {
     match kitty_delete_request(apc_bytes)? {
         KittyDeleteRequest {
-            selector: KittyDeleteSelector::ImageNumber {
-                image_number,
-                placement_id,
-            },
+            selector:
+                KittyDeleteSelector::ImageNumber {
+                    image_number,
+                    placement_id,
+                },
             mode,
         } => Some((
             image_number,
@@ -1568,8 +1582,8 @@ pub fn kitty_non_query_response(
     resolved_image_number: Option<u32>,
 ) -> Option<KittyQueryResponse> {
     let reply_context = parse_non_query_reply_context(apc_bytes)?;
-    let error = (!command_succeeded)
-        .then(|| non_query_failure_message(reply_context.kind).to_string());
+    let error =
+        (!command_succeeded).then(|| non_query_failure_message(reply_context.kind).to_string());
     build_non_query_reply(
         &reply_context,
         resolved_image_id.or(reply_context.parsed_image_id),
@@ -2146,7 +2160,6 @@ mod tests {
                 placement_id: None,
                 image_number: None,
             },
-            validate_payload_size: false,
             payload: payload.clone(),
         }
         .into_image_data()

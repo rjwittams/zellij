@@ -161,14 +161,25 @@ fn kitty_virtual_rgba_with_placement_payload(
     .into_bytes()
 }
 
+fn kitty_raw_payload_b64(width: u32, height: u32, bytes_per_pixel: usize, byte: u8) -> String {
+    let payload_len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
+        .unwrap();
+    base64::encode(vec![byte; payload_len])
+}
+
+fn kitty_rgba_payload_b64(width: u32, height: u32) -> String {
+    kitty_raw_payload_b64(width, height, 4, 0)
+}
+
 fn kitty_retransmit_rgba_with_payload(
     image_id: u32,
     width: u32,
     height: u32,
     payload_b64: &str,
 ) -> Vec<u8> {
-    format!("\u{1b}_Ga=t,f=32,s={width},v={height},i={image_id};{payload_b64}\u{1b}\\")
-        .into_bytes()
+    format!("\u{1b}_Ga=t,f=32,s={width},v={height},i={image_id};{payload_b64}\u{1b}\\").into_bytes()
 }
 
 fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u32) -> Vec<u8> {
@@ -192,25 +203,30 @@ fn kitty_display_placement_crop(
 }
 
 fn kitty_explicit_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
-    format!("\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAA==\u{1b}\\")
-        .into_bytes()
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
+    format!(
+        "\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
 }
 
 fn kitty_raw_proof_scene_bytes() -> Vec<u8> {
+    let first_stored_payload = kitty_rgba_payload_b64(64, 32);
+    let second_stored_payload = kitty_raw_payload_b64(96, 64, 4, 0xFF);
     let mut bytes = b"\x1b[?1049h\x1b[2J\x1b[H\x1b[?25l\x1b_Gq=2,a=d,d=A;\x1b\\".to_vec();
     bytes.extend_from_slice(&kitty_explicit_rgba(3001, 64, 32, 14, 7));
     bytes.extend_from_slice(&kitty_retransmit_rgba_with_payload(
         3002,
         64,
         32,
-        "AAAAAAAAAAA=",
+        &first_stored_payload,
     ));
     bytes.extend_from_slice(&kitty_display_placement(3002, 1, 14, 7));
     bytes.extend_from_slice(&kitty_retransmit_rgba_with_payload(
         3003,
         96,
         64,
-        "/////w==",
+        &second_stored_payload,
     ));
     bytes.extend_from_slice(&kitty_display_placement_crop(3003, 1, 14, 7, 0, 0, 48, 32));
     bytes.extend_from_slice(&kitty_display_placement(3003, 2, 14, 7));
@@ -223,8 +239,7 @@ fn placeholder_virtual_placement(
     cols: u32,
     rows: u32,
 ) -> Vec<u8> {
-    format!("\u{1b}_Ga=p,U=1,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\")
-        .into_bytes()
+    format!("\u{1b}_Ga=p,U=1,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
 }
 
 fn placeholder_rgba_text_with_placement(
@@ -6197,13 +6212,16 @@ fn integration_pty_bytes_not_delivered_when_viewport_unchanged() {
 
 #[test]
 fn screen_kitty_shared_asset_replace_emits_updated_payloads() {
-    let size = Size { cols: 120, rows: 24 };
+    let size = Size {
+        cols: 120,
+        rows: 24,
+    };
     let mut mock_screen = MockScreen::new(size);
     mock_screen.drop_all_pty_messages();
     let screen_thread = mock_screen.run(None, vec![]);
     let image_id = 122;
-    let initial_payload = "AAAAAAAAAAA=";
-    let updated_payload = "/////w==";
+    let initial_payload = kitty_rgba_payload_b64(16, 8);
+    let updated_payload = kitty_raw_payload_b64(16, 8, 4, 0xFF);
 
     let received_server_instructions = Arc::new(Mutex::new(vec![]));
     let server_receiver = mock_screen.server_receiver.take().unwrap();
@@ -6222,22 +6240,24 @@ fn screen_kitty_shared_asset_replace_emits_updated_payloads() {
 
     let _ = mock_screen
         .to_screen
-        .send(ScreenInstruction::TerminalPixelDimensions(PixelDimensions {
-            character_cell_size: Some(SizeInPixels {
-                width: 8,
-                height: 21,
-            }),
-            text_area_size: None,
-        }));
+        .send(ScreenInstruction::TerminalPixelDimensions(
+            PixelDimensions {
+                character_cell_size: Some(SizeInPixels {
+                    width: 8,
+                    height: 21,
+                }),
+                text_area_size: None,
+            },
+        ));
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     let mut initial_burst =
-        kitty_virtual_rgba_with_placement_payload(image_id, 1, 16, 8, 4, 2, initial_payload);
+        kitty_virtual_rgba_with_placement_payload(image_id, 1, 16, 8, 4, 2, &initial_payload);
     initial_burst.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 4, 2));
     initial_burst.extend_from_slice(b"\r\n");
     initial_burst.extend_from_slice(&kitty_display_placement(image_id, 2, 4, 2));
 
-    let mut replace_burst = kitty_retransmit_rgba_with_payload(image_id, 16, 8, updated_payload);
+    let mut replace_burst = kitty_retransmit_rgba_with_payload(image_id, 16, 8, &updated_payload);
     replace_burst.extend_from_slice(&placeholder_virtual_placement(image_id, 1, 4, 2));
     replace_burst.extend_from_slice(&placeholder_rgba_text_with_placement(image_id, 1, 4, 2));
     replace_burst.extend_from_slice(b"\r\n");
@@ -6268,7 +6288,7 @@ fn screen_kitty_shared_asset_replace_emits_updated_payloads() {
         .expect("expected screen test to capture at least one render");
 
     assert!(
-        last_render.contains(updated_payload),
+        last_render.contains(&updated_payload),
         "screen-level shared-asset replace should emit the updated payload; last render was: {last_render:?}"
     );
     assert!(
@@ -6284,7 +6304,10 @@ fn screen_kitty_shared_asset_replace_emits_updated_payloads() {
 #[test]
 fn screen_alt_screen_proof_scene_resends_stored_assets_after_full_reset() {
     let proof_bytes = kitty_raw_proof_scene_bytes();
-    let size = Size { cols: 120, rows: 24 };
+    let size = Size {
+        cols: 120,
+        rows: 24,
+    };
     let mut initial_layout = TiledPaneLayout::default();
     initial_layout.children_split_direction = SplitDirection::Vertical;
     initial_layout.children = vec![TiledPaneLayout::default(), TiledPaneLayout::default()];
@@ -6309,13 +6332,15 @@ fn screen_alt_screen_proof_scene_resends_stored_assets_after_full_reset() {
 
     let _ = mock_screen
         .to_screen
-        .send(ScreenInstruction::TerminalPixelDimensions(PixelDimensions {
-            character_cell_size: Some(SizeInPixels {
-                width: 8,
-                height: 21,
-            }),
-            text_area_size: None,
-        }));
+        .send(ScreenInstruction::TerminalPixelDimensions(
+            PixelDimensions {
+                character_cell_size: Some(SizeInPixels {
+                    width: 8,
+                    height: 21,
+                }),
+                text_area_size: None,
+            },
+        ));
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     let _ = mock_screen

@@ -229,10 +229,7 @@ fn kitty_chunk_signature(chunk: &KittyImageChunk) -> String {
 }
 
 fn assert_kitty_chunk_sets_eq(actual: &[KittyImageChunk], expected: &[KittyImageChunk]) {
-    let mut actual = actual
-        .iter()
-        .map(kitty_chunk_signature)
-        .collect::<Vec<_>>();
+    let mut actual = actual.iter().map(kitty_chunk_signature).collect::<Vec<_>>();
     let mut expected = expected
         .iter()
         .map(kitty_chunk_signature)
@@ -1024,11 +1021,7 @@ fn test_image_output_asset_change_invalidates_all_referencing_placements() {
     );
     output.add_pane_image_output_to_client(
         1,
-        pane_image_output_with_kitty_scene(vec![
-            first_chunk,
-            second_chunk,
-            other_asset_chunk,
-        ]),
+        pane_image_output_with_kitty_scene(vec![first_chunk, second_chunk, other_asset_chunk]),
         None,
     );
 
@@ -1560,8 +1553,7 @@ fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments()
 }
 
 #[test]
-fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_with_columns_only()
-{
+fn test_prepare_render_body_serializes_multi_occluder_kitty_explicit_fragments_with_columns_only() {
     let client_ids = create_test_clients(1);
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
@@ -1841,8 +1833,7 @@ fn test_clip_kitty_explicit_fragment_against_two_covering_panes() {
             rows: 5,
         },
     ];
-    let expected =
-        expected_explicit_fragments_for_occluders(&chunk, &occluders);
+    let expected = expected_explicit_fragments_for_occluders(&chunk, &occluders);
 
     let fragments = visible_image_fragments(
         &stack,
@@ -1893,8 +1884,7 @@ fn test_clip_cropped_kitty_explicit_fragment_against_two_covering_panes() {
             rows: 5,
         },
     ];
-    let expected =
-        expected_explicit_fragments_for_occluders(&chunk, &occluders);
+    let expected = expected_explicit_fragments_for_occluders(&chunk, &occluders);
 
     let fragments = visible_image_fragments(
         &stack,

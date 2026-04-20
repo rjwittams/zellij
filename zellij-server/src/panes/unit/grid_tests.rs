@@ -5189,9 +5189,24 @@ fn viewport_texts(grid: &Grid) -> Vec<String> {
     grid.viewport.iter().map(|r| row_text(r)).collect()
 }
 
+fn kitty_raw_payload_b64(width: u32, height: u32, bytes_per_pixel: usize, byte: u8) -> String {
+    let payload_len = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
+        .unwrap();
+    base64::encode(vec![byte; payload_len])
+}
+
+fn kitty_rgba_payload_b64(width: u32, height: u32) -> String {
+    kitty_raw_payload_b64(width, height, 4, 0)
+}
+
 fn kitty_explicit_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
-    format!("\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAA==\u{1b}\\")
-        .into_bytes()
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
+    format!(
+        "\u{1b}_Ga=T,f=32,s={width},v={height},c={cols},r={rows},i={image_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
 }
 
 fn kitty_explicit_rgba_no_movement(
@@ -5201,8 +5216,9 @@ fn kitty_explicit_rgba_no_movement(
     cols: u32,
     rows: u32,
 ) -> Vec<u8> {
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
     format!(
-        "\u{1b}_Ga=T,C=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAA==\u{1b}\\"
+        "\u{1b}_Ga=T,C=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};{payload_b64}\u{1b}\\"
     )
     .into_bytes()
 }
@@ -5219,15 +5235,17 @@ fn kitty_explicit_rgba_no_movement_with_placement(
     let z_fragment = z_index
         .map(|z_index| format!(",z={z_index}"))
         .unwrap_or_default();
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
     format!(
-        "\u{1b}_Ga=T,C=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id},p={placement_id}{z_fragment};AAAAAA==\u{1b}\\"
+        "\u{1b}_Ga=T,C=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id},p={placement_id}{z_fragment};{payload_b64}\u{1b}\\"
     )
     .into_bytes()
 }
 
 fn kitty_virtual_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
     format!(
-        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};AAAAAAAAAAA=\u{1b}\\"
+        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id};{payload_b64}\u{1b}\\"
     )
     .into_bytes()
 }
@@ -5240,8 +5258,9 @@ fn kitty_virtual_rgba_with_placement(
     cols: u32,
     rows: u32,
 ) -> Vec<u8> {
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
     format!(
-        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id},p={placement_id};AAAAAAAAAAA=\u{1b}\\"
+        "\u{1b}_Ga=T,U=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id},p={placement_id};{payload_b64}\u{1b}\\"
     )
     .into_bytes()
 }
@@ -5277,7 +5296,8 @@ fn kitty_virtual_rgb_with_placement(
 }
 
 fn kitty_retransmit_rgba(image_id: u32, width: u32, height: u32) -> Vec<u8> {
-    format!("\u{1b}_Ga=t,f=32,s={width},v={height},i={image_id};AAAAAA==\u{1b}\\").into_bytes()
+    let payload_b64 = kitty_rgba_payload_b64(width, height);
+    format!("\u{1b}_Ga=t,f=32,s={width},v={height},i={image_id};{payload_b64}\u{1b}\\").into_bytes()
 }
 
 fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u32) -> Vec<u8> {
@@ -6531,10 +6551,7 @@ fn kitty_chunked_upload_with_image_number_emits_final_reply_with_resolved_id() {
     let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
         create_grid_with_shared_stores(8, 12);
 
-    feed_bytes(
-        &mut grid,
-        b"\x1b_Gq=0,a=t,f=24,s=2,v=2,I=93,m=1;abcd\x1b\\",
-    );
+    feed_bytes(&mut grid, b"\x1b_Gq=0,a=t,f=24,s=2,v=2,I=93,m=1;abcd\x1b\\");
     feed_bytes(&mut grid, b"\x1b_Gm=1;efgh\x1b\\");
     feed_bytes(&mut grid, b"\x1b_Gm=1;ijkx\x1b\\");
     assert!(
@@ -6548,7 +6565,11 @@ fn kitty_chunked_upload_with_image_number_emits_final_reply_with_resolved_id() {
         .iter()
         .map(|message| String::from_utf8(message.clone()).unwrap())
         .collect();
-    assert_eq!(replies.len(), 1, "expected only one final reply, got {replies:?}");
+    assert_eq!(
+        replies.len(),
+        1,
+        "expected only one final reply, got {replies:?}"
+    );
     assert!(
         replies[0].contains("I=93;OK"),
         "final reply should preserve the image number, got {replies:?}"
@@ -6566,10 +6587,7 @@ fn kitty_chunked_upload_emits_final_enodata_only_on_terminal_chunk() {
     let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
         create_grid_with_shared_stores(8, 12);
 
-    feed_bytes(
-        &mut grid,
-        b"\x1b_Gq=0,a=t,f=32,s=2,v=2,i=84,m=1;abcd\x1b\\",
-    );
+    feed_bytes(&mut grid, b"\x1b_Gq=0,a=t,f=32,s=2,v=2,i=84,m=1;abcd\x1b\\");
     assert!(
         grid.pending_messages_to_pty.is_empty(),
         "opening chunk should not emit an early error reply"
@@ -6581,10 +6599,60 @@ fn kitty_chunked_upload_emits_final_enodata_only_on_terminal_chunk() {
         .iter()
         .map(|message| String::from_utf8(message.clone()).unwrap())
         .collect();
-    assert_eq!(replies.len(), 1, "expected one final failure reply, got {replies:?}");
+    assert_eq!(
+        replies.len(),
+        1,
+        "expected one final failure reply, got {replies:?}"
+    );
     assert!(
         replies[0].contains("ENODATA:Insufficient image data: 6 < 16"),
         "terminal chunk should report ENODATA with the expected byte counts, got {replies:?}"
+    );
+}
+
+#[test]
+fn kitty_direct_rgba_upload_emits_enodata_for_undersized_payload() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 12);
+
+    feed_bytes(&mut grid, b"\x1b_Gq=0,a=t,f=32,s=2,v=2,i=85;AAAAAA==\x1b\\");
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert_eq!(
+        replies.len(),
+        1,
+        "expected one failure reply, got {replies:?}"
+    );
+    assert!(
+        replies[0].contains("ENODATA:Insufficient image data: 4 < 16"),
+        "direct rgba upload should report ENODATA with the expected byte counts, got {replies:?}"
+    );
+}
+
+#[test]
+fn kitty_direct_rgb_upload_emits_enodata_for_undersized_payload() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 12);
+
+    feed_bytes(&mut grid, b"\x1b_Gq=0,a=t,f=24,s=2,v=2,i=86;EjRW\x1b\\");
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert_eq!(
+        replies.len(),
+        1,
+        "expected one failure reply, got {replies:?}"
+    );
+    assert!(
+        replies[0].contains("ENODATA:Insufficient image data: 3 < 12"),
+        "direct rgb upload should report ENODATA with the expected byte counts, got {replies:?}"
     );
 }
 
@@ -7171,10 +7239,11 @@ fn kitty_retransmit_then_recreate_emits_both_recreated_placements_to_output() {
     output.add_pane_image_output_to_client(1, first_render.image_output, None);
     let _ = output.serialize().unwrap();
 
+    let recreated_payload = kitty_rgba_payload_b64(16, 8);
     feed_bytes(&mut grid, &kitty_retransmit_rgba(24, 16, 8));
     feed_bytes(
         &mut grid,
-        &kitty_virtual_rgba_with_placement_payload(24, 1, 16, 8, 4, 2, "AAAAAA=="),
+        &kitty_virtual_rgba_with_placement_payload(24, 1, 16, 8, 4, 2, &recreated_payload),
     );
     feed_bytes(
         &mut grid,
@@ -7226,9 +7295,10 @@ fn kitty_retransmit_then_recreate_emits_both_recreated_placements_to_output() {
 fn kitty_retransmit_then_recreate_emits_updated_asset_payload_to_output() {
     let (mut grid, sixel_image_store, kitty_asset_store, character_cell_size) =
         create_grid_with_shared_stores(6, 20);
+    let initial_payload = kitty_rgba_payload_b64(16, 8);
     feed_bytes(
         &mut grid,
-        &kitty_virtual_rgba_with_placement_payload(26, 1, 16, 8, 4, 2, "AAAAAAAAAAA="),
+        &kitty_virtual_rgba_with_placement_payload(26, 1, 16, 8, 4, 2, &initial_payload),
     );
     feed_bytes(
         &mut grid,
@@ -7257,14 +7327,15 @@ fn kitty_retransmit_then_recreate_emits_updated_asset_payload_to_output() {
     let initial_serialized = output.serialize().unwrap();
     let initial_client_output = initial_serialized.get(&1).unwrap();
     assert!(
-        initial_client_output.contains("AAAAAAAAAAA="),
+        initial_client_output.contains(&initial_payload),
         "initial frame should contain the original kitty asset payload"
     );
 
+    let updated_payload = kitty_raw_payload_b64(16, 8, 4, 0xFF);
     feed_bytes(&mut grid, &kitty_retransmit_rgba(26, 16, 8));
     feed_bytes(
         &mut grid,
-        &kitty_virtual_rgba_with_placement_payload(26, 1, 16, 8, 4, 2, "/////w=="),
+        &kitty_virtual_rgba_with_placement_payload(26, 1, 16, 8, 4, 2, &updated_payload),
     );
     feed_bytes(
         &mut grid,
@@ -7284,11 +7355,11 @@ fn kitty_retransmit_then_recreate_emits_updated_asset_payload_to_output() {
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
     assert!(
-        client_output.contains("/////w=="),
+        client_output.contains(&updated_payload),
         "recreate path should emit the updated kitty asset payload"
     );
     assert!(
-        !client_output.contains("AAAAAAAAAAA="),
+        !client_output.contains(&initial_payload),
         "recreate path should not re-emit the stale initial kitty asset payload"
     );
 }
