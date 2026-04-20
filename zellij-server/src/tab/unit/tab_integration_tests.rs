@@ -228,6 +228,7 @@ fn create_new_tab(size: Size, default_mode: ModeInfo) -> Tab {
     let copy_options = CopyOptions::default();
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let current_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
     let currently_marking_pane_group = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
@@ -247,6 +248,7 @@ fn create_new_tab(size: Size, default_mode: ModeInfo) -> Tab {
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -315,6 +317,7 @@ fn create_new_tab_without_pane_frames(size: Size, default_mode: ModeInfo) -> Tab
     let copy_options = CopyOptions::default();
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let current_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
     let currently_marking_pane_group = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
@@ -334,6 +337,7 @@ fn create_new_tab_without_pane_frames(size: Size, default_mode: ModeInfo) -> Tab
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -417,6 +421,7 @@ fn create_new_tab_with_swap_layouts(
     let copy_options = CopyOptions::default();
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let current_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
     let currently_marking_pane_group = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
@@ -436,6 +441,7 @@ fn create_new_tab_with_swap_layouts(
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -520,6 +526,7 @@ fn create_new_tab_with_os_api(
     let copy_options = CopyOptions::default();
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let current_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
     let currently_marking_pane_group = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
@@ -539,6 +546,7 @@ fn create_new_tab_with_os_api(
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -607,6 +615,7 @@ fn create_new_tab_with_layout(size: Size, default_mode: ModeInfo, layout: &str) 
     let copy_options = CopyOptions::default();
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let layout = Layout::from_str(layout, "layout_file_name".into(), None, None).unwrap();
     let (tab_layout, floating_panes_layout) = layout.new_tab();
     let current_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
@@ -628,6 +637,7 @@ fn create_new_tab_with_layout(size: Size, default_mode: ModeInfo, layout: &str) 
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -712,6 +722,7 @@ fn create_new_tab_with_mock_pty_writer(
     let copy_options = CopyOptions::default();
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let current_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
     let currently_marking_pane_group = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
@@ -731,6 +742,7 @@ fn create_new_tab_with_mock_pty_writer(
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -829,7 +841,7 @@ fn create_new_tab_with_image_stores(
     let web_sharing = WebSharing::Off;
     let web_server_ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
     let web_server_port = 8080;
-    let mut tab = Tab::new_with_kitty_asset_store(
+    let mut tab = Tab::new(
         index,
         position,
         name,
@@ -900,6 +912,7 @@ use vte;
 
 fn take_snapshot(ansi_instructions: &str, rows: usize, columns: usize, palette: Palette) -> String {
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
@@ -918,6 +931,7 @@ fn take_snapshot(ansi_instructions: &str, rows: usize, columns: usize, palette: 
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -938,6 +952,7 @@ fn take_snapshot_with_sixel(
     sixel_image_store: Rc<RefCell<SixelImageStore>>,
 ) -> String {
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
         height: 21,
@@ -955,6 +970,7 @@ fn take_snapshot_with_sixel(
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -975,6 +991,7 @@ fn take_snapshot_and_cursor_position(
 ) -> (String, Option<(usize, usize)>) {
     // snapshot, x_coordinates, y_coordinates
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -989,6 +1006,7 @@ fn take_snapshot_and_cursor_position(
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1274,7 +1292,7 @@ fn render_after_tiled_pane_resize(mode: KittyResizeRenderMode) -> (String, Strin
     tab.handle_pty_bytes(2, Vec::from("Right pane content".as_bytes()))
         .unwrap();
 
-    let mut output = Output::new_with_kitty_asset_store(
+    let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
         character_cell_size,
@@ -3715,12 +3733,19 @@ fn move_floating_pane_with_sixel_image() {
     };
     let client_id = 1;
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let mut tab = create_new_tab_with_sixel_support(size, sixel_image_store.clone());
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
         height: 21,
     })));
-    let mut output = Output::new(sixel_image_store.clone(), character_cell_size, true, true);
+    let mut output = Output::new(
+        sixel_image_store.clone(),
+        kitty_asset_store,
+        character_cell_size,
+        true,
+        true,
+    );
 
     tab.toggle_floating_panes(Some(client_id), None, None)
         .unwrap();
@@ -3774,12 +3799,19 @@ fn floating_pane_above_sixel_image() {
     };
     let client_id = 1;
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let mut tab = create_new_tab_with_sixel_support(size, sixel_image_store.clone());
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
         height: 21,
     })));
-    let mut output = Output::new(sixel_image_store.clone(), character_cell_size, true, true);
+    let mut output = Output::new(
+        sixel_image_store.clone(),
+        kitty_asset_store,
+        character_cell_size,
+        true,
+        true,
+    );
 
     tab.toggle_floating_panes(Some(client_id), None, None)
         .unwrap();
@@ -3845,7 +3877,7 @@ fn kitty_placeholder_survives_tab_resize_and_render() {
     bytes.extend_from_slice(&placeholder_rgba_text(77, 4, 2));
     tab.handle_pty_bytes(1, bytes).unwrap();
 
-    let mut first_output = Output::new_with_kitty_asset_store(
+    let mut first_output = Output::new(
         sixel_image_store.clone(),
         kitty_asset_store.clone(),
         character_cell_size.clone(),
@@ -3860,7 +3892,7 @@ fn kitty_placeholder_survives_tab_resize_and_render() {
 
     tab.resize_whole_tab(resized).unwrap();
 
-    let mut resized_output = Output::new_with_kitty_asset_store(
+    let mut resized_output = Output::new(
         sixel_image_store,
         kitty_asset_store,
         character_cell_size,
@@ -11018,7 +11050,7 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
     initial_bytes.extend_from_slice(&kitty_display_placement(image_id, 2, 4, 2));
     tab.handle_pty_bytes(1, initial_bytes).unwrap();
 
-    let mut output = Output::new_with_kitty_asset_store(
+    let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
         character_cell_size,
@@ -11197,7 +11229,7 @@ fn kitty_shared_asset_resize_followup_frames_retransmit_and_redraw_both_modes() 
     tab.handle_pty_bytes(1, shared_asset_resize_scene_bytes())
         .unwrap();
 
-    let mut output = Output::new_with_kitty_asset_store(
+    let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
         character_cell_size,
@@ -11259,7 +11291,7 @@ fn kitty_alt_screen_proof_scene_retains_assets_in_shared_store() {
 
     tab.handle_pty_bytes(1, proof_bytes).unwrap();
 
-    let mut output = Output::new_with_kitty_asset_store(
+    let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store.clone(),
         character_cell_size,
@@ -13263,6 +13295,7 @@ fn create_new_tab_with_plugin_receiver(
     let copy_options = CopyOptions::default();
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let current_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
     let currently_marking_pane_group = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
@@ -13282,6 +13315,7 @@ fn create_new_tab_with_plugin_receiver(
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -15056,6 +15090,7 @@ fn create_new_tab_with_server_receiver(
     let copy_options = CopyOptions::default();
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let current_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
     let currently_marking_pane_group = Rc::new(RefCell::new(HashMap::new()));
     let mut tab = Tab::new(
@@ -15066,6 +15101,7 @@ fn create_new_tab_with_server_receiver(
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -15305,6 +15341,7 @@ fn osc99_grid_parses_and_stores_notification() {
     use crate::panes::link_handler::LinkHandler;
 
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
@@ -15319,6 +15356,7 @@ fn osc99_grid_parses_and_stores_notification() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false, // debug
         true,  // arrow_fonts

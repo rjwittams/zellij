@@ -732,90 +732,6 @@ impl Tab {
         character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
         stacked_resize: Rc<RefCell<bool>>,
         sixel_image_store: Rc<RefCell<SixelImageStore>>,
-        os_api: Box<dyn ServerOsApi>,
-        senders: ThreadSenders,
-        max_panes: Option<usize>,
-        style: Style,
-        default_mode_info: ModeInfo,
-        draw_pane_frames: bool,
-        auto_layout: bool,
-        connected_clients_in_app: Rc<RefCell<HashMap<ClientId, bool>>>, // bool -> is_web_client
-        session_is_mirrored: bool,
-        client_id: Option<ClientId>,
-        copy_options: CopyOptions,
-        terminal_emulator_colors: Rc<RefCell<Palette>>,
-        terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
-        swap_layouts: (Vec<SwapTiledLayout>, Vec<SwapFloatingLayout>),
-        default_shell: PathBuf,
-        debug: bool,
-        arrow_fonts: bool,
-        styled_underlines: bool,
-        osc8_hyperlinks: bool,
-        explicitly_disable_kitty_keyboard_protocol: bool,
-        default_editor: Option<PathBuf>,
-        web_clients_allowed: bool,
-        web_sharing: WebSharing,
-        current_pane_group: Rc<RefCell<PaneGroups>>,
-        currently_marking_pane_group: Rc<RefCell<HashMap<ClientId, bool>>>,
-        advanced_mouse_actions: bool,
-        mouse_hover_effects: bool,
-        focus_follows_mouse: bool,
-        mouse_click_through: bool,
-        web_server_ip: IpAddr,
-        web_server_port: u16,
-    ) -> Self {
-        Self::new_with_kitty_asset_store(
-            id,
-            position,
-            name,
-            display_area,
-            character_cell_size,
-            stacked_resize,
-            sixel_image_store,
-            Rc::new(RefCell::new(KittyAssetStore::default())),
-            os_api,
-            senders,
-            max_panes,
-            style,
-            default_mode_info,
-            draw_pane_frames,
-            auto_layout,
-            connected_clients_in_app,
-            session_is_mirrored,
-            client_id,
-            copy_options,
-            terminal_emulator_colors,
-            terminal_emulator_color_codes,
-            swap_layouts,
-            default_shell,
-            debug,
-            arrow_fonts,
-            styled_underlines,
-            osc8_hyperlinks,
-            explicitly_disable_kitty_keyboard_protocol,
-            default_editor,
-            web_clients_allowed,
-            web_sharing,
-            current_pane_group,
-            currently_marking_pane_group,
-            advanced_mouse_actions,
-            mouse_hover_effects,
-            focus_follows_mouse,
-            mouse_click_through,
-            web_server_ip,
-            web_server_port,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_kitty_asset_store(
-        id: usize,
-        position: usize,
-        name: String,
-        display_area: Size,
-        character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
-        stacked_resize: Rc<RefCell<bool>>,
-        sixel_image_store: Rc<RefCell<SixelImageStore>>,
         kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
         os_api: Box<dyn ServerOsApi>,
         senders: ThreadSenders,
@@ -980,7 +896,7 @@ impl Tab {
     ) -> Result<()> {
         self.swap_layouts
             .set_base_layout((layout.clone(), floating_panes_layout.clone()));
-        match LayoutApplier::new_with_kitty_asset_store(
+        match LayoutApplier::new(
             &self.viewport,
             &self.senders,
             &self.sixel_image_store,
@@ -1063,6 +979,7 @@ impl Tab {
             &self.viewport,
             &self.senders,
             &self.sixel_image_store,
+            &self.kitty_asset_store,
             &self.link_handler,
             &self.terminal_emulator_colors,
             &self.terminal_emulator_color_codes,
@@ -1156,6 +1073,7 @@ impl Tab {
                 &self.viewport,
                 &self.senders,
                 &self.sixel_image_store,
+                &self.kitty_asset_store,
                 &self.link_handler,
                 &self.terminal_emulator_colors,
                 &self.terminal_emulator_color_codes,
@@ -1196,6 +1114,7 @@ impl Tab {
                 &self.viewport,
                 &self.senders,
                 &self.sixel_image_store,
+                &self.kitty_asset_store,
                 &self.link_handler,
                 &self.terminal_emulator_colors,
                 &self.terminal_emulator_color_codes,
@@ -1682,7 +1601,7 @@ impl Tab {
         let mut new_pane = match pid {
             PaneId::Terminal(term_pid) => {
                 let next_terminal_position = self.get_next_terminal_position();
-                Box::new(TerminalPane::new_with_kitty_asset_store(
+                Box::new(TerminalPane::new(
                     term_pid,
                     PaneGeom::default(), // this will be filled out later
                     self.style,
@@ -1705,7 +1624,7 @@ impl Tab {
                 )) as Box<dyn Pane>
             },
             PaneId::Plugin(plugin_pid) => {
-                Box::new(PluginPane::new_with_kitty_asset_store(
+                Box::new(PluginPane::new(
                     plugin_pid,
                     PaneGeom::default(), // this will be filled out later
                     self.senders
@@ -1797,7 +1716,7 @@ impl Tab {
         let mut new_pane = match pid {
             PaneId::Terminal(term_pid) => {
                 let next_terminal_position = self.get_next_terminal_position();
-                Box::new(TerminalPane::new_with_kitty_asset_store(
+                Box::new(TerminalPane::new(
                     term_pid,
                     PaneGeom::default(), // this will be filled out later
                     self.style,
@@ -1820,7 +1739,7 @@ impl Tab {
                 )) as Box<dyn Pane>
             },
             PaneId::Plugin(plugin_pid) => {
-                Box::new(PluginPane::new_with_kitty_asset_store(
+                Box::new(PluginPane::new(
                     plugin_pid,
                     PaneGeom::default(), // this will be filled out later
                     self.senders
@@ -1901,7 +1820,7 @@ impl Tab {
         let mut new_pane = match pid {
             PaneId::Terminal(term_pid) => {
                 let next_terminal_position = self.get_next_terminal_position();
-                Box::new(TerminalPane::new_with_kitty_asset_store(
+                Box::new(TerminalPane::new(
                     term_pid,
                     PaneGeom::default(), // this will be filled out later
                     self.style,
@@ -1924,7 +1843,7 @@ impl Tab {
                 )) as Box<dyn Pane>
             },
             PaneId::Plugin(plugin_pid) => {
-                Box::new(PluginPane::new_with_kitty_asset_store(
+                Box::new(PluginPane::new(
                     plugin_pid,
                     PaneGeom::default(), // this will be filled out later
                     self.senders
@@ -2049,7 +1968,7 @@ impl Tab {
         let mut new_pane = match pid {
             PaneId::Terminal(term_pid) => {
                 let next_terminal_position = self.get_next_terminal_position();
-                Box::new(TerminalPane::new_with_kitty_asset_store(
+                Box::new(TerminalPane::new(
                     term_pid,
                     PaneGeom::default(), // this will be filled out later
                     self.style,
@@ -2072,7 +1991,7 @@ impl Tab {
                 )) as Box<dyn Pane>
             },
             PaneId::Plugin(plugin_pid) => {
-                Box::new(PluginPane::new_with_kitty_asset_store(
+                Box::new(PluginPane::new(
                     plugin_pid,
                     PaneGeom::default(), // this will be filled out later
                     self.senders
@@ -2266,7 +2185,7 @@ impl Tab {
         match new_pane_id {
             PaneId::Terminal(new_pane_id) => {
                 let next_terminal_position = self.get_next_terminal_position(); // TODO: this is not accurate in this case
-                let mut new_pane = TerminalPane::new_with_kitty_asset_store(
+                let mut new_pane = TerminalPane::new(
                     new_pane_id,
                     PaneGeom::default(), // the initial size will be set later
                     self.style,
@@ -2331,7 +2250,7 @@ impl Tab {
                 }
             },
             PaneId::Plugin(plugin_pid) => {
-                let mut new_pane = PluginPane::new_with_kitty_asset_store(
+                let mut new_pane = PluginPane::new(
                     plugin_pid,
                     PaneGeom::default(), // this will be filled out later
                     self.senders
@@ -2472,7 +2391,7 @@ impl Tab {
         if self.tiled_panes.can_split_pane_horizontally(client_id) {
             if let PaneId::Terminal(term_pid) = pid {
                 let next_terminal_position = self.get_next_terminal_position();
-                let mut new_terminal = TerminalPane::new_with_kitty_asset_store(
+                let mut new_terminal = TerminalPane::new(
                     term_pid,
                     PaneGeom::default(), // the initial size will be set later
                     self.style,
@@ -2540,7 +2459,7 @@ impl Tab {
         if self.tiled_panes.can_split_pane_vertically(client_id) {
             if let PaneId::Terminal(term_pid) = pid {
                 let next_terminal_position = self.get_next_terminal_position();
-                let mut new_terminal = TerminalPane::new_with_kitty_asset_store(
+                let mut new_terminal = TerminalPane::new(
                     term_pid,
                     PaneGeom::default(), // the initial size will be set later
                     self.style,
@@ -3460,7 +3379,7 @@ impl Tab {
         );
         if self.should_clear_display_before_rendering {
             let clear_display = "\u{1b}[2J";
-            output.add_pre_vte_instruction_to_multiple_clients(
+            output.add_display_clearing_pre_vte_instruction_to_multiple_clients(
                 connected_clients.iter().copied(),
                 clear_display,
             );
@@ -6041,7 +5960,7 @@ impl Tab {
     }
     fn new_scrollback_editor_pane(&self, pid: u32) -> TerminalPane {
         let next_terminal_position = self.get_next_terminal_position();
-        let mut new_pane = TerminalPane::new_with_kitty_asset_store(
+        let mut new_pane = TerminalPane::new(
             pid,
             PaneGeom::default(), // the initial size will be set later
             self.style,

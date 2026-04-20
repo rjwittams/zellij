@@ -5,7 +5,7 @@ use super::super::kitty_diff::{
 };
 use super::super::{
     CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, Output, OutputBuffer,
-    PaneImageRenderOutput, SixelImageChunk,
+    PaneImageRenderOutput, RenderedImageState, SixelImageChunk,
 };
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::pane_image_scene::KittyRenderBundle;
@@ -48,7 +48,7 @@ fn create_test_output_with_state() -> (
     let styled_underlines = true;
     let osc8_hyperlinks = true;
     (
-        Output::new_with_kitty_asset_store(
+        Output::new(
             sixel_image_store.clone(),
             kitty_asset_store.clone(),
             character_cell_size.clone(),
@@ -86,6 +86,17 @@ fn create_kitty_chunk(image_id: u32, columns: usize, rows: usize) -> KittyImageC
         z_index: 0,
         x_offset: 0,
         y_offset: 0,
+    }
+}
+
+fn create_rendered_image_state(
+    explicit_chunks: Vec<KittyImageChunk>,
+    placeholder_renders: Vec<crate::output::KittyPlaceholderRender>,
+) -> RenderedImageState {
+    RenderedImageState {
+        explicit_chunks,
+        placeholder_renders,
+        resident_asset_generations: HashMap::new(),
     }
 }
 
@@ -787,10 +798,10 @@ fn test_is_dirty_with_kitty_scene_diffs() {
     let mut unchanged_output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     unchanged_output.add_clients(&client_ids, link_handler, None);
-    unchanged_output.set_last_rendered_kitty_chunks(
-        HashMap::from([(1, vec![base_chunk.clone()])]),
-        HashMap::new(),
-    );
+    unchanged_output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![base_chunk.clone()], vec![]),
+    )]));
     unchanged_output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![base_chunk.clone()]),
@@ -805,10 +816,10 @@ fn test_is_dirty_with_kitty_scene_diffs() {
     let mut changed_output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     changed_output.add_clients(&client_ids, link_handler, None);
-    changed_output.set_last_rendered_kitty_chunks(
-        HashMap::from([(1, vec![base_chunk.clone()])]),
-        HashMap::new(),
-    );
+    changed_output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![base_chunk.clone()], vec![]),
+    )]));
     changed_output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![changed_chunk]),
@@ -827,8 +838,10 @@ fn test_is_dirty_with_kitty_scene_diffs() {
     let mut cleared_output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     cleared_output.add_clients(&client_ids, link_handler, None);
-    cleared_output
-        .set_last_rendered_kitty_chunks(HashMap::from([(1, vec![base_chunk])]), HashMap::new());
+    cleared_output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![base_chunk], vec![]),
+    )]));
     assert!(
         cleared_output.is_dirty(),
         "clearing a previously rendered kitty scene should be dirty"
@@ -854,10 +867,10 @@ fn test_serialize_emits_kitty_damage_redraw_without_scene_change() {
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output.set_last_rendered_kitty_chunks(
-        HashMap::from([(1, vec![base_chunk.clone()])]),
-        HashMap::new(),
-    );
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![base_chunk.clone()], vec![]),
+    )]));
     output.add_pane_image_output_to_client(
         1,
         PaneImageRenderOutput {
@@ -900,10 +913,10 @@ fn test_image_output_adds_placement_without_full_scene_reset() {
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output.set_last_rendered_kitty_chunks(
-        HashMap::from([(1, vec![first_chunk.clone()])]),
-        HashMap::new(),
-    );
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![first_chunk.clone()], vec![]),
+    )]));
     output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![first_chunk, second_chunk]),
@@ -930,10 +943,10 @@ fn test_image_output_removes_single_placement_without_delete_all() {
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output.set_last_rendered_kitty_chunks(
-        HashMap::from([(1, vec![first_chunk.clone(), second_chunk])]),
-        HashMap::new(),
-    );
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![first_chunk.clone(), second_chunk], vec![]),
+    )]));
     output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![first_chunk]),
@@ -963,10 +976,10 @@ fn test_image_output_replaces_changed_geometry_without_resetting_unrelated_place
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output.set_last_rendered_kitty_chunks(
-        HashMap::from([(1, vec![first_chunk.clone(), second_chunk])]),
-        HashMap::new(),
-    );
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![first_chunk.clone(), second_chunk], vec![]),
+    )]));
     output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![first_chunk, changed_second_chunk]),
@@ -1110,9 +1123,11 @@ fn test_image_output_pre_vte_clear_invalidates_assumed_kitty_scene() {
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output
-        .set_last_rendered_kitty_chunks(HashMap::from([(1, vec![chunk.clone()])]), HashMap::new());
-    output.add_pre_vte_instruction_to_client(1, "\u{1b}[2J");
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![chunk.clone()], vec![]),
+    )]));
+    output.add_display_clearing_pre_vte_instruction_to_client(1, "\u{1b}[2J");
     output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![chunk]),
@@ -1146,10 +1161,10 @@ fn test_kitty_diff_serialization_deletes_single_placement_without_delete_all() {
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output.set_last_rendered_kitty_chunks(
-        HashMap::from([(1, vec![first_chunk.clone(), second_chunk])]),
-        HashMap::new(),
-    );
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![first_chunk.clone(), second_chunk], vec![]),
+    )]));
     output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![first_chunk]),
@@ -1177,8 +1192,10 @@ fn test_kitty_diff_serialization_places_resident_asset_without_retransmit() {
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output
-        .set_last_rendered_kitty_chunks(HashMap::from([(1, vec![chunk.clone()])]), HashMap::new());
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![chunk.clone()], vec![]),
+    )]));
     output.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(vec![]), None);
     output.serialize().unwrap();
 
@@ -1239,7 +1256,10 @@ fn test_kitty_diff_serialization_full_reset_fallback_preserves_existing_behavior
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output.set_last_rendered_kitty_chunks(HashMap::from([(1, vec![base_chunk])]), HashMap::new());
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![base_chunk], vec![]),
+    )]));
     output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![changed_chunk]),
@@ -1305,7 +1325,10 @@ fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes(
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
-    output.set_last_rendered_kitty_chunks(HashMap::from([(1, vec![base_chunk])]), HashMap::new());
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![base_chunk], vec![]),
+    )]));
 
     output.add_pane_image_output_to_client(
         1,
@@ -1325,6 +1348,41 @@ fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes(
     assert!(
         delete_pos < text_pos,
         "kitty placement deletes should happen before text when the scene changes"
+    );
+}
+
+#[test]
+fn test_output_round_trips_last_rendered_image_state_for_single_client() {
+    let mut output = create_test_output();
+    let mut explicit_chunk = create_kitty_chunk(9, 2, 2);
+    explicit_chunk.placement_id = Some(19);
+    let mut placeholder_render = create_kitty_placeholder_render(9);
+    placeholder_render.placement_id = Some(29);
+    let expected_state = RenderedImageState {
+        explicit_chunks: vec![explicit_chunk.clone()],
+        placeholder_renders: vec![placeholder_render.clone()],
+        resident_asset_generations: HashMap::from([(9, 42)]),
+    };
+
+    output.set_last_rendered_image_state_for_client(7, expected_state.clone());
+    let actual_state = output
+        .take_last_rendered_image_state_for_client(7)
+        .expect("client image state should round-trip");
+
+    assert_eq!(actual_state.explicit_chunks, expected_state.explicit_chunks);
+    assert_eq!(
+        actual_state.placeholder_renders,
+        expected_state.placeholder_renders
+    );
+    assert_eq!(
+        actual_state.resident_asset_generations,
+        expected_state.resident_asset_generations
+    );
+    assert!(
+        output
+            .take_last_rendered_image_state_for_client(7)
+            .is_none(),
+        "taking a client's rendered image state should drain it"
     );
 }
 

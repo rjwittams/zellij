@@ -31,6 +31,7 @@ fn read_fixture(fixture_name: &str) -> Vec<u8> {
 fn vttest1_0() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -45,6 +46,7 @@ fn vttest1_0() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -62,6 +64,7 @@ fn vttest1_0() {
 fn vttest1_1() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -76,6 +79,7 @@ fn vttest1_1() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -93,6 +97,7 @@ fn vttest1_1() {
 fn vttest1_2() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -107,6 +112,7 @@ fn vttest1_2() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -124,6 +130,7 @@ fn vttest1_2() {
 fn vttest1_3() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -138,6 +145,7 @@ fn vttest1_3() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -155,6 +163,7 @@ fn vttest1_3() {
 fn vttest1_4() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -169,6 +178,7 @@ fn vttest1_4() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -186,6 +196,7 @@ fn vttest1_4() {
 fn vttest1_5() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -200,6 +211,7 @@ fn vttest1_5() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -217,6 +229,7 @@ fn vttest1_5() {
 fn vttest2_0() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -231,6 +244,7 @@ fn vttest2_0() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -248,6 +262,7 @@ fn vttest2_0() {
 fn vttest2_1() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -262,6 +277,7 @@ fn vttest2_1() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -279,6 +295,7 @@ fn vttest2_1() {
 fn vttest2_2() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -293,6 +310,7 @@ fn vttest2_2() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -310,6 +328,7 @@ fn vttest2_2() {
 fn vttest2_3() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -324,6 +343,7 @@ fn vttest2_3() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -341,6 +361,7 @@ fn vttest2_3() {
 fn vttest2_4() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -355,6 +376,7 @@ fn vttest2_4() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -372,6 +394,7 @@ fn vttest2_4() {
 fn vttest2_5() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -386,6 +409,7 @@ fn vttest2_5() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -403,6 +427,7 @@ fn vttest2_5() {
 fn vttest2_6() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -417,6 +442,7 @@ fn vttest2_6() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -434,6 +460,7 @@ fn vttest2_6() {
 fn vttest2_7() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -448,6 +475,7 @@ fn vttest2_7() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -465,6 +493,7 @@ fn vttest2_7() {
 fn vttest2_8() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -479,6 +508,7 @@ fn vttest2_8() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -496,6 +526,7 @@ fn vttest2_8() {
 fn vttest2_9() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -510,6 +541,7 @@ fn vttest2_9() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -527,6 +559,7 @@ fn vttest2_9() {
 fn vttest2_10() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -541,6 +574,7 @@ fn vttest2_10() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -558,6 +592,7 @@ fn vttest2_10() {
 fn vttest2_11() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -572,6 +607,7 @@ fn vttest2_11() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -589,6 +625,7 @@ fn vttest2_11() {
 fn vttest2_12() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -603,6 +640,7 @@ fn vttest2_12() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -620,6 +658,7 @@ fn vttest2_12() {
 fn vttest2_13() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -634,6 +673,7 @@ fn vttest2_13() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -651,6 +691,7 @@ fn vttest2_13() {
 fn vttest2_14() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -665,6 +706,7 @@ fn vttest2_14() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -682,6 +724,7 @@ fn vttest2_14() {
 fn vttest3_0() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -696,6 +739,7 @@ fn vttest3_0() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -713,6 +757,7 @@ fn vttest3_0() {
 fn vttest8_0() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -727,6 +772,7 @@ fn vttest8_0() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -744,6 +790,7 @@ fn vttest8_0() {
 fn vttest8_1() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -758,6 +805,7 @@ fn vttest8_1() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -775,6 +823,7 @@ fn vttest8_1() {
 fn vttest8_2() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -789,6 +838,7 @@ fn vttest8_2() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -806,6 +856,7 @@ fn vttest8_2() {
 fn vttest8_3() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -820,6 +871,7 @@ fn vttest8_3() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -837,6 +889,7 @@ fn vttest8_3() {
 fn vttest8_4() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -851,6 +904,7 @@ fn vttest8_4() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -868,6 +922,7 @@ fn vttest8_4() {
 fn vttest8_5() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -882,6 +937,7 @@ fn vttest8_5() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -899,6 +955,7 @@ fn vttest8_5() {
 fn csi_b() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -913,6 +970,7 @@ fn csi_b() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -930,6 +988,7 @@ fn csi_b() {
 fn csi_capital_i() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -944,6 +1003,7 @@ fn csi_capital_i() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -961,6 +1021,7 @@ fn csi_capital_i() {
 fn csi_capital_z() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -975,6 +1036,7 @@ fn csi_capital_z() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -992,6 +1054,7 @@ fn csi_capital_z() {
 fn terminal_reports() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1006,6 +1069,7 @@ fn terminal_reports() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1023,6 +1087,7 @@ fn terminal_reports() {
 fn wide_characters() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1037,6 +1102,7 @@ fn wide_characters() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1054,6 +1120,7 @@ fn wide_characters() {
 fn wide_characters_line_wrap() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1068,6 +1135,7 @@ fn wide_characters_line_wrap() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1085,6 +1153,7 @@ fn wide_characters_line_wrap() {
 fn insert_character_in_line_with_wide_character() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1099,6 +1168,7 @@ fn insert_character_in_line_with_wide_character() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1116,6 +1186,7 @@ fn insert_character_in_line_with_wide_character() {
 fn delete_char_in_middle_of_line_with_widechar() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1130,6 +1201,7 @@ fn delete_char_in_middle_of_line_with_widechar() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1147,6 +1219,7 @@ fn delete_char_in_middle_of_line_with_widechar() {
 fn delete_char_in_middle_of_line_with_multiple_widechars() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1161,6 +1234,7 @@ fn delete_char_in_middle_of_line_with_multiple_widechars() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1178,6 +1252,7 @@ fn delete_char_in_middle_of_line_with_multiple_widechars() {
 fn fish_wide_characters_override_clock() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1192,6 +1267,7 @@ fn fish_wide_characters_override_clock() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1209,6 +1285,7 @@ fn fish_wide_characters_override_clock() {
 fn bash_delete_wide_characters() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1223,6 +1300,7 @@ fn bash_delete_wide_characters() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1240,6 +1318,7 @@ fn bash_delete_wide_characters() {
 fn delete_wide_characters_before_cursor() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1254,6 +1333,7 @@ fn delete_wide_characters_before_cursor() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1271,6 +1351,7 @@ fn delete_wide_characters_before_cursor() {
 fn delete_wide_characters_before_cursor_when_cursor_is_on_wide_character() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1285,6 +1366,7 @@ fn delete_wide_characters_before_cursor_when_cursor_is_on_wide_character() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1302,6 +1384,7 @@ fn delete_wide_characters_before_cursor_when_cursor_is_on_wide_character() {
 fn delete_wide_character_under_cursor() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1316,6 +1399,7 @@ fn delete_wide_character_under_cursor() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1333,6 +1417,7 @@ fn delete_wide_character_under_cursor() {
 fn replace_wide_character_under_cursor() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1347,6 +1432,7 @@ fn replace_wide_character_under_cursor() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1364,6 +1450,7 @@ fn replace_wide_character_under_cursor() {
 fn wrap_wide_characters() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1378,6 +1465,7 @@ fn wrap_wide_characters() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1395,6 +1483,7 @@ fn wrap_wide_characters() {
 fn wrap_wide_characters_on_size_change() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1409,6 +1498,7 @@ fn wrap_wide_characters_on_size_change() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1427,6 +1517,7 @@ fn wrap_wide_characters_on_size_change() {
 fn unwrap_wide_characters_on_size_change() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1441,6 +1532,7 @@ fn unwrap_wide_characters_on_size_change() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1460,6 +1552,7 @@ fn unwrap_wide_characters_on_size_change() {
 fn wrap_wide_characters_in_the_middle_of_the_line() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1474,6 +1567,7 @@ fn wrap_wide_characters_in_the_middle_of_the_line() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1491,6 +1585,7 @@ fn wrap_wide_characters_in_the_middle_of_the_line() {
 fn wrap_wide_characters_at_the_end_of_the_line() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1505,6 +1600,7 @@ fn wrap_wide_characters_at_the_end_of_the_line() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1522,6 +1618,7 @@ fn wrap_wide_characters_at_the_end_of_the_line() {
 fn copy_selected_text_from_viewport() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1536,6 +1633,7 @@ fn copy_selected_text_from_viewport() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1561,6 +1659,7 @@ fn copy_selected_text_from_viewport() {
 fn copy_wrapped_selected_text_from_viewport() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1575,6 +1674,7 @@ fn copy_wrapped_selected_text_from_viewport() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1599,6 +1699,7 @@ fn copy_wrapped_selected_text_from_viewport() {
 fn copy_selected_text_from_lines_above() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1613,6 +1714,7 @@ fn copy_selected_text_from_lines_above() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1638,6 +1740,7 @@ fn copy_selected_text_from_lines_above() {
 fn copy_selected_text_from_lines_below() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1652,6 +1755,7 @@ fn copy_selected_text_from_lines_below() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1685,6 +1789,7 @@ fn copy_selected_text_from_lines_below() {
 fn run_bandwhich_from_fish_shell() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1699,6 +1804,7 @@ fn run_bandwhich_from_fish_shell() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1716,6 +1822,7 @@ fn run_bandwhich_from_fish_shell() {
 fn fish_tab_completion_options() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1730,6 +1837,7 @@ fn fish_tab_completion_options() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1753,6 +1861,7 @@ pub fn fish_select_tab_completion_options() {
     // terminal_emulator_color_codes,
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1767,6 +1876,7 @@ pub fn fish_select_tab_completion_options() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1794,6 +1904,7 @@ pub fn vim_scroll_region_down() {
     // file
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1808,6 +1919,7 @@ pub fn vim_scroll_region_down() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1832,6 +1944,7 @@ pub fn vim_ctrl_d() {
     // vim makes sure to fill these empty lines with the rest of the file
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1846,6 +1959,7 @@ pub fn vim_ctrl_d() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1869,6 +1983,7 @@ pub fn vim_ctrl_u() {
     // terminal_emulator_color_codes,
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1883,6 +1998,7 @@ pub fn vim_ctrl_u() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1900,6 +2016,7 @@ pub fn vim_ctrl_u() {
 pub fn htop() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1914,6 +2031,7 @@ pub fn htop() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1931,6 +2049,7 @@ pub fn htop() {
 pub fn htop_scrolling() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1945,6 +2064,7 @@ pub fn htop_scrolling() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -1962,6 +2082,7 @@ pub fn htop_scrolling() {
 pub fn htop_right_scrolling() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -1976,6 +2097,7 @@ pub fn htop_right_scrolling() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2003,6 +2125,7 @@ pub fn vim_overwrite() {
     // * if everything looks fine, this test passed :)
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2017,6 +2140,7 @@ pub fn vim_overwrite() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2036,6 +2160,7 @@ pub fn clear_scroll_region() {
     // @imsnif - the name is a monument to the time I didn't fully understand this mechanism :)
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2050,6 +2175,7 @@ pub fn clear_scroll_region() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2067,6 +2193,7 @@ pub fn clear_scroll_region() {
 pub fn display_tab_characters_properly() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2081,6 +2208,7 @@ pub fn display_tab_characters_properly() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2098,6 +2226,7 @@ pub fn display_tab_characters_properly() {
 pub fn neovim_insert_mode() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2112,6 +2241,7 @@ pub fn neovim_insert_mode() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2129,6 +2259,7 @@ pub fn neovim_insert_mode() {
 pub fn bash_cursor_linewrap() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2143,6 +2274,7 @@ pub fn bash_cursor_linewrap() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2162,6 +2294,7 @@ pub fn fish_paste_multiline() {
     // going up and changing the colors of our line-wrapped pasted text
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2176,6 +2309,7 @@ pub fn fish_paste_multiline() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2193,6 +2327,7 @@ pub fn fish_paste_multiline() {
 pub fn git_log() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2207,6 +2342,7 @@ pub fn git_log() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2226,6 +2362,7 @@ pub fn git_diff_scrollup() {
     // we are able to scroll up
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2240,6 +2377,7 @@ pub fn git_diff_scrollup() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2257,6 +2395,7 @@ pub fn git_diff_scrollup() {
 pub fn emacs_longbuf() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2271,6 +2410,7 @@ pub fn emacs_longbuf() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2288,6 +2428,7 @@ pub fn emacs_longbuf() {
 pub fn top_and_quit() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2302,6 +2443,7 @@ pub fn top_and_quit() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2326,6 +2468,7 @@ pub fn exa_plus_omf_theme() {
     // convert it to spaces
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2340,6 +2483,7 @@ pub fn exa_plus_omf_theme() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2357,6 +2501,7 @@ pub fn exa_plus_omf_theme() {
 pub fn scroll_up() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2371,6 +2516,7 @@ pub fn scroll_up() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2389,6 +2535,7 @@ pub fn scroll_up() {
 pub fn scroll_down() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2403,6 +2550,7 @@ pub fn scroll_down() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2422,6 +2570,7 @@ pub fn scroll_down() {
 pub fn scroll_up_with_line_wraps() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2436,6 +2585,7 @@ pub fn scroll_up_with_line_wraps() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2454,6 +2604,7 @@ pub fn scroll_up_with_line_wraps() {
 pub fn scroll_down_with_line_wraps() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2468,6 +2619,7 @@ pub fn scroll_down_with_line_wraps() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2487,6 +2639,7 @@ pub fn scroll_down_with_line_wraps() {
 pub fn scroll_up_decrease_width_and_scroll_down() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2501,6 +2654,7 @@ pub fn scroll_up_decrease_width_and_scroll_down() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2525,6 +2679,7 @@ pub fn scroll_up_decrease_width_and_scroll_down() {
 pub fn scroll_up_increase_width_and_scroll_down() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2539,6 +2694,7 @@ pub fn scroll_up_increase_width_and_scroll_down() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2563,6 +2719,7 @@ pub fn scroll_up_increase_width_and_scroll_down() {
 fn saved_cursor_across_resize() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2577,6 +2734,7 @@ fn saved_cursor_across_resize() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2612,6 +2770,7 @@ fn saved_cursor_across_resize() {
 fn saved_cursor_across_resize_longline() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2626,6 +2785,7 @@ fn saved_cursor_across_resize_longline() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2654,6 +2814,7 @@ fn saved_cursor_across_resize_longline() {
 fn saved_cursor_across_resize_rewrap() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2668,6 +2829,7 @@ fn saved_cursor_across_resize_rewrap() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2696,6 +2858,7 @@ fn saved_cursor_across_resize_rewrap() {
 pub fn move_cursor_below_scroll_region() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2710,6 +2873,7 @@ pub fn move_cursor_below_scroll_region() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2727,6 +2891,7 @@ pub fn move_cursor_below_scroll_region() {
 pub fn insert_wide_characters_in_existing_line() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2741,6 +2906,7 @@ pub fn insert_wide_characters_in_existing_line() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2764,6 +2930,7 @@ pub fn full_screen_scroll_region_and_scroll_up() {
     // terminal_emulator_color_codes,
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2778,6 +2945,7 @@ pub fn full_screen_scroll_region_and_scroll_up() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2798,6 +2966,7 @@ pub fn full_screen_scroll_region_and_scroll_up() {
 pub fn ring_bell() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2812,6 +2981,7 @@ pub fn ring_bell() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2829,6 +2999,7 @@ pub fn ring_bell() {
 pub fn alternate_screen_change_size() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2843,6 +3014,7 @@ pub fn alternate_screen_change_size() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2864,6 +3036,7 @@ pub fn alternate_screen_change_size() {
 pub fn fzf_fullscreen() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2878,6 +3051,7 @@ pub fn fzf_fullscreen() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2899,6 +3073,7 @@ pub fn replace_multiple_wide_characters_under_cursor() {
     // it was "in the beginning" of the wide character)
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2913,6 +3088,7 @@ pub fn replace_multiple_wide_characters_under_cursor() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2934,6 +3110,7 @@ pub fn replace_non_wide_characters_with_wide_characters() {
     // it was "in the beginning" of the wide character)
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2948,6 +3125,7 @@ pub fn replace_non_wide_characters_with_wide_characters() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2965,6 +3143,7 @@ pub fn replace_non_wide_characters_with_wide_characters() {
 pub fn scroll_down_ansi() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -2979,6 +3158,7 @@ pub fn scroll_down_ansi() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -2996,6 +3176,7 @@ pub fn scroll_down_ansi() {
 pub fn ansi_capital_t() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3010,6 +3191,7 @@ pub fn ansi_capital_t() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3026,6 +3208,7 @@ pub fn ansi_capital_t() {
 pub fn ansi_capital_s() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3040,6 +3223,7 @@ pub fn ansi_capital_s() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3056,6 +3240,7 @@ pub fn ansi_capital_s() {
 fn terminal_pixel_size_reports() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3073,6 +3258,7 @@ fn terminal_pixel_size_reports() {
             width: 8,
         }))),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         osc8_hyperlinks,
         debug,
@@ -3100,6 +3286,7 @@ fn terminal_pixel_size_reports() {
 fn terminal_pixel_size_reports_in_unsupported_terminals() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3114,6 +3301,7 @@ fn terminal_pixel_size_reports_in_unsupported_terminals() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)), // in an unsupported terminal, we don't have this info
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3142,6 +3330,7 @@ fn terminal_pixel_size_reports_in_unsupported_terminals() {
 pub fn ansi_csi_at_sign() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3156,6 +3345,7 @@ pub fn ansi_csi_at_sign() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3172,6 +3362,7 @@ pub fn ansi_csi_at_sign() {
 pub fn sixel_images_are_reaped_when_scrolled_off() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
@@ -3190,6 +3381,7 @@ pub fn sixel_images_are_reaped_when_scrolled_off() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store.clone(),
+        kitty_asset_store.clone(),
         Style::default(),
         debug,
         arrow_fonts,
@@ -3215,6 +3407,7 @@ pub fn sixel_images_are_reaped_when_scrolled_off() {
 pub fn sixel_images_are_reaped_when_resetting() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
@@ -3233,6 +3426,7 @@ pub fn sixel_images_are_reaped_when_resetting() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store.clone(),
+        kitty_asset_store.clone(),
         Style::default(),
         debug,
         arrow_fonts,
@@ -3255,6 +3449,7 @@ pub fn sixel_images_are_reaped_when_resetting() {
 pub fn sixel_image_in_alternate_buffer() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
@@ -3273,6 +3468,7 @@ pub fn sixel_image_in_alternate_buffer() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store.clone(),
+        kitty_asset_store.clone(),
         Style::default(),
         debug,
         arrow_fonts,
@@ -3304,6 +3500,7 @@ pub fn sixel_image_in_alternate_buffer() {
 pub fn sixel_with_image_scrolling_decsdm() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
@@ -3322,6 +3519,7 @@ pub fn sixel_with_image_scrolling_decsdm() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3376,6 +3574,7 @@ pub fn sixel_with_image_scrolling_decsdm() {
 pub fn osc_4_background_query() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3390,6 +3589,7 @@ pub fn osc_4_background_query() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3417,6 +3617,7 @@ pub fn osc_4_background_query() {
 pub fn osc_4_foreground_query() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3431,6 +3632,7 @@ pub fn osc_4_foreground_query() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3457,6 +3659,7 @@ pub fn osc_4_color_query() {
     color_codes.insert(222, String::from("rgb:ffff/d7d7/8787"));
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(color_codes));
     let debug = false;
     let arrow_fonts = true;
@@ -3471,6 +3674,7 @@ pub fn osc_4_color_query() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3496,6 +3700,7 @@ pub fn osc_4_color_query() {
 pub fn xtsmgraphics_color_register_count() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3510,6 +3715,7 @@ pub fn xtsmgraphics_color_register_count() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3536,6 +3742,7 @@ pub fn xtsmgraphics_color_register_count() {
 pub fn xtsmgraphics_pixel_graphics_geometry() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
@@ -3554,6 +3761,7 @@ pub fn xtsmgraphics_pixel_graphics_geometry() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3580,6 +3788,7 @@ pub fn xtsmgraphics_pixel_graphics_geometry() {
 pub fn cursor_hide_persists_through_alternate_screen() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
@@ -3598,6 +3807,7 @@ pub fn cursor_hide_persists_through_alternate_screen() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3645,6 +3855,7 @@ pub fn cursor_hide_persists_through_alternate_screen() {
 fn table_ui_component() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3659,6 +3870,7 @@ fn table_ui_component() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3676,6 +3888,7 @@ fn table_ui_component() {
 fn table_ui_component_with_coordinates() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3690,6 +3903,7 @@ fn table_ui_component_with_coordinates() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3707,6 +3921,7 @@ fn table_ui_component_with_coordinates() {
 fn ribbon_ui_component() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3721,6 +3936,7 @@ fn ribbon_ui_component() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3738,6 +3954,7 @@ fn ribbon_ui_component() {
 fn ribbon_ui_component_with_coordinates() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3752,6 +3969,7 @@ fn ribbon_ui_component_with_coordinates() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3769,6 +3987,7 @@ fn ribbon_ui_component_with_coordinates() {
 fn nested_list_ui_component() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3783,6 +4002,7 @@ fn nested_list_ui_component() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3800,6 +4020,7 @@ fn nested_list_ui_component() {
 fn nested_list_ui_component_with_coordinates() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3814,6 +4035,7 @@ fn nested_list_ui_component_with_coordinates() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3831,6 +4053,7 @@ fn nested_list_ui_component_with_coordinates() {
 fn text_ui_component() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3845,6 +4068,7 @@ fn text_ui_component() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3862,6 +4086,7 @@ fn text_ui_component() {
 fn text_ui_component_with_coordinates() {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3876,6 +4101,7 @@ fn text_ui_component_with_coordinates() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3901,6 +4127,7 @@ fn cannot_escape_scroll_region() {
     // This should be printed on the last line (zero indexed 40) of the terminal and not beyond it.
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3915,6 +4142,7 @@ fn cannot_escape_scroll_region() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -3933,6 +4161,7 @@ fn preserve_background_color_on_resize() {
 
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -3947,6 +4176,7 @@ fn preserve_background_color_on_resize() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,
@@ -4021,6 +4251,7 @@ fn preserve_background_color_on_resize() {
 fn create_grid_with_content(content: &str) -> Grid {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let mut grid = Grid::new(
         20,
@@ -4030,6 +4261,7 @@ fn create_grid_with_content(content: &str) -> Grid {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false,
         true,
@@ -4167,6 +4399,7 @@ fn osc_11_set_and_query_pane_default_bg() {
 
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let mut grid = Grid::new(
         10,
@@ -4176,6 +4409,7 @@ fn osc_11_set_and_query_pane_default_bg() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false,
         true,
@@ -4218,6 +4452,7 @@ fn osc_10_set_and_query_pane_default_fg() {
 
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let mut grid = Grid::new(
         10,
@@ -4227,6 +4462,7 @@ fn osc_10_set_and_query_pane_default_fg() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false,
         true,
@@ -4266,6 +4502,7 @@ fn osc_110_111_reset_pane_default_colors() {
 
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let mut grid = Grid::new(
         10,
@@ -4275,6 +4512,7 @@ fn osc_110_111_reset_pane_default_colors() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false,
         true,
@@ -4319,6 +4557,7 @@ fn osc_11_set_bg_produces_ansi_in_render_output() {
 
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let mut grid = Grid::new(
         5,
@@ -4328,6 +4567,7 @@ fn osc_11_set_bg_produces_ansi_in_render_output() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false,
         true,
@@ -4586,6 +4826,7 @@ fn plugin_highlight_at_returns_none_on_miss() {
 fn plugin_highlight_at_wrapped_line() {
     // Create a narrow grid (10 cols) so that a long string wraps
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let mut grid = Grid::new(
         5,
@@ -4595,6 +4836,7 @@ fn plugin_highlight_at_wrapped_line() {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false,
         true,
@@ -4745,6 +4987,7 @@ fn highlight_style_variants_resolve_colors() {
 
 fn create_grid_with_scrollback() -> Grid {
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let mut grid = Grid::new(
         5,
@@ -4754,6 +4997,7 @@ fn create_grid_with_scrollback() -> Grid {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false,
         true,
@@ -4837,6 +5081,7 @@ fn pane_contents_no_scrollback_when_flag_false() {
 
 fn create_grid_with_colored_scrollback() -> Grid {
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let mut grid = Grid::new(
         5,
@@ -4846,6 +5091,7 @@ fn create_grid_with_colored_scrollback() -> Grid {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false,
         true,
@@ -5513,6 +5759,7 @@ fn placeholder_text_with_placement_inherited_rows(
 fn create_grid_with_size_and_raw(rows: usize, cols: usize, content: &[u8]) -> Grid {
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let mut grid = Grid::new(
         rows,
@@ -5522,6 +5769,7 @@ fn create_grid_with_size_and_raw(rows: usize, cols: usize, content: &[u8]) -> Gr
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         false,
         true,
@@ -5549,7 +5797,7 @@ fn create_grid_with_shared_stores(
         height: 20,
     })));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
-    let grid = Grid::new_with_kitty_asset_store(
+    let grid = Grid::new(
         rows,
         cols,
         Rc::new(RefCell::new(Palette::default())),
@@ -7219,7 +7467,7 @@ fn kitty_retransmit_then_recreate_emits_both_recreated_placements_to_output() {
     );
     feed_bytes(&mut grid, &kitty_display_placement(24, 2, 4, 2));
 
-    let mut output = Output::new_with_kitty_asset_store(
+    let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
         character_cell_size,
@@ -7306,7 +7554,7 @@ fn kitty_retransmit_then_recreate_emits_updated_asset_payload_to_output() {
     );
     feed_bytes(&mut grid, &kitty_display_placement(26, 2, 4, 2));
 
-    let mut output = Output::new_with_kitty_asset_store(
+    let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
         character_cell_size,

@@ -44,6 +44,7 @@ use zellij_utils::{
 };
 
 use crate::panes::grid::Grid;
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::sixel::SixelImageStore;
 use std::cell::RefCell;
@@ -69,6 +70,7 @@ fn take_snapshots_and_cursor_coordinates_from_render_events<'a>(
     screen_size: Size,
 ) -> Vec<(Option<(usize, usize)>, String)> {
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
         width: 8,
@@ -87,6 +89,7 @@ fn take_snapshots_and_cursor_coordinates_from_render_events<'a>(
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         Style::default(),
         debug,
         arrow_fonts,

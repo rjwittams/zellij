@@ -49,57 +49,8 @@ pub struct LayoutApplier<'a> {
 }
 
 impl<'a> LayoutApplier<'a> {
-    pub fn new(
-        viewport: &Rc<RefCell<Viewport>>,
-        senders: &ThreadSenders,
-        sixel_image_store: &Rc<RefCell<SixelImageStore>>,
-        link_handler: &Rc<RefCell<LinkHandler>>,
-        terminal_emulator_colors: &Rc<RefCell<Palette>>,
-        terminal_emulator_color_codes: &Rc<RefCell<HashMap<usize, String>>>,
-        character_cell_size: &Rc<RefCell<Option<SizeInPixels>>>,
-        connected_clients: &Rc<RefCell<HashMap<ClientId, bool>>>,
-        style: &Style,
-        display_area: &Rc<RefCell<Size>>, // includes all panes (including eg. the status bar and tab bar in the default layout)
-        tiled_panes: &'a mut TiledPanes,
-        floating_panes: &'a mut FloatingPanes,
-        draw_pane_frames: bool,
-        focus_pane_id: &'a mut Option<PaneId>,
-        os_api: &Box<dyn ServerOsApi>,
-        debug: bool,
-        arrow_fonts: bool,
-        styled_underlines: bool,
-        osc8_hyperlinks: bool,
-        explicitly_disable_kitty_keyboard_protocol: bool,
-        blocking_terminal: Option<(u32, NotificationEnd)>,
-    ) -> Self {
-        Self::new_with_kitty_asset_store(
-            viewport,
-            senders,
-            sixel_image_store,
-            &Rc::new(RefCell::new(KittyAssetStore::default())),
-            link_handler,
-            terminal_emulator_colors,
-            terminal_emulator_color_codes,
-            character_cell_size,
-            connected_clients,
-            style,
-            display_area,
-            tiled_panes,
-            floating_panes,
-            draw_pane_frames,
-            focus_pane_id,
-            os_api,
-            debug,
-            arrow_fonts,
-            styled_underlines,
-            osc8_hyperlinks,
-            explicitly_disable_kitty_keyboard_protocol,
-            blocking_terminal,
-        )
-    }
-
     #[allow(clippy::too_many_arguments)]
-    pub fn new_with_kitty_asset_store(
+    pub fn new(
         viewport: &Rc<RefCell<Viewport>>,
         senders: &ThreadSenders,
         sixel_image_store: &Rc<RefCell<SixelImageStore>>,
@@ -572,7 +523,7 @@ impl<'a> LayoutApplier<'a> {
             .get_mut(&run)
             .and_then(|ids| ids.pop())
             .with_context(err_context)?;
-        let mut new_plugin = PluginPane::new_with_kitty_asset_store(
+        let mut new_plugin = PluginPane::new(
             pid,
             *position_and_size,
             self.senders
@@ -622,7 +573,7 @@ impl<'a> LayoutApplier<'a> {
             .get_mut(&run)
             .and_then(|ids| ids.pop())
             .with_context(err_context)?;
-        let mut new_pane = PluginPane::new_with_kitty_asset_store(
+        let mut new_pane = PluginPane::new(
             pid,
             position_and_size,
             self.senders
@@ -681,7 +632,7 @@ impl<'a> LayoutApplier<'a> {
             Some(Run::Command(run_command)) => Some(run_command.to_string()),
             _ => None,
         };
-        let mut new_pane = TerminalPane::new_with_kitty_asset_store(
+        let mut new_pane = TerminalPane::new(
             *pid,
             position_and_size,
             self.style,
@@ -758,7 +709,7 @@ impl<'a> LayoutApplier<'a> {
             None
         };
 
-        let mut new_pane = TerminalPane::new_with_kitty_asset_store(
+        let mut new_pane = TerminalPane::new(
             pid,
             *position_and_size,
             self.style,

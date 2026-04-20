@@ -75,7 +75,7 @@ use crate::panes::terminal_pane::{BRACKETED_PASTE_BEGIN, BRACKETED_PASTE_END};
 use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
 
 use crate::{
-    output::{KittyImageChunk, KittyPlaceholderRender, Output},
+    output::{Output, RenderedImageState},
     panes::kitty_asset_store::KittyAssetStore,
     panes::sixel::SixelImageStore,
     panes::PaneId,
@@ -1467,12 +1467,8 @@ pub(crate) struct Screen {
     /// Resolved styling to apply when `host_terminal_theme_mode == Light`.
     /// `None` disables auto-switch. Refreshed on each reconfigure.
     host_theme_light_styling: Option<Styling>,
-    regular_last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
-    regular_last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
-    regular_last_rendered_kitty_asset_generations: HashMap<ClientId, HashMap<u32, u64>>,
-    watcher_last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
-    watcher_last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
-    watcher_last_rendered_kitty_asset_generations: HashMap<ClientId, HashMap<u32, u64>>,
+    regular_last_rendered_image_state: HashMap<ClientId, RenderedImageState>,
+    watcher_last_rendered_image_state: HashMap<ClientId, RenderedImageState>,
 }
 
 /// A pending forward waiting to be dispatched once the current in-flight
@@ -1628,12 +1624,8 @@ impl Screen {
             host_terminal_theme_mode: None,
             host_theme_dark_styling: None,
             host_theme_light_styling: None,
-            regular_last_rendered_kitty_chunks: HashMap::new(),
-            regular_last_rendered_kitty_placeholder_renders: HashMap::new(),
-            regular_last_rendered_kitty_asset_generations: HashMap::new(),
-            watcher_last_rendered_kitty_chunks: HashMap::new(),
-            watcher_last_rendered_kitty_placeholder_renders: HashMap::new(),
-            watcher_last_rendered_kitty_asset_generations: HashMap::new(),
+            regular_last_rendered_image_state: HashMap::new(),
+            watcher_last_rendered_image_state: HashMap::new(),
         }
     }
 
@@ -2519,18 +2511,14 @@ impl Screen {
 
         // === PHASE 1: Render for regular clients ===
         if has_regular_clients {
-            let mut output = Output::new_with_kitty_asset_store(
+            let mut output = Output::new(
                 self.sixel_image_store.clone(),
                 self.kitty_asset_store.clone(),
                 self.character_cell_size.clone(),
                 self.styled_underlines,
                 self.osc8_hyperlinks,
             );
-            output.set_last_rendered_kitty_state(
-                self.regular_last_rendered_kitty_chunks.clone(),
-                self.regular_last_rendered_kitty_placeholder_renders.clone(),
-                self.regular_last_rendered_kitty_asset_generations.clone(),
-            );
+            output.set_last_rendered_image_states(self.regular_last_rendered_image_state.clone());
 
             let has_ansi_subscribers = self.pane_render_subscribers.values().any(|s| s.ansi);
             output.collect_ansi_pane_contents =
@@ -2614,11 +2602,7 @@ impl Screen {
 
             if non_watcher_output_was_dirty || has_bell {
                 let serialized_output = output.serialize().context(err_context)?;
-                (
-                    self.regular_last_rendered_kitty_chunks,
-                    self.regular_last_rendered_kitty_placeholder_renders,
-                    self.regular_last_rendered_kitty_asset_generations,
-                ) = output.take_last_rendered_kitty_state();
+                self.regular_last_rendered_image_state = output.take_last_rendered_image_states();
                 let _ = self
                     .bus
                     .senders
@@ -2643,7 +2627,7 @@ impl Screen {
         if has_watchers {
             if let Some(followed_client_id) = self.followed_client_id {
                 // Create fresh output for watchers
-                let mut watcher_output = Output::new_with_kitty_asset_store(
+                let mut watcher_output = Output::new(
                     self.sixel_image_store.clone(),
                     self.kitty_asset_store.clone(),
                     self.character_cell_size.clone(),
@@ -2685,28 +2669,12 @@ impl Screen {
                     // For each watcher, clone the output and serialize with size constraints
                     for (watcher_id, watcher_state) in &self.watcher_clients {
                         let mut watcher_specific_output = watcher_output.clone();
-                        watcher_specific_output.set_last_rendered_kitty_state(
-                            HashMap::from([(
-                                followed_client_id,
-                                self.watcher_last_rendered_kitty_chunks
-                                    .get(watcher_id)
-                                    .cloned()
-                                    .unwrap_or_default(),
-                            )]),
-                            HashMap::from([(
-                                followed_client_id,
-                                self.watcher_last_rendered_kitty_placeholder_renders
-                                    .get(watcher_id)
-                                    .cloned()
-                                    .unwrap_or_default(),
-                            )]),
-                            HashMap::from([(
-                                followed_client_id,
-                                self.watcher_last_rendered_kitty_asset_generations
-                                    .get(watcher_id)
-                                    .cloned()
-                                    .unwrap_or_default(),
-                            )]),
+                        watcher_specific_output.set_last_rendered_image_state_for_client(
+                            followed_client_id,
+                            self.watcher_last_rendered_image_state
+                                .get(watcher_id)
+                                .cloned()
+                                .unwrap_or_default(),
                         );
 
                         // Serialize this watcher's output with size constraints (cropping and padding handled inside)
@@ -2714,29 +2682,14 @@ impl Screen {
                             .serialize_with_size(Some(watcher_state.size()), Some(self.size))
                             .context(err_context)?;
 
-                        let (
-                            mut watcher_last_rendered,
-                            mut watcher_last_rendered_placeholder_renders,
-                            mut watcher_last_rendered_asset_generations,
-                        ) = watcher_specific_output.take_last_rendered_kitty_state();
-                        self.watcher_last_rendered_kitty_chunks.insert(
-                            *watcher_id,
-                            watcher_last_rendered
-                                .remove(&followed_client_id)
-                                .unwrap_or_default(),
-                        );
-                        self.watcher_last_rendered_kitty_placeholder_renders.insert(
-                            *watcher_id,
-                            watcher_last_rendered_placeholder_renders
-                                .remove(&followed_client_id)
-                                .unwrap_or_default(),
-                        );
-                        self.watcher_last_rendered_kitty_asset_generations.insert(
-                            *watcher_id,
-                            watcher_last_rendered_asset_generations
-                                .remove(&followed_client_id)
-                                .unwrap_or_default(),
-                        );
+                        if let Some(watcher_last_rendered_state) = watcher_specific_output
+                            .take_last_rendered_image_state_for_client(followed_client_id)
+                        {
+                            self.watcher_last_rendered_image_state
+                                .insert(*watcher_id, watcher_last_rendered_state);
+                        } else {
+                            self.watcher_last_rendered_image_state.remove(watcher_id);
+                        }
 
                         // Get the output for the followed client and map it to this watcher
                         if let Some(followed_output) = serialized_output.remove(&followed_client_id)
@@ -2993,7 +2946,7 @@ impl Screen {
         let tab_name = tab_name.unwrap_or_else(|| String::new());
 
         let position = self.tabs.len();
-        let mut tab = Tab::new_with_kitty_asset_store(
+        let mut tab = Tab::new(
             tab_id,
             position,
             tab_name,

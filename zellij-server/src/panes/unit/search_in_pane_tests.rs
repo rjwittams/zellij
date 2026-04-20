@@ -1,4 +1,5 @@
 use super::super::TerminalPane;
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::sixel::SixelImageStore;
 use crate::panes::LinkHandler;
 use crate::tab::Pane;
@@ -27,6 +28,7 @@ fn create_pane() -> TerminalPane {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let debug = false;
     let arrow_fonts = true;
@@ -42,6 +44,7 @@ fn create_pane() -> TerminalPane {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         Rc::new(RefCell::new(Palette::default())),
         terminal_emulator_color_codes,
         None,

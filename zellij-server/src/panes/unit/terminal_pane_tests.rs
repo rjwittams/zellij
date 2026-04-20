@@ -43,7 +43,7 @@ pub fn scrolling_inside_a_pane() {
     let styled_underlines = true;
     let osc8_hyperlinks = true;
     let explicitly_disable_kitty_keyboard_protocol = false;
-    let mut terminal_pane = TerminalPane::new_with_kitty_asset_store(
+    let mut terminal_pane = TerminalPane::new(
         pid,
         fake_win_size,
         style,
@@ -86,6 +86,7 @@ pub fn sixel_image_inside_terminal_pane() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -106,6 +107,7 @@ pub fn sixel_image_inside_terminal_pane() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -139,6 +141,7 @@ pub fn partial_sixel_image_inside_terminal_pane() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -159,6 +162,7 @@ pub fn partial_sixel_image_inside_terminal_pane() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -186,6 +190,7 @@ pub fn overflowing_sixel_image_inside_terminal_pane() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -206,6 +211,7 @@ pub fn overflowing_sixel_image_inside_terminal_pane() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -232,6 +238,7 @@ pub fn scrolling_through_a_sixel_image() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -252,6 +259,7 @@ pub fn scrolling_through_a_sixel_image() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -289,6 +297,7 @@ pub fn multiple_sixel_images_in_pane() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -309,6 +318,7 @@ pub fn multiple_sixel_images_in_pane() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -344,6 +354,7 @@ pub fn resizing_pane_with_sixel_images() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -364,6 +375,7 @@ pub fn resizing_pane_with_sixel_images() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -402,6 +414,7 @@ pub fn changing_character_cell_size_with_sixel_images() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -422,6 +435,7 @@ pub fn changing_character_cell_size_with_sixel_images() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size.clone(),
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -465,6 +479,7 @@ pub fn keep_working_after_corrupted_sixel_image() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -485,6 +500,7 @@ pub fn keep_working_after_corrupted_sixel_image() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -526,6 +542,7 @@ pub fn pane_with_frame_position_is_on_frame() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -546,6 +563,7 @@ pub fn pane_with_frame_position_is_on_frame() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -623,6 +641,7 @@ pub fn pane_with_bottom_and_right_borders_position_is_on_frame() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -643,6 +662,7 @@ pub fn pane_with_bottom_and_right_borders_position_is_on_frame() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -712,6 +732,7 @@ fn make_terminal_pane_for_bell() -> TerminalPane {
     fake_win_size.cols.set_inner(121);
     fake_win_size.rows.set_inner(20);
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     TerminalPane::new(
@@ -723,6 +744,7 @@ fn make_terminal_pane_for_bell() -> TerminalPane {
         Rc::new(RefCell::new(LinkHandler::new())),
         Rc::new(RefCell::new(None)),
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,
@@ -793,6 +815,7 @@ pub fn frameless_pane_position_is_on_frame() {
     let pid = 1;
     let style = Style::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let character_cell_size = Rc::new(RefCell::new(Some(SizeInPixels {
@@ -813,6 +836,7 @@ pub fn frameless_pane_position_is_on_frame() {
         Rc::new(RefCell::new(LinkHandler::new())),
         character_cell_size,
         sixel_image_store,
+        kitty_asset_store,
         terminal_emulator_colors,
         terminal_emulator_color_codes,
         None,

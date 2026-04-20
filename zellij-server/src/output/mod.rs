@@ -329,7 +329,7 @@ fn adjust_middle_segment_for_wide_chars(
 
 #[derive(Clone, Debug, Default)]
 pub struct Output {
-    pre_vte_instructions: HashMap<ClientId, Vec<String>>,
+    pre_vte_instructions: HashMap<ClientId, Vec<PreVteInstruction>>,
     post_vte_instructions: HashMap<ClientId, Vec<String>>,
     client_character_chunks: HashMap<ClientId, Vec<CharacterChunk>>,
     link_handler: Option<Rc<RefCell<LinkHandler>>>,
@@ -342,22 +342,21 @@ pub struct Output {
     cursor_coordinates: Option<(usize, usize)>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RenderedImageState {
+    pub explicit_chunks: Vec<KittyImageChunk>,
+    pub placeholder_renders: Vec<KittyPlaceholderRender>,
+    pub resident_asset_generations: HashMap<u32, u64>,
+}
+
+#[derive(Clone, Debug)]
+struct PreVteInstruction {
+    bytes: String,
+    clears_display: bool,
+}
+
 impl Output {
     pub fn new(
-        sixel_image_store: Rc<RefCell<SixelImageStore>>,
-        character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
-        styled_underlines: bool,
-        osc8_hyperlinks: bool,
-    ) -> Self {
-        Self::new_with_kitty_asset_store(
-            sixel_image_store,
-            Rc::new(RefCell::new(KittyAssetStore::default())),
-            character_cell_size,
-            styled_underlines,
-            osc8_hyperlinks,
-        )
-    }
-    pub fn new_with_kitty_asset_store(
         sixel_image_store: Rc<RefCell<SixelImageStore>>,
         kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
         character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
@@ -375,45 +374,57 @@ impl Output {
             ..Default::default()
         }
     }
-    pub fn set_last_rendered_kitty_chunks(
+
+    pub fn set_last_rendered_image_states(
         &mut self,
-        last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
-        last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
+        last_rendered_image_states: HashMap<ClientId, RenderedImageState>,
     ) {
-        self.image_output.set_last_rendered_kitty_chunks(
-            last_rendered_kitty_chunks,
-            last_rendered_kitty_placeholder_renders,
-        );
+        self.image_output
+            .set_last_rendered_image_states(last_rendered_image_states);
     }
-    pub fn set_last_rendered_kitty_state(
+
+    pub fn set_last_rendered_image_state_for_client(
         &mut self,
-        last_rendered_kitty_chunks: HashMap<ClientId, Vec<KittyImageChunk>>,
-        last_rendered_kitty_placeholder_renders: HashMap<ClientId, Vec<KittyPlaceholderRender>>,
-        resident_kitty_asset_generations: HashMap<ClientId, HashMap<u32, u64>>,
+        client_id: ClientId,
+        last_rendered_image_state: RenderedImageState,
     ) {
-        self.image_output.set_last_rendered_kitty_state(
-            last_rendered_kitty_chunks,
-            last_rendered_kitty_placeholder_renders,
-            resident_kitty_asset_generations,
-        );
+        self.image_output
+            .set_last_rendered_image_state_for_client(client_id, last_rendered_image_state);
     }
-    pub fn take_last_rendered_kitty_chunks(
+
+    pub fn take_last_rendered_image_states(&mut self) -> HashMap<ClientId, RenderedImageState> {
+        self.image_output.take_last_rendered_image_states()
+    }
+
+    pub fn take_last_rendered_image_state_for_client(
         &mut self,
-    ) -> (
-        HashMap<ClientId, Vec<KittyImageChunk>>,
-        HashMap<ClientId, Vec<KittyPlaceholderRender>>,
-    ) {
-        self.image_output.take_last_rendered_kitty_chunks()
+        client_id: ClientId,
+    ) -> Option<RenderedImageState> {
+        self.image_output
+            .take_last_rendered_image_state_for_client(client_id)
     }
-    pub fn take_last_rendered_kitty_state(
+
+    fn ensure_client_slot(&mut self, client_id: ClientId) {
+        self.client_character_chunks.entry(client_id).or_default();
+    }
+
+    fn add_pre_vte_instruction(
         &mut self,
-    ) -> (
-        HashMap<ClientId, Vec<KittyImageChunk>>,
-        HashMap<ClientId, Vec<KittyPlaceholderRender>>,
-        HashMap<ClientId, HashMap<u32, u64>>,
+        client_id: ClientId,
+        vte_instruction: &str,
+        clears_display: bool,
     ) {
-        self.image_output.take_last_rendered_kitty_state()
+        self.ensure_client_slot(client_id);
+        let entry = self
+            .pre_vte_instructions
+            .entry(client_id)
+            .or_insert_with(Vec::new);
+        entry.push(PreVteInstruction {
+            bytes: String::from(vte_instruction),
+            clears_display,
+        });
     }
+
     pub fn add_clients(
         &mut self,
         client_ids: &HashSet<ClientId>,
@@ -465,7 +476,7 @@ impl Output {
         vte_instruction: &str,
     ) {
         for client_id in client_ids {
-            self.client_character_chunks.entry(client_id).or_default();
+            self.ensure_client_slot(client_id);
             let entry = self
                 .post_vte_instructions
                 .entry(client_id)
@@ -479,12 +490,17 @@ impl Output {
         vte_instruction: &str,
     ) {
         for client_id in client_ids {
-            self.client_character_chunks.entry(client_id).or_default();
-            let entry = self
-                .pre_vte_instructions
-                .entry(client_id)
-                .or_insert_with(Vec::new);
-            entry.push(String::from(vte_instruction));
+            self.add_pre_vte_instruction(client_id, vte_instruction, false);
+        }
+    }
+
+    pub fn add_display_clearing_pre_vte_instruction_to_multiple_clients(
+        &mut self,
+        client_ids: impl Iterator<Item = ClientId>,
+        vte_instruction: &str,
+    ) {
+        for client_id in client_ids {
+            self.add_pre_vte_instruction(client_id, vte_instruction, true);
         }
     }
     pub fn add_post_vte_instruction_to_client(
@@ -492,7 +508,7 @@ impl Output {
         client_id: ClientId,
         vte_instruction: &str,
     ) {
-        self.client_character_chunks.entry(client_id).or_default();
+        self.ensure_client_slot(client_id);
         let entry = self
             .post_vte_instructions
             .entry(client_id)
@@ -504,12 +520,15 @@ impl Output {
         client_id: ClientId,
         vte_instruction: &str,
     ) {
-        self.client_character_chunks.entry(client_id).or_default();
-        let entry = self
-            .pre_vte_instructions
-            .entry(client_id)
-            .or_insert_with(Vec::new);
-        entry.push(String::from(vte_instruction));
+        self.add_pre_vte_instruction(client_id, vte_instruction, false);
+    }
+
+    pub fn add_display_clearing_pre_vte_instruction_to_client(
+        &mut self,
+        client_id: ClientId,
+        vte_instruction: &str,
+    ) {
+        self.add_pre_vte_instruction(client_id, vte_instruction, true);
     }
     pub fn add_pane_image_output_to_client(
         &mut self,
@@ -517,7 +536,7 @@ impl Output {
         pane_image_output: PaneImageRenderOutput,
         z_index: Option<usize>,
     ) {
-        self.client_character_chunks.entry(client_id).or_default();
+        self.ensure_client_slot(client_id);
         self.image_output.add_pane_image_output_to_client(
             client_id,
             pane_image_output,
@@ -552,10 +571,10 @@ impl Output {
                 self.pre_vte_instructions.remove(&client_id)
             {
                 for vte_instruction in pre_vte_instructions_for_client {
-                    if vte_instruction.contains("\u{1b}[2J") {
+                    if vte_instruction.clears_display {
                         pre_vte_clears_display = true;
                     }
-                    client_serialized_render_instructions.push_str(&vte_instruction);
+                    client_serialized_render_instructions.push_str(&vte_instruction.bytes);
                 }
             }
 
@@ -607,10 +626,10 @@ impl Output {
                 self.pre_vte_instructions.remove(&client_id)
             {
                 for vte_instruction in pre_vte_instructions_for_client {
-                    if vte_instruction.contains("\u{1b}[2J") {
+                    if vte_instruction.clears_display {
                         pre_vte_clears_display = true;
                     }
-                    client_serialized_render_instructions.push_str(&vte_instruction);
+                    client_serialized_render_instructions.push_str(&vte_instruction.bytes);
                 }
             }
 

@@ -1,5 +1,6 @@
 use super::Tab;
 use crate::pane_groups::PaneGroups;
+use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::sixel::SixelImageStore;
 use crate::screen::CopyOptions;
 use crate::{os_input_output::ServerOsApi, panes::PaneId, thread_bus::ThreadSenders, ClientId};
@@ -166,6 +167,7 @@ fn create_new_tab(size: Size, stacked_resize: bool) -> Tab {
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let copy_options = CopyOptions::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let current_pane_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
     let currently_marking_pane_group = Rc::new(RefCell::new(HashMap::new()));
@@ -186,6 +188,7 @@ fn create_new_tab(size: Size, stacked_resize: bool) -> Tab {
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -252,6 +255,7 @@ fn create_new_tab_with_layout(size: Size, layout: TiledPaneLayout) -> Tab {
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let copy_options = CopyOptions::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let current_pane_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
     let currently_marking_pane_group = Rc::new(RefCell::new(HashMap::new()));
@@ -272,6 +276,7 @@ fn create_new_tab_with_layout(size: Size, layout: TiledPaneLayout) -> Tab {
         character_cell_info,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,
@@ -343,6 +348,7 @@ fn create_new_tab_with_cell_size(
     let terminal_emulator_colors = Rc::new(RefCell::new(Palette::default()));
     let copy_options = CopyOptions::default();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
+    let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let terminal_emulator_color_codes = Rc::new(RefCell::new(HashMap::new()));
     let stacked_resize = Rc::new(RefCell::new(true));
     let current_pane_group = Rc::new(RefCell::new(PaneGroups::new(ThreadSenders::default())));
@@ -364,6 +370,7 @@ fn create_new_tab_with_cell_size(
         character_cell_size,
         stacked_resize,
         sixel_image_store,
+        kitty_asset_store,
         os_api,
         senders,
         max_panes,

@@ -53,7 +53,7 @@ macro_rules! get_or_create_grid {
         let explicitly_disable_kitty_keyboard_protocol = false; // N/A for plugins
 
         $self.grids.entry($client_id).or_insert_with(|| {
-            let mut grid = Grid::new_with_kitty_asset_store(
+            let mut grid = Grid::new(
                 rows,
                 cols,
                 $self.terminal_emulator_colors.clone(),
@@ -115,46 +115,6 @@ pub(crate) struct PluginPane {
 impl PluginPane {
     #[allow(dead_code)]
     pub fn new(
-        pid: u32,
-        position_and_size: PaneGeom,
-        send_plugin_instructions: SenderWithContext<PluginInstruction>,
-        title: String,
-        pane_name: String,
-        sixel_image_store: Rc<RefCell<SixelImageStore>>,
-        terminal_emulator_colors: Rc<RefCell<Palette>>,
-        terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
-        link_handler: Rc<RefCell<LinkHandler>>,
-        character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
-        currently_connected_clients: Vec<ClientId>,
-        style: Style,
-        invoked_with: Option<Run>,
-        debug: bool,
-        arrow_fonts: bool,
-        styled_underlines: bool,
-    ) -> Self {
-        Self::new_with_kitty_asset_store(
-            pid,
-            position_and_size,
-            send_plugin_instructions,
-            title,
-            pane_name,
-            sixel_image_store,
-            Rc::new(RefCell::new(KittyAssetStore::default())),
-            terminal_emulator_colors,
-            terminal_emulator_color_codes,
-            link_handler,
-            character_cell_size,
-            currently_connected_clients,
-            style,
-            invoked_with,
-            debug,
-            arrow_fonts,
-            styled_underlines,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn new_with_kitty_asset_store(
         pid: u32,
         position_and_size: PaneGeom,
         send_plugin_instructions: SenderWithContext<PluginInstruction>,
