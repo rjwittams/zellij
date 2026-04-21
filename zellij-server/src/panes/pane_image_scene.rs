@@ -611,10 +611,10 @@ impl PaneImageScene {
                         .and_then(|protocol_identity| match protocol_identity {
                             ProtocolPlacementIdentity::Kitty {
                                 image_id: Some(image_id),
-                                placement_id,
+                                placement_id: Some(placement_id),
                             } => Some(KittyProtocolPlacementKey {
                                 image_id: *image_id,
-                                placement_id: *placement_id,
+                                placement_id: Some(*placement_id),
                             }),
                             _ => None,
                         })

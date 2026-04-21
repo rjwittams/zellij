@@ -1382,6 +1382,7 @@ pub fn kitty_delete_request(apc_bytes: &[u8]) -> Option<KittyDeleteRequest> {
     let placement_id = kv
         .get("p")
         .and_then(|p| p.parse::<u32>().ok())
+        .filter(|placement_id| *placement_id != 0)
         .map(PlacementId::Protocol);
     let selector = match delete_selector {
         "a" | "A" => KittyDeleteSelector::AllVisible,
@@ -1493,7 +1494,10 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
 
     let quiet = kv.get("q").and_then(|q| q.parse::<u8>().ok()).unwrap_or(0);
     let image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
-    let placement_id = kv.get("p").and_then(|p| p.parse::<u32>().ok());
+    let placement_id = kv
+        .get("p")
+        .and_then(|p| p.parse::<u32>().ok())
+        .filter(|placement_id| *placement_id != 0);
     let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok());
     let transport = kv.get("t").copied().unwrap_or("d");
 
@@ -1648,7 +1652,10 @@ fn parse_non_query_reply_context(apc_bytes: &[u8]) -> Option<PendingKittyReplyCo
         kind,
         quiet: kv.get("q").and_then(|q| q.parse::<u8>().ok()).unwrap_or(0),
         parsed_image_id: kv.get("i").and_then(|i| i.parse::<u32>().ok()),
-        placement_id: kv.get("p").and_then(|p| p.parse::<u32>().ok()),
+        placement_id: kv
+            .get("p")
+            .and_then(|p| p.parse::<u32>().ok())
+            .filter(|placement_id| *placement_id != 0),
         image_number: kv.get("I").and_then(|i| i.parse::<u32>().ok()),
     })
 }
@@ -1737,6 +1744,7 @@ impl ParsedKittyCommand {
                 placement_id: kv
                     .get("p")
                     .and_then(|p| p.parse::<u32>().ok())
+                    .filter(|placement_id| *placement_id != 0)
                     .map(PlacementId::Protocol),
                 placement_mode: if kv.get("U").copied() == Some("1") {
                     KittyImagePlacementMode::Placeholder

@@ -7033,6 +7033,52 @@ fn kitty_image_number_targets_newest_image_for_placement_and_delete() {
 }
 
 #[test]
+fn kitty_omitted_placement_id_allows_multiple_stored_placements_for_same_image() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 12);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(81, 3, 2));
+    feed_bytes(&mut grid, b"\x1b[1;1H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=81,c=2,r=2\x1b\\");
+    feed_bytes(&mut grid, b"\x1b[1;4H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=81,c=2,r=2\x1b\\");
+
+    let visible = grid.visible_kitty_image_chunks(0, 0);
+    let mut positions: Vec<_> = visible.iter().map(|chunk| (chunk.cell_x, chunk.cell_y)).collect();
+    positions.sort_unstable();
+
+    assert_eq!(
+        visible.len(),
+        2,
+        "omitting p should create two coexisting placements for the same image id"
+    );
+    assert_eq!(positions, vec![(0, 0), (3, 0)]);
+}
+
+#[test]
+fn kitty_zero_placement_id_allows_multiple_stored_placements_for_same_image() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 12);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(82, 3, 2));
+    feed_bytes(&mut grid, b"\x1b[1;1H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=82,p=0,c=2,r=2\x1b\\");
+    feed_bytes(&mut grid, b"\x1b[1;4H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=82,p=0,c=2,r=2\x1b\\");
+
+    let visible = grid.visible_kitty_image_chunks(0, 0);
+    let mut positions: Vec<_> = visible.iter().map(|chunk| (chunk.cell_x, chunk.cell_y)).collect();
+    positions.sort_unstable();
+
+    assert_eq!(
+        visible.len(),
+        2,
+        "p=0 should behave like an unnamed placement and allow multiple coexisting placements"
+    );
+    assert_eq!(positions, vec![(0, 0), (3, 0)]);
+}
+
+#[test]
 fn kitty_uppercase_delete_by_image_id_frees_backing_data() {
     let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
         create_grid_with_shared_stores(4, 8);
