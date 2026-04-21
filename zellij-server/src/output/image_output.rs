@@ -328,6 +328,15 @@ impl ImageOutput {
         self.client_image_states.entry(client_id).or_default()
     }
 
+    fn stable_wire_placement_id(
+        protocol_placement_id: Option<super::PlacementId>,
+        stable_render_id: u64,
+    ) -> super::PlacementId {
+        protocol_placement_id.unwrap_or_else(|| {
+            super::PlacementId::Synthetic((stable_render_id as u32).max(1))
+        })
+    }
+
     fn kitty_scene_state_from_rendered(
         resident_kitty_asset_generations: &HashMap<u32, u64>,
         chunks: &[KittyImageChunk],
@@ -343,23 +352,29 @@ impl ImageOutput {
         };
         let mut referenced_asset_ids: BTreeSet<u32> = BTreeSet::new();
         for chunk in chunks {
-            let placement_id = chunk.placement_id?;
+            let placement_id =
+                ImageOutput::stable_wire_placement_id(chunk.placement_id, chunk.stable_render_id);
             referenced_asset_ids.insert(chunk.image_id);
             scene.insert_placement(PlannedKittyPlacement::Explicit {
                 key: KittyPlacementKey {
+                    stable_render_id: chunk.stable_render_id,
                     image_id: chunk.image_id,
-                    placement_id,
+                    wire_placement_id: placement_id,
                 },
                 chunk: chunk.clone(),
             });
         }
         for render in placeholder_renders {
-            let placement_id = render.placement_id?;
+            let placement_id = ImageOutput::stable_wire_placement_id(
+                render.placement_id,
+                render.stable_render_id,
+            );
             referenced_asset_ids.insert(render.image_id);
             scene.insert_placement(PlannedKittyPlacement::Placeholder {
                 key: KittyPlacementKey {
+                    stable_render_id: render.stable_render_id,
                     image_id: render.image_id,
-                    placement_id,
+                    wire_placement_id: placement_id,
                 },
                 render: render.clone(),
             });
@@ -404,7 +419,7 @@ impl ImageOutput {
             if let KittyPlacementOp::Delete { key } = placement_op {
                 vte_output.push_str(&KittyImageState::serialize_delete_placement(
                     key.image_id,
-                    key.placement_id.wire_value(),
+                    key.wire_placement_id.wire_value(),
                 ));
             }
         }
@@ -494,13 +509,13 @@ impl ImageOutput {
                         KittyPlacementOp::PlaceExplicit { key, chunk } => vte_output.push_str(
                             &KittyImageState::serialize_explicit_placement(
                                 chunk,
-                                key.placement_id.wire_value(),
+                                key.wire_placement_id.wire_value(),
                             ),
                         ),
                         KittyPlacementOp::PlacePlaceholder { key, render } => {
                             vte_output.push_str(&KittyImageState::serialize_placeholder_render(
                                 render,
-                                key.placement_id.wire_value(),
+                                key.wire_placement_id.wire_value(),
                             ))
                         },
                     }
@@ -868,6 +883,7 @@ mod tests {
         rows: usize,
     ) -> KittyImageChunk {
         KittyImageChunk {
+            stable_render_id: image_id as u64,
             image_id,
             placement_id: Some(crate::output::PlacementId::Protocol(placement_id)),
             placement_mode: crate::output::KittyImagePlacementMode::Explicit,

@@ -5526,6 +5526,7 @@ fn create_new_screen_with_message_capture(
 
 fn test_kitty_chunk(image_id: u32, placement_id: u32) -> KittyImageChunk {
     KittyImageChunk {
+        stable_render_id: placement_id as u64,
         image_id,
         placement_id: Some(PlacementId::Protocol(placement_id)),
         placement_mode: KittyImagePlacementMode::Explicit,

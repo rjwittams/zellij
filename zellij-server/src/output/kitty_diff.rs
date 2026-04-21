@@ -3,8 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct KittyPlacementKey {
+    pub stable_render_id: u64,
     pub image_id: u32,
-    pub placement_id: PlacementId,
+    pub wire_placement_id: PlacementId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

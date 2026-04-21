@@ -969,6 +969,7 @@ impl PaneImageScene {
             source_height = scale_u32(source_height, projection.rows, rows);
             rows = projection.rows;
             explicit_chunks.push(KittyImageChunk {
+                stable_render_id: placement.logical_placement_id.0,
                 image_id,
                 placement_id,
                 placement_mode: KittyImagePlacementMode::Explicit,
@@ -1138,6 +1139,7 @@ impl PaneImageScene {
                 scrollback_size_in_lines,
             );
             placeholder_renders.push(KittyPlaceholderRender {
+                stable_render_id: logical_placement.logical_placement_id.0,
                 image_id,
                 placement_id,
                 columns: total_columns,

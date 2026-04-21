@@ -786,6 +786,7 @@ impl KittyImageState {
             let cell_x = projection.cell_x;
             let cell_y = projection.cell_y;
             chunks.push(KittyImageChunk {
+                stable_render_id: placement.image_id as u64,
                 image_id: placement.image_id,
                 placement_id: placement.placement_id,
                 placement_mode: placement.placement_mode,
@@ -2317,6 +2318,7 @@ mod tests {
             assert_eq!(geometry.rows_specified, expect_r);
 
             let chunk = KittyImageChunk {
+                stable_render_id: 7,
                 image_id: 1,
                 placement_id: Some(pid(7)),
                 placement_mode: KittyImagePlacementMode::Explicit,
@@ -2402,6 +2404,7 @@ mod tests {
         // One plausible bounded equivalent is a 10x3 box with the rendered image
         // starting at the top-left and leaving trailing slack in the final row.
         let bounded_chunk = KittyImageChunk {
+            stable_render_id: 7,
             image_id: 1,
             placement_id: Some(pid(7)),
             placement_mode: KittyImagePlacementMode::Explicit,
