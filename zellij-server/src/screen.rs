@@ -2491,6 +2491,37 @@ impl Screen {
         Ok(())
     }
 
+    fn serialize_watcher_output_for_client(
+        &mut self,
+        watcher_output: &Output,
+        watcher_id: ClientId,
+        followed_client_id: ClientId,
+        watcher_size: Size,
+    ) -> Result<Option<String>> {
+        let mut watcher_specific_output = watcher_output.clone();
+        watcher_specific_output.set_last_rendered_image_state_for_client(
+            followed_client_id,
+            self.watcher_last_rendered_image_state
+                .get(&watcher_id)
+                .cloned()
+                .unwrap_or_default(),
+        );
+
+        let mut serialized_output =
+            watcher_specific_output.serialize_with_size(Some(watcher_size), Some(self.size))?;
+
+        if let Some(watcher_last_rendered_state) =
+            watcher_specific_output.take_last_rendered_image_state_for_client(followed_client_id)
+        {
+            self.watcher_last_rendered_image_state
+                .insert(watcher_id, watcher_last_rendered_state);
+        } else {
+            self.watcher_last_rendered_image_state.remove(&watcher_id);
+        }
+
+        Ok(serialized_output.remove(&followed_client_id))
+    }
+
     pub fn render_to_clients(&mut self) -> Result<()> {
         // this method does the actual rendering and is triggered by a debounced BackgroundJob (see
         // the render method for more details)
@@ -2665,36 +2696,25 @@ impl Screen {
                 // Send the rendered output to all watcher clients
                 if watcher_output.is_dirty() {
                     let mut watcher_render_output: HashMap<ClientId, String> = HashMap::new();
+                    let watcher_targets: Vec<(ClientId, Size)> = self
+                        .watcher_clients
+                        .iter()
+                        .map(|(watcher_id, watcher_state)| (*watcher_id, watcher_state.size()))
+                        .collect();
 
-                    // For each watcher, clone the output and serialize with size constraints
-                    for (watcher_id, watcher_state) in &self.watcher_clients {
-                        let mut watcher_specific_output = watcher_output.clone();
-                        watcher_specific_output.set_last_rendered_image_state_for_client(
-                            followed_client_id,
-                            self.watcher_last_rendered_image_state
-                                .get(watcher_id)
-                                .cloned()
-                                .unwrap_or_default(),
-                        );
-
-                        // Serialize this watcher's output with size constraints (cropping and padding handled inside)
-                        let mut serialized_output = watcher_specific_output
-                            .serialize_with_size(Some(watcher_state.size()), Some(self.size))
-                            .context(err_context)?;
-
-                        if let Some(watcher_last_rendered_state) = watcher_specific_output
-                            .take_last_rendered_image_state_for_client(followed_client_id)
+                    // For each watcher, serialize the followed client's output with watcher-local
+                    // image state and remap the rendered payload back to the watcher id.
+                    for (watcher_id, watcher_size) in watcher_targets {
+                        if let Some(followed_output) = self
+                            .serialize_watcher_output_for_client(
+                                &watcher_output,
+                                watcher_id,
+                                followed_client_id,
+                                watcher_size,
+                            )
+                            .context(err_context)?
                         {
-                            self.watcher_last_rendered_image_state
-                                .insert(*watcher_id, watcher_last_rendered_state);
-                        } else {
-                            self.watcher_last_rendered_image_state.remove(watcher_id);
-                        }
-
-                        // Get the output for the followed client and map it to this watcher
-                        if let Some(followed_output) = serialized_output.remove(&followed_client_id)
-                        {
-                            watcher_render_output.insert(*watcher_id, followed_output);
+                            watcher_render_output.insert(watcher_id, followed_output);
                         }
                     }
 

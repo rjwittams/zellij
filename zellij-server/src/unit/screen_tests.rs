@@ -47,11 +47,16 @@ use crate::panes::grid::Grid;
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::sixel::SixelImageStore;
+use crate::panes::pane_image_scene::KittyRenderBundle;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use zellij_utils::data::{PaneContents, PaneRenderReport};
 use zellij_utils::ipc::ExitReason;
+use crate::output::{
+    KittyImageChunk, KittyImageData, KittyImagePlacementMode, Output, PaneImageRenderOutput,
+    PlacementId, RenderedImageState,
+};
 
 fn take_snapshot_and_cursor_coordinates(
     ansi_instructions: &str,
@@ -5517,6 +5522,101 @@ fn create_new_screen_with_message_capture(
         web_server_port,
     );
     (screen, messages)
+}
+
+fn test_kitty_chunk(image_id: u32, placement_id: u32) -> KittyImageChunk {
+    KittyImageChunk {
+        image_id,
+        placement_id: Some(PlacementId::Protocol(placement_id)),
+        placement_mode: KittyImagePlacementMode::Explicit,
+        cell_x: 0,
+        cell_y: 0,
+        columns: 1,
+        rows: 1,
+        columns_specified: true,
+        rows_specified: true,
+        source_x: 0,
+        source_y: 0,
+        source_width: 1,
+        source_height: 1,
+        z_index: 0,
+        x_offset: 0,
+        y_offset: 0,
+    }
+}
+
+#[test]
+fn watcher_helper_round_trips_followed_client_image_state() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    let watcher_id = 2;
+    let followed_client_id = 1;
+    let current_chunk = test_kitty_chunk(92, 7);
+
+    screen.kitty_asset_store.borrow_mut().insert_asset(
+        current_chunk.image_id,
+        KittyImageData::Png {
+            data: vec![1],
+            width: 1,
+            height: 1,
+        },
+    );
+    screen.watcher_last_rendered_image_state.insert(
+        watcher_id,
+        RenderedImageState {
+            resident_asset_generations: HashMap::from([(91, 3)]),
+            ..Default::default()
+        },
+    );
+
+    let mut watcher_output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+    watcher_output.add_pane_image_output_to_client(
+        followed_client_id,
+        PaneImageRenderOutput {
+            kitty_scene: KittyRenderBundle {
+                explicit_chunks: vec![current_chunk.clone()],
+                placeholder_renders: vec![],
+            },
+            ..Default::default()
+        },
+        None,
+    );
+
+    let rendered = screen
+        .serialize_watcher_output_for_client(
+            &watcher_output,
+            watcher_id,
+            followed_client_id,
+            size,
+        )
+        .unwrap();
+
+    assert!(
+        rendered
+            .as_ref()
+            .map(|rendered: &String| rendered.contains("\u{1b}_G"))
+            .unwrap_or(false),
+        "expected serialized kitty output for the followed client",
+    );
+    let watcher_state = screen
+        .watcher_last_rendered_image_state
+        .get(&watcher_id)
+        .expect("watcher render state should be updated");
+    assert_eq!(watcher_state.explicit_chunks, vec![current_chunk]);
+    assert_eq!(
+        watcher_state.resident_asset_generations.get(&91),
+        Some(&3),
+    );
+    assert_eq!(
+        watcher_state.resident_asset_generations.get(&92),
+        Some(&1),
+    );
 }
 
 #[test]
