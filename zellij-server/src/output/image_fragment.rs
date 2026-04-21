@@ -52,7 +52,7 @@ fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
     }
 }
 
-fn remap_split_fragment_placement_id(chunk: &KittyImageChunk) -> Option<PlacementId> {
+fn synthesize_split_fragment_placement_id(chunk: &KittyImageChunk) -> Option<PlacementId> {
     let base = match chunk.placement_id? {
         PlacementId::Protocol(value) | PlacementId::Synthetic(value) => value,
     };
@@ -82,6 +82,14 @@ fn promote_split_explicit_chunk_to_bounded_geometry(chunk: KittyImageChunk) -> K
     KittyImageChunk {
         columns_specified: true,
         rows_specified: true,
+        ..chunk
+    }
+}
+
+fn build_split_explicit_fragment(chunk: KittyImageChunk) -> KittyImageChunk {
+    let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
+    KittyImageChunk {
+        placement_id: synthesize_split_fragment_placement_id(&chunk),
         ..chunk
     }
 }
@@ -124,13 +132,7 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
-        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
-        uncovered.push(ImageFragment::KittyExplicit(
-            KittyImageChunk {
-                placement_id: remap_split_fragment_placement_id(&chunk),
-                ..chunk
-            },
-        ));
+        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(chunk)));
     }
     if intersection_bottom < chunk_bottom_edge {
         let removed_rows = intersection_bottom - chunk_top_edge;
@@ -142,13 +144,7 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
-        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
-        uncovered.push(ImageFragment::KittyExplicit(
-            KittyImageChunk {
-                placement_id: remap_split_fragment_placement_id(&chunk),
-                ..chunk
-            },
-        ));
+        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(chunk)));
     }
     if intersection_left > chunk_left_edge {
         let kept_cols = intersection_left - chunk_left_edge;
@@ -167,13 +163,7 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
-        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
-        uncovered.push(ImageFragment::KittyExplicit(
-            KittyImageChunk {
-                placement_id: remap_split_fragment_placement_id(&chunk),
-                ..chunk
-            },
-        ));
+        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(chunk)));
     }
     if intersection_right < chunk_right_edge {
         let removed_cols = intersection_right - chunk_left_edge;
@@ -195,13 +185,7 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
-        let chunk = promote_split_explicit_chunk_to_bounded_geometry(chunk);
-        uncovered.push(ImageFragment::KittyExplicit(
-            KittyImageChunk {
-                placement_id: remap_split_fragment_placement_id(&chunk),
-                ..chunk
-            },
-        ));
+        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(chunk)));
     }
     uncovered
 }
@@ -393,4 +377,52 @@ pub(crate) fn visible_image_fragments(
         }
     }
     fragments_to_check
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::KittyImagePlacementMode;
+
+    fn test_chunk() -> KittyImageChunk {
+        KittyImageChunk {
+            image_id: 41,
+            placement_id: Some(PlacementId::Protocol(77)),
+            placement_mode: KittyImagePlacementMode::Explicit,
+            cell_x: 0,
+            cell_y: 0,
+            columns: 4,
+            rows: 4,
+            columns_specified: false,
+            rows_specified: false,
+            source_x: 10,
+            source_y: 20,
+            source_width: 80,
+            source_height: 40,
+            z_index: 0,
+            x_offset: 0,
+            y_offset: 0,
+        }
+    }
+
+    #[test]
+    fn build_split_explicit_fragment_assigns_synthetic_id_and_bounded_geometry() {
+        let chunk = test_chunk();
+        let split = build_split_explicit_fragment(KittyImageChunk {
+            cell_x: 1,
+            cell_y: 2,
+            columns: 2,
+            rows: 1,
+            source_x: 30,
+            source_y: 30,
+            source_width: 40,
+            source_height: 10,
+            ..chunk.clone()
+        });
+
+        assert!(matches!(split.placement_id, Some(PlacementId::Synthetic(_))));
+        assert!(split.columns_specified);
+        assert!(split.rows_specified);
+        assert_eq!(split.image_id, chunk.image_id);
+    }
 }
