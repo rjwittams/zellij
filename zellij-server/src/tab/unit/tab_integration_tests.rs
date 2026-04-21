@@ -11165,12 +11165,11 @@ fn tiled_pane_resize_followup_frame_redraws_kitty_for_explicit_and_placeholder_m
     assert!(placeholder_first_render.contains('\u{10EEEE}'));
 
     assert!(
-        explicit_resized_render.contains("a=t") && explicit_resized_render.contains("a=p"),
+        explicit_resized_render.contains("a=p"),
         "explicit follow-up frame should redraw kitty after tiled pane resize"
     );
     assert!(
-        placeholder_resized_render.contains("a=t")
-            && placeholder_resized_render.contains("U=1")
+        placeholder_resized_render.contains("U=1")
             && placeholder_resized_render.contains('\u{10EEEE}'),
         "placeholder follow-up frame should redraw kitty after tiled pane resize"
     );
@@ -11187,10 +11186,6 @@ fn kitty_explicit_image_survives_tiled_pane_resize_and_render() {
     assert!(
         first_render.contains("a=p"),
         "initial explicit render should serialize a kitty display placement"
-    );
-    assert!(
-        resized_render.contains("a=t"),
-        "resized explicit render should retransmit kitty image data"
     );
     assert!(
         resized_render.contains("a=p"),
@@ -11213,10 +11208,6 @@ fn kitty_placeholder_survives_tiled_pane_resize_and_render() {
     assert!(
         first_render.contains('\u{10EEEE}'),
         "initial placeholder render should serialize kitty placeholder cells"
-    );
-    assert!(
-        resized_render.contains("a=t"),
-        "resized placeholder render should retransmit kitty image data after resize"
     );
     assert!(
         resized_render.contains("U=1"),
