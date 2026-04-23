@@ -21,6 +21,8 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+const KITTY_TEMP_FILE_MARKER: &str = "tty-graphics-protocol";
+
 #[derive(Clone, Debug, Default)]
 pub struct PendingKittyPlaceholder {
     image_id_low_bits: Option<u32>,
@@ -267,7 +269,7 @@ enum KittyTransportCompression {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KittyTransmissionMedium {
     Direct,
-    File,
+    RegularFile,
     TemporaryFile,
 }
 
@@ -1536,7 +1538,7 @@ fn decode_kitty_transport_payload(payload_b64: &[u8]) -> Option<Vec<u8>> {
 
 fn parse_kitty_transmission_medium(medium: Option<&str>) -> Option<KittyTransmissionMedium> {
     match medium {
-        Some("f") => Some(KittyTransmissionMedium::File),
+        Some("f") => Some(KittyTransmissionMedium::RegularFile),
         Some("t") => Some(KittyTransmissionMedium::TemporaryFile),
         Some("d") | None => Some(KittyTransmissionMedium::Direct),
         Some(_) => None,
@@ -1558,13 +1560,16 @@ fn parse_kitty_payload_byte_range(
     Some((size, offset))
 }
 
+fn kitty_path_payload(path_payload: &[u8]) -> Option<&Path> {
+    Some(Path::new(std::str::from_utf8(path_payload).ok()?))
+}
+
 fn read_kitty_regular_file_payload(
     path_payload: &[u8],
     size: Option<usize>,
     offset: u64,
 ) -> Option<Vec<u8>> {
-    let path = std::str::from_utf8(path_payload).ok()?;
-    read_kitty_file_payload(Path::new(path), size, offset)
+    read_kitty_file_payload(kitty_path_payload(path_payload)?, size, offset)
 }
 
 fn read_kitty_file_payload(path: &Path, size: Option<usize>, offset: u64) -> Option<Vec<u8>> {
@@ -1600,7 +1605,7 @@ fn known_kitty_temp_dirs() -> Vec<PathBuf> {
 }
 
 fn is_safe_kitty_temporary_file_path(path: &Path) -> bool {
-    if !path.to_string_lossy().contains("tty-graphics-protocol") {
+    if !path.to_string_lossy().contains(KITTY_TEMP_FILE_MARKER) {
         return false;
     }
     let Some(parent) = path.parent().and_then(|parent| parent.canonicalize().ok()) else {
@@ -1616,8 +1621,7 @@ fn read_kitty_temporary_file_payload(
     size: Option<usize>,
     offset: u64,
 ) -> Option<Vec<u8>> {
-    let path = std::str::from_utf8(path_payload).ok()?;
-    let path = Path::new(path);
+    let path = kitty_path_payload(path_payload)?;
     let payload = read_kitty_file_payload(path, size, offset)?;
     if is_safe_kitty_temporary_file_path(path) {
         std::fs::remove_file(path).ok();
@@ -1634,7 +1638,7 @@ fn read_kitty_transmission_payload(
     let payload = decode_kitty_transport_payload(payload_b64)?;
     match parse_kitty_transmission_medium(medium)? {
         KittyTransmissionMedium::Direct => Some(payload),
-        KittyTransmissionMedium::File => {
+        KittyTransmissionMedium::RegularFile => {
             let (size, offset) = parse_kitty_payload_byte_range(size, offset)?;
             read_kitty_regular_file_payload(&payload, size, offset)
         },
@@ -2403,7 +2407,7 @@ mod tests {
             .expect("system time should be after epoch")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "tty-graphics-protocol-zellij-{name}-{}-{unique}.bin",
+            "{KITTY_TEMP_FILE_MARKER}-zellij-{name}-{}-{unique}.bin",
             std::process::id()
         ));
         std::fs::write(&path, bytes).expect("fixture file should be writable");
