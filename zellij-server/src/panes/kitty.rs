@@ -17,6 +17,7 @@ use crate::panes::pane_image_scene::{
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::io::{Read, Seek, SeekFrom};
 use std::rc::Rc;
 
 #[derive(Clone, Debug, Default)]
@@ -260,6 +261,12 @@ enum KittyImageFormat {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KittyTransportCompression {
     Zlib,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KittyTransmissionMedium {
+    Direct,
+    File,
 }
 
 #[derive(Clone, Debug)]
@@ -1510,8 +1517,10 @@ fn kitty_delete_header(apc_bytes: &[u8]) -> Option<HashMap<&str, &str>> {
     Some(kv)
 }
 
-fn decode_kitty_payload(payload_b64: &[u8], compression: Option<&str>) -> Option<Vec<u8>> {
-    let payload = decode_kitty_transport_payload(payload_b64)?;
+fn apply_kitty_transport_compression(
+    payload: Vec<u8>,
+    compression: Option<&str>,
+) -> Option<Vec<u8>> {
     match compression {
         Some("z") => decompress_to_vec_zlib(&payload).ok(),
         Some(_) => None,
@@ -1521,6 +1530,72 @@ fn decode_kitty_payload(payload_b64: &[u8], compression: Option<&str>) -> Option
 
 fn decode_kitty_transport_payload(payload_b64: &[u8]) -> Option<Vec<u8>> {
     base64::decode(payload_b64).ok()
+}
+
+fn parse_kitty_transmission_medium(medium: Option<&str>) -> Option<KittyTransmissionMedium> {
+    match medium {
+        Some("f") => Some(KittyTransmissionMedium::File),
+        Some("d") | None => Some(KittyTransmissionMedium::Direct),
+        Some(_) => None,
+    }
+}
+
+fn parse_kitty_payload_byte_range(
+    size: Option<&str>,
+    offset: Option<&str>,
+) -> Option<(Option<usize>, u64)> {
+    let size = match size {
+        Some(size) => Some(size.parse::<usize>().ok()?),
+        None => None,
+    };
+    let offset = match offset {
+        Some(offset) => offset.parse::<u64>().ok()?,
+        None => 0,
+    };
+    Some((size, offset))
+}
+
+fn read_kitty_regular_file_payload(
+    path_payload: &[u8],
+    size: Option<usize>,
+    offset: u64,
+) -> Option<Vec<u8>> {
+    let path = std::str::from_utf8(path_payload).ok()?;
+    let metadata = std::fs::metadata(path).ok()?;
+    if !metadata.file_type().is_file() {
+        return None;
+    }
+    let mut file = std::fs::File::open(path).ok()?;
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset)).ok()?;
+    }
+    let mut payload = Vec::new();
+    match size {
+        Some(size) => {
+            let mut reader = file.take(size as u64);
+            reader.read_to_end(&mut payload).ok()?;
+        },
+        None => {
+            file.read_to_end(&mut payload).ok()?;
+        },
+    }
+    Some(payload)
+}
+
+fn read_kitty_transmission_payload(
+    payload_b64: &[u8],
+    medium: Option<&str>,
+    size: Option<&str>,
+    offset: Option<&str>,
+) -> Option<Vec<u8>> {
+    let payload = decode_kitty_transport_payload(payload_b64)?;
+    match parse_kitty_transmission_medium(medium)? {
+        KittyTransmissionMedium::Direct => Some(payload),
+        KittyTransmissionMedium::File => {
+            let (size, offset) = parse_kitty_payload_byte_range(size, offset)?;
+            read_kitty_regular_file_payload(&payload, size, offset)
+        },
+    }
 }
 
 fn parse_kitty_transport_compression(
@@ -1711,7 +1786,7 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
         .and_then(|p| p.parse::<u32>().ok())
         .filter(|placement_id| *placement_id != 0);
     let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok());
-    let transport = kv.get("t").copied().unwrap_or("d");
+    let transport = parse_kitty_transmission_medium(kv.get("t").copied());
 
     let reply = if image_id.is_some() && image_number.is_some() {
         KittyQueryResponse::Error {
@@ -1720,7 +1795,7 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
             image_number,
             message: "EINVAL:Must not specify both i and I".to_string(),
         }
-    } else if transport != "d" {
+    } else if transport.is_none() {
         KittyQueryResponse::Error {
             image_id,
             placement_id,
@@ -1728,7 +1803,14 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
             message: "EINVAL:Unsupported transmission medium".to_string(),
         }
     } else {
-        let payload = match decode_kitty_payload(payload_b64, kv.get("o").copied()) {
+        let payload = match read_kitty_transmission_payload(
+            payload_b64,
+            kv.get("t").copied(),
+            kv.get("S").copied(),
+            kv.get("O").copied(),
+        )
+        .and_then(|payload| apply_kitty_transport_compression(payload, kv.get("o").copied()))
+        {
             Some(payload) => payload,
             None => {
                 let response = KittyQueryResponse::Error {
@@ -1948,7 +2030,12 @@ impl ParsedKittyCommand {
         }
 
         let more = kv.get("m").and_then(|m| m.parse::<u8>().ok()).unwrap_or(0) != 0;
-        let payload = decode_kitty_transport_payload(payload)?;
+        let payload = read_kitty_transmission_payload(
+            payload,
+            kv.get("t").copied(),
+            kv.get("S").copied(),
+            kv.get("O").copied(),
+        )?;
 
         if let Some(action) = kv.get("a") {
             let placement = KittyPlacement {
@@ -2235,6 +2322,8 @@ fn serialize_virtual_placeholder_placement(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn pid(value: u32) -> PlacementId {
         PlacementId::Protocol(value)
@@ -2246,6 +2335,144 @@ mod tests {
 
     fn test_image_dimensions(width: u32, height: u32) -> (u32, u32) {
         (width, height)
+    }
+
+    fn write_kitty_file_media_fixture(name: &str, bytes: &[u8]) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "zellij-kitty-file-media-{name}-{}-{unique}.bin",
+            std::process::id()
+        ));
+        std::fs::write(&path, bytes).expect("fixture file should be writable");
+        path
+    }
+
+    fn kitty_regular_file_transmit_apc(
+        image_id: u32,
+        path: &Path,
+        size: Option<usize>,
+        offset: Option<usize>,
+    ) -> Vec<u8> {
+        let mut control = format!("Gq=0,a=t,t=f,f=32,s=2,v=2,i={image_id}");
+        if let Some(size) = size {
+            control.push_str(&format!(",S={size}"));
+        }
+        if let Some(offset) = offset {
+            control.push_str(&format!(",O={offset}"));
+        }
+        control.push(';');
+        control.push_str(&base64::encode(path.to_string_lossy().as_bytes()));
+        control.into_bytes()
+    }
+
+    fn kitty_regular_file_query_apc(
+        image_id: u32,
+        path: &Path,
+        size: Option<usize>,
+        offset: Option<usize>,
+    ) -> Vec<u8> {
+        let mut control = format!("Gq=0,a=q,t=f,f=32,s=2,v=2,i={image_id}");
+        if let Some(size) = size {
+            control.push_str(&format!(",S={size}"));
+        }
+        if let Some(offset) = offset {
+            control.push_str(&format!(",O={offset}"));
+        }
+        control.push(';');
+        control.push_str(&base64::encode(path.to_string_lossy().as_bytes()));
+        control.into_bytes()
+    }
+
+    fn assert_stored_rgba_payload(
+        kitty_state: &KittyImageState,
+        kitty_asset_store: &Rc<RefCell<KittyAssetStore>>,
+        protocol_image_id: u32,
+        expected_payload: &[u8],
+    ) {
+        let internal_image_id = *kitty_state
+            .protocol_image_id_to_internal_id
+            .get(&protocol_image_id)
+            .expect("protocol id should be mapped to an internal asset");
+        match kitty_asset_store
+            .borrow()
+            .image_data(internal_image_id)
+            .expect("image should be stored")
+        {
+            KittyImageData::Rgba {
+                data,
+                width,
+                height,
+            } => {
+                assert_eq!(data, expected_payload);
+                assert_eq!(width, 2);
+                assert_eq!(height, 2);
+            },
+            other => panic!("expected rgba image data, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn kitty_regular_file_rgba_upload_reads_file_bytes() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let path = write_kitty_file_media_fixture("whole", &payload);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_regular_file_transmit_apc(601, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        std::fs::remove_file(path).ok();
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "regular file upload should succeed, got {reply:?}"
+        );
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 601, &payload);
+    }
+
+    #[test]
+    fn kitty_regular_file_rgba_upload_honors_unaligned_offset_and_size() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let mut file_bytes = vec![0xAA, 0xBB, 0xCC];
+        file_bytes.extend_from_slice(&payload);
+        file_bytes.extend_from_slice(&[0xDD, 0xEE]);
+        let path = write_kitty_file_media_fixture("offset", &file_bytes);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_regular_file_transmit_apc(602, &path, Some(payload.len()), Some(3)),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        std::fs::remove_file(path).ok();
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "regular file upload with unaligned O should succeed, got {reply:?}"
+        );
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 602, &payload);
     }
 
     #[test]
@@ -2497,10 +2724,6 @@ mod tests {
     fn kitty_query_response_rejects_unsupported_transmission_media() {
         let cases = [
             (
-                b"Gq=0,a=q,t=f,f=24,s=1,v=1,i=45;L3RtcC9raXR0eS1xdWVyeS1maWxl" as &[u8],
-                45u32,
-            ),
-            (
                 b"Gq=0,a=q,t=t,f=24,s=1,v=1,i=46;L3RtcC9raXR0eS1xdWVyeS10ZW1w" as &[u8],
                 46u32,
             ),
@@ -2525,8 +2748,39 @@ mod tests {
     #[test]
     fn kitty_query_response_suppresses_unsupported_media_failures_for_q2() {
         let quiet_failure =
-            kitty_query_response(b"Gq=2,a=q,t=f,f=24,s=1,v=1,i=48;L3RtcC9raXR0eS1xdWVyeS1maWxl");
+            kitty_query_response(b"Gq=2,a=q,t=s,f=24,s=1,v=1,i=48;a2l0dHktcXVlcnktc2ht");
         assert!(quiet_failure.is_none());
+    }
+
+    #[test]
+    fn kitty_query_response_accepts_regular_file_rgba_payload() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let path = write_kitty_file_media_fixture("query-whole", &payload);
+        let query = kitty_regular_file_query_apc(603, &path, None, None);
+
+        let reply = kitty_query_response(&query).unwrap().to_apc_response();
+
+        std::fs::remove_file(path).ok();
+        assert_eq!(reply, "\u{1b}_Gi=603;OK\u{1b}\\");
+    }
+
+    #[test]
+    fn kitty_query_response_honors_regular_file_unaligned_offset_and_size() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let mut file_bytes = vec![0xAA, 0xBB, 0xCC];
+        file_bytes.extend_from_slice(&payload);
+        file_bytes.extend_from_slice(&[0xDD, 0xEE]);
+        let path = write_kitty_file_media_fixture("query-offset", &file_bytes);
+        let query = kitty_regular_file_query_apc(604, &path, Some(payload.len()), Some(3));
+
+        let reply = kitty_query_response(&query).unwrap().to_apc_response();
+
+        std::fs::remove_file(path).ok();
+        assert_eq!(reply, "\u{1b}_Gi=604;OK\u{1b}\\");
     }
 
     #[test]
