@@ -18,6 +18,7 @@ use crate::panes::pane_image_scene::{
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Seek, SeekFrom};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 #[derive(Clone, Debug, Default)]
@@ -267,6 +268,7 @@ enum KittyTransportCompression {
 enum KittyTransmissionMedium {
     Direct,
     File,
+    TemporaryFile,
 }
 
 #[derive(Clone, Debug)]
@@ -1535,6 +1537,7 @@ fn decode_kitty_transport_payload(payload_b64: &[u8]) -> Option<Vec<u8>> {
 fn parse_kitty_transmission_medium(medium: Option<&str>) -> Option<KittyTransmissionMedium> {
     match medium {
         Some("f") => Some(KittyTransmissionMedium::File),
+        Some("t") => Some(KittyTransmissionMedium::TemporaryFile),
         Some("d") | None => Some(KittyTransmissionMedium::Direct),
         Some(_) => None,
     }
@@ -1561,6 +1564,10 @@ fn read_kitty_regular_file_payload(
     offset: u64,
 ) -> Option<Vec<u8>> {
     let path = std::str::from_utf8(path_payload).ok()?;
+    read_kitty_file_payload(Path::new(path), size, offset)
+}
+
+fn read_kitty_file_payload(path: &Path, size: Option<usize>, offset: u64) -> Option<Vec<u8>> {
     let metadata = std::fs::metadata(path).ok()?;
     if !metadata.file_type().is_file() {
         return None;
@@ -1582,6 +1589,42 @@ fn read_kitty_regular_file_payload(
     Some(payload)
 }
 
+fn known_kitty_temp_dirs() -> Vec<PathBuf> {
+    let mut temp_dirs = vec![std::env::temp_dir()];
+    temp_dirs.push(PathBuf::from("/tmp"));
+    temp_dirs.push(PathBuf::from("/dev/shm"));
+    temp_dirs
+        .into_iter()
+        .filter_map(|path| path.canonicalize().ok())
+        .collect()
+}
+
+fn is_safe_kitty_temporary_file_path(path: &Path) -> bool {
+    if !path.to_string_lossy().contains("tty-graphics-protocol") {
+        return false;
+    }
+    let Some(parent) = path.parent().and_then(|parent| parent.canonicalize().ok()) else {
+        return false;
+    };
+    known_kitty_temp_dirs()
+        .iter()
+        .any(|temp_dir| parent.starts_with(temp_dir))
+}
+
+fn read_kitty_temporary_file_payload(
+    path_payload: &[u8],
+    size: Option<usize>,
+    offset: u64,
+) -> Option<Vec<u8>> {
+    let path = std::str::from_utf8(path_payload).ok()?;
+    let path = Path::new(path);
+    let payload = read_kitty_file_payload(path, size, offset)?;
+    if is_safe_kitty_temporary_file_path(path) {
+        std::fs::remove_file(path).ok();
+    }
+    Some(payload)
+}
+
 fn read_kitty_transmission_payload(
     payload_b64: &[u8],
     medium: Option<&str>,
@@ -1594,6 +1637,10 @@ fn read_kitty_transmission_payload(
         KittyTransmissionMedium::File => {
             let (size, offset) = parse_kitty_payload_byte_range(size, offset)?;
             read_kitty_regular_file_payload(&payload, size, offset)
+        },
+        KittyTransmissionMedium::TemporaryFile => {
+            let (size, offset) = parse_kitty_payload_byte_range(size, offset)?;
+            read_kitty_temporary_file_payload(&payload, size, offset)
         },
     }
 }
@@ -2350,13 +2397,31 @@ mod tests {
         path
     }
 
-    fn kitty_regular_file_transmit_apc(
+    fn write_kitty_safe_temp_media_fixture(name: &str, bytes: &[u8]) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "tty-graphics-protocol-zellij-{name}-{}-{unique}.bin",
+            std::process::id()
+        ));
+        std::fs::write(&path, bytes).expect("fixture file should be writable");
+        path
+    }
+
+    fn kitty_file_media_transmit_apc(
+        medium: &str,
         image_id: u32,
+        image_format: u32,
         path: &Path,
         size: Option<usize>,
         offset: Option<usize>,
     ) -> Vec<u8> {
-        let mut control = format!("Gq=0,a=t,t=f,f=32,s=2,v=2,i={image_id}");
+        let mut control = format!("Gq=0,a=t,t={medium},f={image_format},i={image_id}");
+        if image_format != 100 {
+            control.push_str(",s=2,v=2");
+        }
         if let Some(size) = size {
             control.push_str(&format!(",S={size}"));
         }
@@ -2368,13 +2433,18 @@ mod tests {
         control.into_bytes()
     }
 
-    fn kitty_regular_file_query_apc(
+    fn kitty_file_media_query_apc(
+        medium: &str,
         image_id: u32,
+        image_format: u32,
         path: &Path,
         size: Option<usize>,
         offset: Option<usize>,
     ) -> Vec<u8> {
-        let mut control = format!("Gq=0,a=q,t=f,f=32,s=2,v=2,i={image_id}");
+        let mut control = format!("Gq=0,a=q,t={medium},f={image_format},i={image_id}");
+        if image_format != 100 {
+            control.push_str(",s=2,v=2");
+        }
         if let Some(size) = size {
             control.push_str(&format!(",S={size}"));
         }
@@ -2384,6 +2454,24 @@ mod tests {
         control.push(';');
         control.push_str(&base64::encode(path.to_string_lossy().as_bytes()));
         control.into_bytes()
+    }
+
+    fn kitty_regular_file_transmit_apc(
+        image_id: u32,
+        path: &Path,
+        size: Option<usize>,
+        offset: Option<usize>,
+    ) -> Vec<u8> {
+        kitty_file_media_transmit_apc("f", image_id, 32, path, size, offset)
+    }
+
+    fn kitty_regular_file_query_apc(
+        image_id: u32,
+        path: &Path,
+        size: Option<usize>,
+        offset: Option<usize>,
+    ) -> Vec<u8> {
+        kitty_file_media_query_apc("f", image_id, 32, path, size, offset)
     }
 
     fn assert_stored_rgba_payload(
@@ -2473,6 +2561,131 @@ mod tests {
             "regular file upload with unaligned O should succeed, got {reply:?}"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 602, &payload);
+    }
+
+    #[test]
+    fn kitty_temporary_file_rgba_upload_deletes_safe_temp_file() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let path = write_kitty_safe_temp_media_fixture("whole", &payload);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_file_media_transmit_apc("t", 605, 32, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "temporary file upload should succeed, got {reply:?}"
+        );
+        assert!(
+            !path.exists(),
+            "safe temporary file should be deleted after read"
+        );
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 605, &payload);
+    }
+
+    #[test]
+    fn kitty_temporary_file_rgba_upload_keeps_temp_file_without_magic_name() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let path = write_kitty_file_media_fixture("temp-without-magic", &payload);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_file_media_transmit_apc("t", 606, 32, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "temporary file upload without magic name should still read, got {reply:?}"
+        );
+        assert!(path.exists(), "unsafe temporary file name should be kept");
+        std::fs::remove_file(path).ok();
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 606, &payload);
+    }
+
+    #[test]
+    fn kitty_temporary_file_rgba_upload_honors_offset_and_deletes_safe_temp_file() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let mut file_bytes = vec![0xAA; 4096];
+        file_bytes.extend_from_slice(&payload);
+        file_bytes.extend_from_slice(&[0xDD, 0xEE]);
+        let path = write_kitty_safe_temp_media_fixture("offset", &file_bytes);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_file_media_transmit_apc("t", 607, 32, &path, Some(payload.len()), Some(4096)),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "temporary file upload with S/O should succeed, got {reply:?}"
+        );
+        assert!(
+            !path.exists(),
+            "safe temporary file with S/O should be deleted after read"
+        );
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 607, &payload);
+    }
+
+    #[test]
+    fn kitty_temporary_file_invalid_png_upload_deletes_after_successful_read() {
+        let path = write_kitty_safe_temp_media_fixture("invalid-png", b"not a png");
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_file_media_transmit_apc("t", 608, 100, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("EINVAL:Invalid image payload for requested format"),
+            "invalid PNG should fail after file read, got {reply:?}"
+        );
+        assert!(
+            !path.exists(),
+            "safe temporary file should be deleted even if decoded image is invalid"
+        );
     }
 
     #[test]
@@ -2722,16 +2935,10 @@ mod tests {
 
     #[test]
     fn kitty_query_response_rejects_unsupported_transmission_media() {
-        let cases = [
-            (
-                b"Gq=0,a=q,t=t,f=24,s=1,v=1,i=46;L3RtcC9raXR0eS1xdWVyeS10ZW1w" as &[u8],
-                46u32,
-            ),
-            (
-                b"Gq=0,a=q,t=s,f=24,s=1,v=1,i=47;a2l0dHktcXVlcnktc2ht" as &[u8],
-                47u32,
-            ),
-        ];
+        let cases = [(
+            b"Gq=0,a=q,t=s,f=24,s=1,v=1,i=47;a2l0dHktcXVlcnktc2ht" as &[u8],
+            47u32,
+        )];
 
         for (query, image_id) in cases {
             let reply = kitty_query_response(query).unwrap();
@@ -2781,6 +2988,40 @@ mod tests {
 
         std::fs::remove_file(path).ok();
         assert_eq!(reply, "\u{1b}_Gi=604;OK\u{1b}\\");
+    }
+
+    #[test]
+    fn kitty_query_response_accepts_temporary_file_rgba_payload_and_deletes_file() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let path = write_kitty_safe_temp_media_fixture("query-whole", &payload);
+        let query = kitty_file_media_query_apc("t", 609, 32, &path, None, None);
+
+        let reply = kitty_query_response(&query).unwrap().to_apc_response();
+
+        assert_eq!(reply, "\u{1b}_Gi=609;OK\u{1b}\\");
+        assert!(
+            !path.exists(),
+            "query action should delete safe temporary file after read"
+        );
+    }
+
+    #[test]
+    fn kitty_query_response_invalid_temporary_file_png_deletes_after_successful_read() {
+        let path = write_kitty_safe_temp_media_fixture("query-invalid-png", b"not a png");
+        let query = kitty_file_media_query_apc("t", 610, 100, &path, None, None);
+
+        let reply = kitty_query_response(&query).unwrap().to_apc_response();
+
+        assert!(
+            reply.contains("i=610;EINVAL:Invalid image payload for requested format"),
+            "invalid temporary PNG query should fail after file read, got {reply:?}"
+        );
+        assert!(
+            !path.exists(),
+            "query action should delete safe temporary file even if image data is invalid"
+        );
     }
 
     #[test]
