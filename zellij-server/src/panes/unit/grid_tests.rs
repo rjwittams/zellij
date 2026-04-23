@@ -5553,6 +5553,38 @@ fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u3
     format!("\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
 }
 
+fn kitty_relative_display_placement(
+    image_id: u32,
+    placement_id: u32,
+    cols: u32,
+    rows: u32,
+    parent_image_id: u32,
+    parent_placement_id: u32,
+    offset_x: i32,
+    offset_y: i32,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows},P={parent_image_id},Q={parent_placement_id},H={offset_x},V={offset_y}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
+fn kitty_relative_virtual_display_placement(
+    image_id: u32,
+    placement_id: u32,
+    cols: u32,
+    rows: u32,
+    parent_image_id: u32,
+    parent_placement_id: u32,
+    offset_x: i32,
+    offset_y: i32,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=p,U=1,i={image_id},p={placement_id},c={cols},r={rows},P={parent_image_id},Q={parent_placement_id},H={offset_x},V={offset_y}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
 fn kitty_explicit_rgba_compressed(
     image_id: u32,
     width: u32,
@@ -6978,6 +7010,256 @@ fn kitty_default_stored_placement_moves_cursor_to_cell_after_bottom_right() {
 }
 
 #[test]
+fn kitty_relative_placement_rejects_missing_parent() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 12);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(91, 3, 2));
+    feed_bytes(
+        &mut grid,
+        &kitty_relative_display_placement(91, 2, 3, 2, 999, 1, 2, 1),
+    );
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.contains("i=91,p=2;ENOPARENT:")),
+        "missing relative parent should report ENOPARENT, got {replies:?}"
+    );
+    assert!(
+        grid.visible_kitty_image_chunks(0, 0).is_empty(),
+        "relative placement with a missing parent should not create a visible placement"
+    );
+}
+
+#[test]
+fn kitty_relative_placement_does_not_move_cursor() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 16);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(92, 3, 2));
+    feed_bytes(&mut grid, b"\x1b[2;3H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,C=1,i=92,p=1,c=3,r=2\x1b\\");
+    feed_bytes(&mut grid, b"\x1b[6;8H");
+    feed_bytes(
+        &mut grid,
+        &kitty_relative_display_placement(92, 2, 3, 2, 92, 1, 2, 1),
+    );
+
+    assert_eq!(
+        (grid.cursor.x, grid.cursor.y),
+        (7, 5),
+        "successful relative placement should not move the cursor regardless of C"
+    );
+}
+
+#[test]
+fn kitty_relative_delete_of_parent_cascades_to_children() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 16);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(93, 3, 2));
+    feed_bytes(&mut grid, b"\x1b[2;3H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=93,p=1,c=3,r=2\x1b\\");
+    feed_bytes(
+        &mut grid,
+        &kitty_relative_display_placement(93, 2, 3, 2, 93, 1, 2, 1),
+    );
+
+    let before_delete = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(
+        before_delete.len(),
+        2,
+        "expected parent and child before delete"
+    );
+
+    feed_bytes(&mut grid, b"\x1b_Ga=d,d=i,i=93,p=1\x1b\\");
+
+    assert!(
+        grid.visible_kitty_image_chunks(0, 0).is_empty(),
+        "deleting a relative parent should also delete its descendants"
+    );
+}
+
+#[test]
+fn kitty_relative_placement_rejects_cycles() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 16);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(94, 3, 2));
+    feed_bytes(&mut grid, b"\x1b[2;3H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=94,p=1,c=3,r=2\x1b\\");
+    feed_bytes(
+        &mut grid,
+        &kitty_relative_display_placement(94, 2, 3, 2, 94, 1, 2, 1),
+    );
+    feed_bytes(
+        &mut grid,
+        &kitty_relative_display_placement(94, 1, 3, 2, 94, 2, 1, 0),
+    );
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.contains("i=94,p=1;ECYCLE:")),
+        "relative placement cycle should report ECYCLE, got {replies:?}"
+    );
+}
+
+#[test]
+fn kitty_relative_placement_limits_depth_like_kitty() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 24);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(96, 3, 2));
+    feed_bytes(&mut grid, b"\x1b[2;3H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=96,p=1,c=3,r=2\x1b\\");
+
+    for placement_id in 2..=9 {
+        feed_bytes(
+            &mut grid,
+            &kitty_relative_display_placement(96, placement_id, 3, 2, 96, placement_id - 1, 1, 0),
+        );
+    }
+
+    let before_too_deep = grid.visible_kitty_image_chunks(0, 0);
+    assert!(
+        before_too_deep
+            .iter()
+            .any(|chunk| chunk.placement_id == Some(pid(9))),
+        "expected placement 9 to still be accepted before the depth limit"
+    );
+
+    feed_bytes(
+        &mut grid,
+        &kitty_relative_display_placement(96, 10, 3, 2, 96, 9, 1, 0),
+    );
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.contains("i=96,p=10;ETOODEEP:")),
+        "relative placement beyond kitty's depth limit should report ETOODEEP, got {replies:?}"
+    );
+    assert!(
+        !grid
+            .visible_kitty_image_chunks(0, 0)
+            .iter()
+            .any(|chunk| chunk.placement_id == Some(pid(10))),
+        "placement 10 should not be created once the relative depth limit is exceeded"
+    );
+}
+
+#[test]
+fn kitty_virtual_relative_placement_is_rejected() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(8, 16);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(95, 3, 2));
+    feed_bytes(&mut grid, b"\x1b[2;3H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=95,p=1,c=3,r=2\x1b\\");
+    feed_bytes(
+        &mut grid,
+        &kitty_relative_virtual_display_placement(95, 2, 3, 2, 95, 1, 1, 1),
+    );
+
+    let replies: Vec<_> = grid
+        .pending_messages_to_pty
+        .iter()
+        .map(|message| String::from_utf8(message.clone()).unwrap())
+        .collect();
+    assert!(
+        replies
+            .iter()
+            .any(|reply| reply.contains("i=95,p=2;EINVAL:")),
+        "virtual relative placement should report EINVAL, got {replies:?}"
+    );
+}
+
+#[test]
+fn kitty_relative_child_of_virtual_parent_uses_placeholder_bounds_origin() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(10, 24);
+
+    feed_bytes(
+        &mut grid,
+        &kitty_virtual_rgba_with_placement(96, 1, 4, 2, 4, 2),
+    );
+    feed_bytes(
+        &mut grid,
+        &placeholder_text_with_placement_inherited_rows(96, 1, 4, 2, 6, 4),
+    );
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(97, 3, 2));
+    feed_bytes(
+        &mut grid,
+        &kitty_relative_display_placement(97, 1, 3, 2, 96, 1, 1, 1),
+    );
+
+    let visible = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(
+        visible.len(),
+        1,
+        "expected one visible relative child placement"
+    );
+    assert_eq!(
+        (visible[0].cell_x, visible[0].cell_y),
+        (6, 4),
+        "relative child of a virtual parent should anchor to the min placeholder x/y, then apply H/V offsets"
+    );
+}
+
+#[test]
+fn kitty_relative_child_tracks_replaced_parent_position() {
+    let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_grid_with_shared_stores(10, 24);
+
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(98, 3, 2));
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(99, 2, 1));
+    feed_bytes(&mut grid, b"\x1b[2;3H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=98,p=1,c=3,r=2\x1b\\");
+    feed_bytes(
+        &mut grid,
+        &kitty_relative_display_placement(99, 2, 2, 1, 98, 1, 2, 1),
+    );
+
+    let initial_visible = grid.visible_kitty_image_chunks(0, 0);
+    let initial_child = initial_visible
+        .iter()
+        .find(|chunk| chunk.placement_id == Some(pid(2)))
+        .expect("expected relative child chunk");
+    assert_eq!((initial_child.cell_x, initial_child.cell_y), (4, 2));
+
+    feed_bytes(&mut grid, b"\x1b[6;8H");
+    feed_bytes(&mut grid, b"\x1b_Ga=p,i=98,p=1,c=3,r=2\x1b\\");
+
+    let after_move = grid.visible_kitty_image_chunks(0, 0);
+    let moved_child = after_move
+        .iter()
+        .find(|chunk| chunk.placement_id == Some(pid(2)))
+        .expect("expected relative child chunk after parent replacement");
+    assert_eq!(
+        (moved_child.cell_x, moved_child.cell_y),
+        (9, 6),
+        "relative child should follow the current parent placement when that parent id is replaced"
+    );
+}
+
+#[test]
 fn kitty_image_number_targets_newest_image_for_placement_and_delete() {
     let (mut grid, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
         create_grid_with_shared_stores(4, 8);
@@ -7044,7 +7326,10 @@ fn kitty_omitted_placement_id_allows_multiple_stored_placements_for_same_image()
     feed_bytes(&mut grid, b"\x1b_Ga=p,i=81,c=2,r=2\x1b\\");
 
     let visible = grid.visible_kitty_image_chunks(0, 0);
-    let mut positions: Vec<_> = visible.iter().map(|chunk| (chunk.cell_x, chunk.cell_y)).collect();
+    let mut positions: Vec<_> = visible
+        .iter()
+        .map(|chunk| (chunk.cell_x, chunk.cell_y))
+        .collect();
     positions.sort_unstable();
 
     assert_eq!(
@@ -7067,7 +7352,10 @@ fn kitty_zero_placement_id_allows_multiple_stored_placements_for_same_image() {
     feed_bytes(&mut grid, b"\x1b_Ga=p,i=82,p=0,c=2,r=2\x1b\\");
 
     let visible = grid.visible_kitty_image_chunks(0, 0);
-    let mut positions: Vec<_> = visible.iter().map(|chunk| (chunk.cell_x, chunk.cell_y)).collect();
+    let mut positions: Vec<_> = visible
+        .iter()
+        .map(|chunk| (chunk.cell_x, chunk.cell_y))
+        .collect();
     positions.sort_unstable();
 
     assert_eq!(

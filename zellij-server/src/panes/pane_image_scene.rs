@@ -70,7 +70,7 @@ impl KittyDamageRedraw {
 use crate::panes::kitty::{
     KittyApcEffect, KittyApcOutcome, KittyCursorMovementPolicy, KittyDeleteRequest,
     KittyDeleteSelector, KittyGeometrySelector, KittyImageInsertion, KittyImageState,
-    KittyQueryResponse,
+    KittyQueryResponse, KittyRelativePlacement,
 };
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use std::cell::RefCell;
@@ -200,9 +200,18 @@ pub struct ImagePlacement {
     pub logical_placement_id: LogicalPlacementId,
     pub asset_id: ImageAssetId,
     pub protocol_identity: Option<ProtocolPlacementIdentity>,
+    pub relative_to: Option<RelativePlacement>,
     pub anchor: FlowAnchor,
     pub flavor: PlacementFlavor,
     pub content_flow: ImageContentFlow,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RelativePlacement {
+    pub parent_image_id: u32,
+    pub parent_placement_id: Option<PlacementId>,
+    pub offset_x: i32,
+    pub offset_y: i32,
 }
 
 impl ImagePlacement {
@@ -276,6 +285,14 @@ fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
         0
     } else {
         ((total as u64 * kept as u64) / original as u64) as u32
+    }
+}
+
+fn apply_signed_offset(value: usize, offset: i32) -> usize {
+    if offset >= 0 {
+        value.saturating_add(offset as usize)
+    } else {
+        value.saturating_sub(offset.unsigned_abs() as usize)
     }
 }
 
@@ -429,6 +446,74 @@ impl PaneImageScene {
         Self::new(self.kitty.kitty_asset_store())
     }
 
+    fn resolve_relative_placement<F>(
+        &self,
+        relative_to: &KittyRelativePlacement,
+        resolve_anchor: &F,
+    ) -> Option<(RelativePlacement, FlowAnchor)>
+    where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
+        let parent_logical_placement_id = self.kitty_logical_placement_id(
+            relative_to.parent_image_id,
+            relative_to.parent_placement_id,
+        )?;
+        let parent_placement = self.placements.get(&parent_logical_placement_id)?;
+        let (parent_logical_row, parent_column) =
+            self.resolved_anchor_for_placement(parent_placement, resolve_anchor)?;
+        let child_logical_row = apply_signed_offset(parent_logical_row, relative_to.offset_y);
+        let child_column = apply_signed_offset(parent_column, relative_to.offset_x);
+        Some((
+            RelativePlacement {
+                parent_image_id: relative_to.parent_image_id,
+                parent_placement_id: relative_to.parent_placement_id,
+                offset_x: relative_to.offset_x,
+                offset_y: relative_to.offset_y,
+            },
+            FlowAnchor::LogicalRow {
+                logical_row: child_logical_row,
+                column: child_column,
+            },
+        ))
+    }
+
+    fn resolved_anchor_for_placement<F>(
+        &self,
+        placement: &ImagePlacement,
+        resolve_anchor: &F,
+    ) -> Option<(usize, usize)>
+    where
+        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
+    {
+        if let Some(relative_to) = placement.relative_to.as_ref() {
+            let parent_placement_id = self.kitty_logical_placement_id(
+                relative_to.parent_image_id,
+                relative_to.parent_placement_id,
+            )?;
+            let parent_placement = self.placements.get(&parent_placement_id)?;
+            let (parent_logical_row, parent_column) =
+                self.resolved_anchor_for_placement(parent_placement, resolve_anchor)?;
+            return Some((
+                apply_signed_offset(parent_logical_row, relative_to.offset_y),
+                apply_signed_offset(parent_column, relative_to.offset_x),
+            ));
+        }
+        if placement.kitty_placeholder_flavor().is_some() {
+            let mut placeholder_positions = self
+                .kitty_placeholder_cells
+                .iter()
+                .filter(|cell| cell.logical_placement_id == placement.logical_placement_id)
+                .filter_map(|cell| resolve_anchor(&cell.anchor));
+            let first_position = placeholder_positions.next()?;
+            return Some(
+                placeholder_positions.fold(first_position, |(min_row, min_col), (row, col)| {
+                    (min_row.min(row), min_col.min(col))
+                }),
+            );
+        }
+        resolve_anchor(&placement.anchor)
+    }
+
     fn remove_kitty_asset_placements<F>(
         &mut self,
         asset_id: ImageAssetId,
@@ -555,18 +640,43 @@ impl PaneImageScene {
                 } else {
                     vec![]
                 };
-                let geometry = insertion.geometry;
-                let content_flow =
-                    match (insertion.placement_mode, insertion.cursor_movement_policy) {
-                        (
-                            KittyImagePlacementMode::Explicit,
-                            KittyCursorMovementPolicy::AfterPlacement,
-                        ) if geometry.rows > 0 => ImageContentFlow::MoveCursorByCells {
-                            columns: geometry.columns,
-                            rows: geometry.rows,
-                        },
-                        _ => ImageContentFlow::NoCursorMovement,
-                    };
+                let (relative_to, resolved_anchor) = insertion
+                    .placement
+                    .relative_to
+                    .as_ref()
+                    .and_then(|relative_to| {
+                        self.resolve_relative_placement(relative_to, &resolve_anchor)
+                    })
+                    .map_or(
+                        (None, insertion.anchor.clone()),
+                        |(relative_to, resolved_anchor)| (Some(relative_to), resolved_anchor),
+                    );
+                let geometry = if relative_to.is_some() {
+                    insertion.placement.geometry_for_image(
+                        insertion.image_dimensions,
+                        resolved_anchor.column().unwrap_or(0),
+                        resolved_anchor.logical_row().unwrap_or(0),
+                        character_cell_size,
+                    )
+                } else {
+                    insertion.geometry
+                };
+                let content_flow = match (
+                    relative_to.is_some(),
+                    insertion.placement_mode,
+                    insertion.cursor_movement_policy,
+                ) {
+                    (true, _, _) => ImageContentFlow::NoCursorMovement,
+                    (
+                        false,
+                        KittyImagePlacementMode::Explicit,
+                        KittyCursorMovementPolicy::AfterPlacement,
+                    ) if geometry.rows > 0 => ImageContentFlow::MoveCursorByCells {
+                        columns: geometry.columns,
+                        rows: geometry.rows,
+                    },
+                    _ => ImageContentFlow::NoCursorMovement,
+                };
                 let protocol_identity = Some(ProtocolPlacementIdentity::Kitty {
                     image_id: insertion.protocol_image_id,
                     placement_id: insertion.protocol_placement_id,
@@ -612,10 +722,14 @@ impl PaneImageScene {
                             ProtocolPlacementIdentity::Kitty {
                                 image_id: Some(image_id),
                                 placement_id,
-                            } => Some(KittyProtocolPlacementKey {
-                                image_id: *image_id,
-                                placement_id: *placement_id,
-                            }),
+                            } if insertion.placement_mode == KittyImagePlacementMode::Placeholder
+                                || placement_id.is_some() =>
+                            {
+                                Some(KittyProtocolPlacementKey {
+                                    image_id: *image_id,
+                                    placement_id: *placement_id,
+                                })
+                            },
                             _ => None,
                         })
                 {
@@ -633,7 +747,8 @@ impl PaneImageScene {
                     logical_placement_id,
                     asset_id: insertion.asset_id,
                     protocol_identity,
-                    anchor: insertion.anchor,
+                    relative_to,
+                    anchor: resolved_anchor,
                     flavor,
                     content_flow,
                 };
@@ -759,7 +874,7 @@ impl PaneImageScene {
         placement_id: Option<PlacementId>,
         free_image_data: bool,
     ) {
-        let logical_placement_ids_to_remove: Vec<_> = self
+        let mut logical_placement_ids_to_remove: std::collections::HashSet<_> = self
             .placements
             .iter()
             .filter_map(
@@ -776,6 +891,31 @@ impl PaneImageScene {
                 },
             )
             .collect();
+        loop {
+            let mut added_descendant = false;
+            for (logical_placement_id, placement) in &self.placements {
+                if logical_placement_ids_to_remove.contains(logical_placement_id) {
+                    continue;
+                }
+                let Some(relative_to) = placement.relative_to.as_ref() else {
+                    continue;
+                };
+                let parent_logical_placement_id = self.kitty_logical_placement_id(
+                    relative_to.parent_image_id,
+                    relative_to.parent_placement_id,
+                );
+                if parent_logical_placement_id
+                    .map(|parent_id| logical_placement_ids_to_remove.contains(&parent_id))
+                    .unwrap_or(false)
+                {
+                    logical_placement_ids_to_remove.insert(*logical_placement_id);
+                    added_descendant = true;
+                }
+            }
+            if !added_descendant {
+                break;
+            }
+        }
         self.placements.retain(|logical_placement_id, _| {
             !logical_placement_ids_to_remove.contains(logical_placement_id)
         });
@@ -806,6 +946,7 @@ impl PaneImageScene {
     }
 
     fn kitty_explicit_protocol_match<F>(
+        &self,
         placement: &ImagePlacement,
         resolve_anchor: &F,
     ) -> Option<(u32, Option<PlacementId>, i32, PlacementRect)>
@@ -817,7 +958,8 @@ impl PaneImageScene {
         let Some(protocol_image_id) = protocol_image_id else {
             return None;
         };
-        let (logical_row, column) = resolve_anchor(&placement.anchor)?;
+        let (logical_row, column) =
+            self.resolved_anchor_for_placement(placement, resolve_anchor)?;
         let right_exclusive = column.checked_add(flavor.occupancy.columns)?;
         let bottom_exclusive = logical_row.checked_add(flavor.occupancy.rows)?;
         Some((
@@ -834,6 +976,7 @@ impl PaneImageScene {
     }
 
     fn kitty_request_matches_placement<F>(
+        &self,
         request: &KittyDeleteRequest,
         placement: &ImagePlacement,
         cursor: (usize, usize),
@@ -844,7 +987,7 @@ impl PaneImageScene {
         F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
     {
         let (protocol_image_id, placement_id, z_index, rect) =
-            Self::kitty_explicit_protocol_match(placement, resolve_anchor)?;
+            self.kitty_explicit_protocol_match(placement, resolve_anchor)?;
         let matches = match request.selector {
             KittyDeleteSelector::AllVisible => false,
             KittyDeleteSelector::ImageId { .. } | KittyDeleteSelector::ImageNumber { .. } => false,
@@ -889,7 +1032,7 @@ impl PaneImageScene {
             .placements
             .values()
             .filter_map(|placement| {
-                Self::kitty_request_matches_placement(
+                self.kitty_request_matches_placement(
                     request,
                     placement,
                     cursor,
@@ -930,7 +1073,9 @@ impl PaneImageScene {
                 continue;
             };
             let image_id = placement.kitty_internal_image_id();
-            let Some((logical_row, column)) = resolve_anchor(&placement.anchor) else {
+            let Some((logical_row, column)) =
+                self.resolved_anchor_for_placement(placement, &resolve_anchor)
+            else {
                 continue;
             };
             let mut source_x = flavor.source_x;

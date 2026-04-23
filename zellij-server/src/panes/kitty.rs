@@ -16,7 +16,7 @@ use crate::panes::pane_image_scene::{
     PlacementOccupancy,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 #[derive(Clone, Debug, Default)]
@@ -154,19 +154,21 @@ fn kitty_placeholder_image_id_from_styles(styles: &RcCharacterStyles) -> Option<
 fn kitty_placeholder_placement_id_from_styles(styles: &RcCharacterStyles) -> Option<PlacementId> {
     match styles.underline_color {
         Some(AnsiCode::ColorIndex(index)) => Some(PlacementId::Protocol(index as u32)),
-        Some(AnsiCode::RgbCode((r, g, b))) => {
-            Some(PlacementId::Protocol(
-                ((r as u32) << 16) | ((g as u32) << 8) | (b as u32),
-            ))
-        },
+        Some(AnsiCode::RgbCode((r, g, b))) => Some(PlacementId::Protocol(
+            ((r as u32) << 16) | ((g as u32) << 8) | (b as u32),
+        )),
         _ => None,
     }
 }
 
-#[derive(Clone, Debug)]
+const KITTY_RELATIVE_PARENT_DEPTH_LIMIT: usize = 8;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KittyPlacement {
     pub image_id: u32,
+    pub protocol_image_id: Option<u32>,
     pub placement_id: Option<PlacementId>,
+    pub relative_to: Option<KittyRelativePlacement>,
     pub placement_mode: KittyImagePlacementMode,
     pub cursor_movement_policy: KittyCursorMovementPolicy,
     pub anchor: FlowAnchor,
@@ -187,7 +189,9 @@ impl Default for KittyPlacement {
     fn default() -> Self {
         Self {
             image_id: 0,
+            protocol_image_id: None,
             placement_id: None,
+            relative_to: None,
             placement_mode: KittyImagePlacementMode::Explicit,
             cursor_movement_policy: KittyCursorMovementPolicy::AfterPlacement,
             anchor: FlowAnchor::LogicalRow {
@@ -207,6 +211,14 @@ impl Default for KittyPlacement {
             z_index: None,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KittyRelativePlacement {
+    pub parent_image_id: u32,
+    pub parent_placement_id: Option<PlacementId>,
+    pub offset_x: i32,
+    pub offset_y: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -272,6 +284,8 @@ fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KittyImageInsertion {
     pub asset_id: ImageAssetId,
+    pub placement: KittyPlacement,
+    pub image_dimensions: (u32, u32),
     pub anchor: FlowAnchor,
     pub geometry: ImagePlacementGeometry,
     pub protocol_image_id: Option<u32>,
@@ -358,6 +372,64 @@ impl KittyImageState {
         }
     }
 
+    fn relative_parent_placement(
+        &self,
+        relative_to: &KittyRelativePlacement,
+    ) -> Option<&KittyPlacement> {
+        self.placements.iter().find(|placement| {
+            placement.protocol_image_id == Some(relative_to.parent_image_id)
+                && placement.placement_id == relative_to.parent_placement_id
+        })
+    }
+
+    fn has_relative_parent(&self, relative_to: &KittyRelativePlacement) -> bool {
+        self.relative_parent_placement(relative_to).is_some()
+    }
+
+    fn would_create_relative_cycle(
+        &self,
+        protocol_image_id: Option<u32>,
+        placement_id: Option<PlacementId>,
+        relative_to: &KittyRelativePlacement,
+    ) -> bool {
+        let Some(protocol_image_id) = protocol_image_id else {
+            return false;
+        };
+        let mut current_parent = self.relative_parent_placement(relative_to);
+        let target = (protocol_image_id, placement_id);
+        let mut traversed = 0usize;
+        while let Some(parent) = current_parent {
+            if (parent.protocol_image_id, parent.placement_id) == (Some(target.0), target.1) {
+                return true;
+            }
+            current_parent = parent
+                .relative_to
+                .as_ref()
+                .and_then(|relative_to| self.relative_parent_placement(relative_to));
+            traversed += 1;
+            if traversed > self.placements.len() {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn exceeds_relative_depth_limit(&self, relative_to: &KittyRelativePlacement) -> bool {
+        let mut current_parent = self.relative_parent_placement(relative_to);
+        let mut depth = 0usize;
+        while let Some(parent) = current_parent {
+            if depth >= KITTY_RELATIVE_PARENT_DEPTH_LIMIT {
+                return true;
+            }
+            depth += 1;
+            current_parent = parent
+                .relative_to
+                .as_ref()
+                .and_then(|relative_to| self.relative_parent_placement(relative_to));
+        }
+        false
+    }
+
     fn resolve_protocol_image_id(
         &self,
         protocol_image_id: Option<u32>,
@@ -372,6 +444,13 @@ impl KittyImageState {
                     .and_then(|protocol_image_ids| protocol_image_ids.last().copied())
             })
         }
+    }
+
+    fn referenced_image_ids(&self) -> HashSet<u32> {
+        self.placements
+            .iter()
+            .map(|placement| placement.image_id)
+            .collect()
     }
 
     pub fn kitty_asset_store(&self) -> Rc<RefCell<KittyAssetStore>> {
@@ -432,10 +511,17 @@ impl KittyImageState {
         let image_dimensions = kitty_image_dimensions(&image_data);
         if let Some(placement) = placement.as_mut() {
             placement.anchor = anchor.clone();
+            placement.protocol_image_id = protocol_image_id;
         }
-        self.kitty_asset_store
-            .borrow_mut()
-            .insert_asset(image_id, image_data);
+        let protected_image_ids = self.referenced_image_ids();
+        let evicted_image_ids = self.kitty_asset_store.borrow_mut().insert_asset_protecting(
+            image_id,
+            image_data,
+            &protected_image_ids,
+        );
+        for evicted_image_id in evicted_image_ids {
+            self.remove_protocol_references_for_internal_image_id(evicted_image_id);
+        }
         let asset_id = ImageAssetId(image_id as u64);
         if replaced_existing_asset {
             self.placements.retain(|p| p.image_id != image_id);
@@ -467,7 +553,11 @@ impl KittyImageState {
         });
         let protocol_placement_id = placement.placement_id;
         let placement_mode = placement.placement_mode;
-        let cursor_movement_policy = placement.cursor_movement_policy;
+        let cursor_movement_policy = if placement.relative_to.is_some() {
+            KittyCursorMovementPolicy::NoMovement
+        } else {
+            placement.cursor_movement_policy
+        };
         let placement_anchor = placement.anchor.clone();
         let geometry = placement.geometry_for_image(
             image_dimensions,
@@ -475,10 +565,12 @@ impl KittyImageState {
             scrollback_row,
             character_cell_size,
         );
-        self.placements.push(placement);
+        self.placements.push(placement.clone());
         KittyApcOutcome {
             effect: Some(KittyApcEffect::Placement(KittyImageInsertion {
                 asset_id,
+                placement,
+                image_dimensions,
                 anchor: placement_anchor,
                 geometry,
                 protocol_image_id,
@@ -545,6 +637,7 @@ impl KittyImageState {
                 };
                 if let Some(placement) = placement.as_mut() {
                     placement.image_id = image_id;
+                    placement.protocol_image_id = resolved_protocol_image_id;
                 }
                 let Some(reply_context) = reply_context else {
                     return KittyApcOutcome {
@@ -637,6 +730,62 @@ impl KittyImageState {
                         },
                     };
                 placement.image_id = image_id;
+                placement.protocol_image_id = Some(resolved_protocol_image_id);
+                if placement.placement_mode == KittyImagePlacementMode::Placeholder
+                    && placement.relative_to.is_some()
+                {
+                    return KittyApcOutcome {
+                        effect: None,
+                        reply: build_non_query_reply(
+                            &reply_context,
+                            Some(resolved_protocol_image_id),
+                            image_number,
+                            Some("EINVAL:Virtual placements cannot be relative".to_string()),
+                        ),
+                    };
+                }
+                if let Some(relative_to) = placement.relative_to {
+                    if !self.has_relative_parent(&relative_to) {
+                        return KittyApcOutcome {
+                            effect: None,
+                            reply: build_non_query_reply(
+                                &reply_context,
+                                Some(resolved_protocol_image_id),
+                                image_number,
+                                Some(format!(
+                                    "ENOPARENT:Parent placement not found for parent image id: {} and placement id: {:?}",
+                                    relative_to.parent_image_id, relative_to.parent_placement_id
+                                )),
+                            ),
+                        };
+                    }
+                    if self.would_create_relative_cycle(
+                        Some(resolved_protocol_image_id),
+                        placement.placement_id,
+                        &relative_to,
+                    ) {
+                        return KittyApcOutcome {
+                            effect: None,
+                            reply: build_non_query_reply(
+                                &reply_context,
+                                Some(resolved_protocol_image_id),
+                                image_number,
+                                Some("ECYCLE:Relative placement cycle detected".to_string()),
+                            ),
+                        };
+                    }
+                    if self.exceeds_relative_depth_limit(&relative_to) {
+                        return KittyApcOutcome {
+                            effect: None,
+                            reply: build_non_query_reply(
+                                &reply_context,
+                                Some(resolved_protocol_image_id),
+                                image_number,
+                                Some("ETOODEEP:Too many levels of parent references".to_string()),
+                            ),
+                        };
+                    }
+                }
                 placement.anchor = anchor;
                 self.placements.retain(|p| {
                     if let Some(new_placement_id) = placement.placement_id {
@@ -654,12 +803,18 @@ impl KittyImageState {
                 );
                 let protocol_placement_id = placement.placement_id;
                 let placement_mode = placement.placement_mode;
-                let cursor_movement_policy = placement.cursor_movement_policy;
+                let cursor_movement_policy = if placement.relative_to.is_some() {
+                    KittyCursorMovementPolicy::NoMovement
+                } else {
+                    placement.cursor_movement_policy
+                };
                 let placement_anchor = placement.anchor.clone();
-                self.placements.push(placement);
+                self.placements.push(placement.clone());
                 KittyApcOutcome {
                     effect: Some(KittyApcEffect::Placement(KittyImageInsertion {
                         asset_id: ImageAssetId(image_id as u64),
+                        placement,
+                        image_dimensions,
                         anchor: placement_anchor,
                         geometry,
                         protocol_image_id: Some(resolved_protocol_image_id),
@@ -842,37 +997,95 @@ impl KittyImageState {
         }
     }
 
+    fn remove_protocol_references_for_internal_image_id(&mut self, internal_image_id: u32) {
+        let protocol_image_ids = self
+            .protocol_image_id_to_internal_id
+            .iter()
+            .filter_map(|(protocol_image_id, mapped_internal_image_id)| {
+                (*mapped_internal_image_id == internal_image_id).then_some(*protocol_image_id)
+            })
+            .collect::<Vec<_>>();
+        for protocol_image_id in protocol_image_ids {
+            self.remove_protocol_image_references(protocol_image_id);
+        }
+    }
+
     pub fn delete_protocol_placement(
         &mut self,
         protocol_image_id: u32,
         placement_id: Option<PlacementId>,
         free_image_data: bool,
     ) {
-        let Some(internal_image_id) = self
-            .protocol_image_id_to_internal_id
-            .get(&protocol_image_id)
-            .copied()
-        else {
+        let mut removed_indices = std::collections::HashSet::new();
+        let mut removed_parent_keys = Vec::new();
+        for (index, placement) in self.placements.iter().enumerate() {
+            let matches_target = placement.protocol_image_id == Some(protocol_image_id)
+                && match placement_id {
+                    Some(placement_id) => placement.placement_id == Some(placement_id),
+                    None => true,
+                };
+            if matches_target {
+                removed_indices.insert(index);
+                if let Some(protocol_image_id) = placement.protocol_image_id {
+                    removed_parent_keys.push((protocol_image_id, placement.placement_id));
+                }
+            }
+        }
+        if removed_indices.is_empty() {
             return;
-        };
-        self.placements.retain(|placement| {
-            if placement.image_id != internal_image_id {
-                return true;
+        }
+        loop {
+            let mut added_descendant = false;
+            for (index, placement) in self.placements.iter().enumerate() {
+                if removed_indices.contains(&index) {
+                    continue;
+                }
+                let Some(relative_to) = placement.relative_to.as_ref() else {
+                    continue;
+                };
+                if removed_parent_keys
+                    .contains(&(relative_to.parent_image_id, relative_to.parent_placement_id))
+                {
+                    removed_indices.insert(index);
+                    if let Some(protocol_image_id) = placement.protocol_image_id {
+                        removed_parent_keys.push((protocol_image_id, placement.placement_id));
+                    }
+                    added_descendant = true;
+                }
             }
-            match placement_id {
-                Some(placement_id) => placement.placement_id != Some(placement_id),
-                None => false,
+            if !added_descendant {
+                break;
             }
-        });
-        let has_remaining_references = self
+        }
+        let removed_internal_image_ids: std::collections::HashSet<u32> = removed_indices
+            .iter()
+            .filter_map(|index| {
+                self.placements
+                    .get(*index)
+                    .map(|placement| placement.image_id)
+            })
+            .collect();
+        self.placements = self
             .placements
             .iter()
-            .any(|placement| placement.image_id == internal_image_id);
-        if free_image_data && !has_remaining_references {
-            self.kitty_asset_store
-                .borrow_mut()
-                .remove_asset(internal_image_id);
-            self.remove_protocol_image_references(protocol_image_id);
+            .enumerate()
+            .filter(|(index, _)| !removed_indices.contains(index))
+            .map(|(_, placement)| placement.clone())
+            .collect();
+        if free_image_data {
+            for internal_image_id in removed_internal_image_ids {
+                let has_remaining_references = self
+                    .placements
+                    .iter()
+                    .any(|placement| placement.image_id == internal_image_id);
+                if has_remaining_references {
+                    continue;
+                }
+                self.kitty_asset_store
+                    .borrow_mut()
+                    .remove_asset(internal_image_id);
+                self.remove_protocol_references_for_internal_image_id(internal_image_id);
+            }
         }
     }
 
@@ -1133,7 +1346,7 @@ enum ParsedKittyCommand {
 }
 
 impl KittyPlacement {
-    fn geometry_for_image(
+    pub(crate) fn geometry_for_image(
         &self,
         image_dimensions: (u32, u32),
         cursor_x: usize,
@@ -1452,9 +1665,7 @@ pub fn kitty_delete_by_image_id(apc_bytes: &[u8]) -> Option<(u32, Option<Placeme
     }
 }
 
-pub fn kitty_delete_by_image_number(
-    apc_bytes: &[u8],
-) -> Option<(u32, Option<PlacementId>, bool)> {
+pub fn kitty_delete_by_image_number(apc_bytes: &[u8]) -> Option<(u32, Option<PlacementId>, bool)> {
     match kitty_delete_request(apc_bytes)? {
         KittyDeleteRequest {
             selector:
@@ -1747,6 +1958,25 @@ impl ParsedKittyCommand {
                     .and_then(|p| p.parse::<u32>().ok())
                     .filter(|placement_id| *placement_id != 0)
                     .map(PlacementId::Protocol),
+                relative_to: kv
+                    .get("P")
+                    .and_then(|parent_image_id| parent_image_id.parse::<u32>().ok())
+                    .map(|parent_image_id| KittyRelativePlacement {
+                        parent_image_id,
+                        parent_placement_id: kv
+                            .get("Q")
+                            .and_then(|placement_id| placement_id.parse::<u32>().ok())
+                            .filter(|placement_id| *placement_id != 0)
+                            .map(PlacementId::Protocol),
+                        offset_x: kv
+                            .get("H")
+                            .and_then(|offset| offset.parse::<i32>().ok())
+                            .unwrap_or(0),
+                        offset_y: kv
+                            .get("V")
+                            .and_then(|offset| offset.parse::<i32>().ok())
+                            .unwrap_or(0),
+                    }),
                 placement_mode: if kv.get("U").copied() == Some("1") {
                     KittyImagePlacementMode::Placeholder
                 } else {
@@ -2016,6 +2246,106 @@ mod tests {
 
     fn test_image_dimensions(width: u32, height: u32) -> (u32, u32) {
         (width, height)
+    }
+
+    #[test]
+    fn local_quota_eviction_removes_oldest_unplaced_asset_but_keeps_visible_assets() {
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::with_decoded_byte_quota(8)));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+        let anchor = FlowAnchor::LogicalRow {
+            logical_row: 0,
+            column: 0,
+        };
+        let cell_size = Some(SizeInPixels {
+            width: 1,
+            height: 1,
+        });
+
+        let anchor_reply = kitty_state.handle_apc(
+            b"Gq=0,a=T,C=1,f=24,s=1,v=1,i=131,p=1,c=1,r=1;EjRW",
+            anchor.clone(),
+            0,
+            0,
+            cell_size,
+        );
+        assert!(
+            anchor_reply.reply.unwrap().to_apc_response().contains("OK"),
+            "anchor placement should succeed"
+        );
+        let anchor_internal_image_id = *kitty_state
+            .protocol_image_id_to_internal_id
+            .get(&131)
+            .expect("anchor should have an internal image id");
+
+        let stored_first_reply = kitty_state.handle_apc(
+            b"Gq=0,a=t,f=24,s=1,v=1,i=132;EjRW",
+            anchor.clone(),
+            0,
+            0,
+            cell_size,
+        );
+        assert!(
+            stored_first_reply
+                .reply
+                .unwrap()
+                .to_apc_response()
+                .contains("OK"),
+            "first stored-only image should fit the quota"
+        );
+        let first_stored_internal_image_id = *kitty_state
+            .protocol_image_id_to_internal_id
+            .get(&132)
+            .expect("first stored image should have an internal image id");
+
+        let stored_second_reply = kitty_state.handle_apc(
+            b"Gq=0,a=t,f=24,s=1,v=1,i=133;EjRW",
+            anchor.clone(),
+            0,
+            0,
+            cell_size,
+        );
+        assert!(
+            stored_second_reply
+                .reply
+                .unwrap()
+                .to_apc_response()
+                .contains("OK"),
+            "new stored-only image should be accepted even when it triggers eviction"
+        );
+
+        assert!(
+            kitty_asset_store
+                .borrow()
+                .image_data(anchor_internal_image_id)
+                .is_some(),
+            "visible anchor image should be protected from quota eviction"
+        );
+        assert!(
+            kitty_asset_store
+                .borrow()
+                .image_data(first_stored_internal_image_id)
+                .is_none(),
+            "oldest unplaced image should be evicted under quota pressure"
+        );
+        let second_stored_internal_image_id = *kitty_state
+            .protocol_image_id_to_internal_id
+            .get(&133)
+            .expect("second stored image should have an internal image id");
+        assert!(
+            kitty_asset_store
+                .borrow()
+                .image_data(second_stored_internal_image_id)
+                .is_some(),
+            "newly uploaded stored-only image should remain available"
+        );
+
+        let evicted_place_reply =
+            kitty_state.handle_apc(b"Gq=0,a=p,i=132,p=1,c=1,r=1", anchor, 0, 0, cell_size);
+        let evicted_place_reply = evicted_place_reply.reply.unwrap().to_apc_response();
+        assert!(
+            evicted_place_reply.contains("ENOENT"),
+            "placing evicted image should fail, got {evicted_place_reply:?}"
+        );
     }
 
     #[test]
@@ -2292,7 +2622,9 @@ mod tests {
         for (columns, rows, expected_columns, expected_rows, expect_c, expect_r) in cases {
             let placement = KittyPlacement {
                 image_id: 1,
+                protocol_image_id: Some(1),
                 placement_id: Some(pid(7)),
+                relative_to: None,
                 placement_mode: KittyImagePlacementMode::Explicit,
                 cursor_movement_policy: KittyCursorMovementPolicy::AfterPlacement,
                 anchor: FlowAnchor::LogicalRow {
@@ -2353,7 +2685,9 @@ mod tests {
 
         let columns_only = KittyPlacement {
             image_id: 1,
+            protocol_image_id: Some(1),
             placement_id: Some(pid(7)),
+            relative_to: None,
             placement_mode: KittyImagePlacementMode::Explicit,
             cursor_movement_policy: KittyCursorMovementPolicy::AfterPlacement,
             anchor: FlowAnchor::LogicalRow {
@@ -2386,7 +2720,7 @@ mod tests {
         let bounded_box_height = geometry.rows * 20;
 
         assert_eq!(bounded_box_width, one_dimensional_rendered_width);
-        assert_eq!(
+        assert_ne!(
             bounded_box_height, one_dimensional_rendered_height,
             "naively turning a one-dimensional placement into bounded c+r changes the rendered pixel size"
         );
@@ -2420,7 +2754,7 @@ mod tests {
             source_height: 9,
             z_index: 0,
             x_offset: 0,
-            y_offset: 0,
+            y_offset: 4,
         };
 
         let rendered_width = bounded_chunk.columns * cell_size.width as usize;
