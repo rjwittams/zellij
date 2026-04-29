@@ -1,5 +1,5 @@
 use super::super::Grid;
-use crate::output::{KittyImageData, Output, PlacementId};
+use crate::output::{KittyImageData, KittyOutputMediaCache, Output, PlacementId};
 use crate::panes::grid::SixelImageStore;
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::link_handler::LinkHandler;
@@ -7807,6 +7807,7 @@ fn kitty_retransmit_then_recreate_emits_both_recreated_placements_to_output() {
     let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,
@@ -7894,6 +7895,7 @@ fn kitty_retransmit_then_recreate_emits_updated_asset_payload_to_output() {
     let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,

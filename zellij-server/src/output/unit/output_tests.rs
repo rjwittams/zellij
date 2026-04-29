@@ -4,7 +4,7 @@ use super::super::kitty_diff::{
     KittySceneState, PlannedKittyPlacement,
 };
 use super::super::{
-    CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData,
+    CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, KittyOutputMediaCache,
     KittyPlaceholderCellRender, Output, OutputBuffer, PaneImageRenderOutput, PlacementId,
     RenderedImageState, SixelImageChunk,
 };
@@ -37,6 +37,17 @@ fn create_test_output_with_state() -> (
     Rc<RefCell<KittyAssetStore>>,
     Rc<RefCell<Option<SizeInPixels>>>,
 ) {
+    create_test_output_with_media_cache(Rc::new(RefCell::new(KittyOutputMediaCache::disabled())))
+}
+
+fn create_test_output_with_media_cache(
+    kitty_output_media_cache: Rc<RefCell<KittyOutputMediaCache>>,
+) -> (
+    Output,
+    Rc<RefCell<SixelImageStore>>,
+    Rc<RefCell<KittyAssetStore>>,
+    Rc<RefCell<Option<SizeInPixels>>>,
+) {
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     for image_id in 1..=255 {
@@ -56,6 +67,7 @@ fn create_test_output_with_state() -> (
         Output::new(
             sixel_image_store.clone(),
             kitty_asset_store.clone(),
+            kitty_output_media_cache,
             character_cell_size.clone(),
             styled_underlines,
             osc8_hyperlinks,
@@ -112,6 +124,46 @@ struct TestRect {
     y: usize,
     columns: usize,
     rows: usize,
+}
+
+fn kitty_asset_op_sort_key(op: &KittyAssetOp) -> (u32, u64) {
+    match op {
+        KittyAssetOp::EnsureResident {
+            image_id,
+            generation,
+        } => (*image_id, *generation),
+    }
+}
+
+fn kitty_placement_op_sort_key(op: &KittyPlacementOp) -> (u8, KittyPlacementKey) {
+    match op {
+        KittyPlacementOp::Delete { key } => (0, *key),
+        KittyPlacementOp::PlaceExplicit { key, .. }
+        | KittyPlacementOp::PlacePlaceholder { key, .. } => (1, *key),
+    }
+}
+
+fn assert_kitty_scene_plan_eq_unordered(actual: KittyScenePlan, expected: KittyScenePlan) {
+    match (actual, expected) {
+        (
+            KittyScenePlan::Diff {
+                asset_ops: mut actual_asset_ops,
+                placement_ops: mut actual_placement_ops,
+            },
+            KittyScenePlan::Diff {
+                asset_ops: mut expected_asset_ops,
+                placement_ops: mut expected_placement_ops,
+            },
+        ) => {
+            actual_asset_ops.sort_by_key(kitty_asset_op_sort_key);
+            expected_asset_ops.sort_by_key(kitty_asset_op_sort_key);
+            actual_placement_ops.sort_by_key(kitty_placement_op_sort_key);
+            expected_placement_ops.sort_by_key(kitty_placement_op_sort_key);
+            assert_eq!(actual_asset_ops, expected_asset_ops);
+            assert_eq!(actual_placement_ops, expected_placement_ops);
+        },
+        (actual, expected) => assert_eq!(actual, expected),
+    }
 }
 
 fn test_scale_u32(total: u32, kept: usize, original: usize) -> u32 {
@@ -524,12 +576,12 @@ fn test_kitty_diff_ignores_unchanged_placement() {
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
-    assert_eq!(
+    assert_kitty_scene_plan_eq_unordered(
         plan,
         KittyScenePlan::Diff {
             asset_ops: vec![],
             placement_ops: vec![],
-        }
+        },
     );
 }
 
@@ -540,7 +592,7 @@ fn test_kitty_diff_deletes_removed_placement() {
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
-    assert_eq!(
+    assert_kitty_scene_plan_eq_unordered(
         plan,
         KittyScenePlan::Diff {
             asset_ops: vec![],
@@ -551,7 +603,7 @@ fn test_kitty_diff_deletes_removed_placement() {
                     wire_placement_id: pid(10),
                 },
             }],
-        }
+        },
     );
 }
 
@@ -565,7 +617,7 @@ fn test_kitty_diff_places_resident_asset_without_retransmit() {
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
-    assert_eq!(
+    assert_kitty_scene_plan_eq_unordered(
         plan,
         KittyScenePlan::Diff {
             asset_ops: vec![],
@@ -582,7 +634,7 @@ fn test_kitty_diff_places_resident_asset_without_retransmit() {
                     chunk
                 },
             }],
-        }
+        },
     );
 }
 
@@ -593,7 +645,7 @@ fn test_kitty_diff_retransmits_missing_asset_before_place() {
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
-    assert_eq!(
+    assert_kitty_scene_plan_eq_unordered(
         plan,
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
@@ -613,7 +665,7 @@ fn test_kitty_diff_retransmits_missing_asset_before_place() {
                     chunk
                 },
             }],
-        }
+        },
     );
 }
 
@@ -624,7 +676,7 @@ fn test_kitty_diff_replaces_geometry_change_with_delete_and_place() {
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
-    assert_eq!(
+    assert_kitty_scene_plan_eq_unordered(
         plan,
         KittyScenePlan::Diff {
             asset_ops: vec![],
@@ -650,7 +702,7 @@ fn test_kitty_diff_replaces_geometry_change_with_delete_and_place() {
                     },
                 },
             ],
-        }
+        },
     );
 }
 
@@ -688,7 +740,7 @@ fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
-    assert_eq!(
+    assert_kitty_scene_plan_eq_unordered(
         plan,
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
@@ -727,7 +779,7 @@ fn test_kitty_diff_invalidates_all_placements_when_asset_payload_changes() {
                     chunk: changed_chunk_two,
                 },
             ],
-        }
+        },
     );
 }
 
@@ -765,7 +817,7 @@ fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
 
     let plan = plan_kitty_scene(&assumed, &desired);
 
-    assert_eq!(
+    assert_kitty_scene_plan_eq_unordered(
         plan,
         KittyScenePlan::Diff {
             asset_ops: vec![KittyAssetOp::EnsureResident {
@@ -804,7 +856,7 @@ fn test_kitty_diff_shared_asset_updates_explicit_and_placeholder_placements() {
                     render: changed_render,
                 },
             ],
-        }
+        },
     );
 }
 
@@ -1083,6 +1135,81 @@ fn test_image_output_asset_change_invalidates_all_referencing_placements() {
 }
 
 #[test]
+fn test_image_output_can_publish_resident_assets_as_regular_files() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir.clone())));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(1, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_file_output_enabled_for_client(1, true);
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=1,q=2,f=100,t=f;"),
+        "file-enabled clients should receive regular-file kitty uploads"
+    );
+    assert!(
+        !client_output.contains("AQIDBA=="),
+        "file-enabled clients should not receive the direct base64 image payload"
+    );
+
+    let files = std::fs::read_dir(&media_dir)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(std::fs::read(files[0].path()).unwrap(), vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn test_image_output_file_transport_is_per_client_and_reuses_published_files() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir.clone())));
+    let client_ids = create_test_clients(2);
+    let chunk = create_kitty_chunk(1, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_file_output_enabled_for_client(1, true);
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk.clone()]),
+        None,
+    );
+    output.add_pane_image_output_to_client(
+        2,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let file_client_output = serialized.get(&1).unwrap();
+    let direct_client_output = serialized.get(&2).unwrap();
+    assert!(file_client_output.contains("a=t,i=1,q=2,f=100,t=f;"));
+    assert!(!file_client_output.contains("AQIDBA=="));
+    assert!(!direct_client_output.contains("t=f;"));
+    assert!(direct_client_output.contains("AQIDBA=="));
+
+    let files = std::fs::read_dir(&media_dir)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+}
+
+#[test]
 fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_placements() {
     let client_ids = create_test_clients(1);
     let mut explicit_chunk = create_kitty_chunk(1, 2, 2);
@@ -1172,8 +1299,8 @@ fn test_image_output_pre_vte_clear_invalidates_assumed_kitty_scene() {
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
     assert!(
-        !client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
-        "a pre-VTE display clear should invalidate assumed kitty state without emitting a second kitty delete-all"
+        client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "a pre-VTE display clear should also clear host kitty state before rebuilding images"
     );
     assert!(
         client_output.contains("a=p"),
@@ -1182,6 +1309,48 @@ fn test_image_output_pre_vte_clear_invalidates_assumed_kitty_scene() {
     assert!(
         client_output.contains("a=t"),
         "after a pre-VTE clear the kitty asset should be retransmitted because 2J invalidates assumed kitty residency"
+    );
+}
+
+#[test]
+fn test_image_output_pane_kitty_clear_resets_host_state_before_rebuild() {
+    let client_ids = create_test_clients(1);
+    let mut chunk = create_kitty_chunk(1, 2, 2);
+    chunk.placement_id = Some(pid(10));
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![chunk.clone()], vec![]),
+    )]));
+    output.add_pane_image_output_to_client(
+        1,
+        PaneImageRenderOutput {
+            kitty_scene: crate::output::KittyRenderBundle {
+                explicit_chunks: vec![chunk],
+                ..Default::default()
+            },
+            kitty_host_state_cleared: true,
+            ..Default::default()
+        },
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "a pane-local kitty clear must clear the host image namespace before rebuilding images"
+    );
+    assert!(
+        client_output.contains("a=p"),
+        "after a pane-local kitty clear the kitty scene should still be rebuilt"
+    );
+    assert!(
+        client_output.contains("a=t"),
+        "after a pane-local kitty clear assets should be retransmitted because host residency is gone"
     );
 }
 
@@ -1259,7 +1428,11 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
         create_test_output_with_state();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output1.add_clients(&client_ids, link_handler, None);
-    output1.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(frame1_scene), None);
+    output1.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(frame1_scene),
+        None,
+    );
     let _ = output1.serialize().unwrap();
     let state1 = output1.take_last_rendered_image_states();
 
@@ -1268,7 +1441,11 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output2.add_clients(&client_ids, link_handler, None);
     output2.set_last_rendered_image_states(state1);
-    output2.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(frame2_scene), None);
+    output2.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(frame2_scene),
+        None,
+    );
     let frame2_serialized = output2.serialize().unwrap();
     let frame2_client_output = frame2_serialized.get(&1).unwrap();
     assert!(
@@ -1282,7 +1459,11 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output3.add_clients(&client_ids, link_handler, None);
     output3.set_last_rendered_image_states(state2);
-    output3.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(frame3_scene), None);
+    output3.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(frame3_scene),
+        None,
+    );
     let _ = output3.serialize().unwrap();
     let state3 = output3.take_last_rendered_image_states();
 
@@ -1291,7 +1472,11 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output4.add_clients(&client_ids, link_handler, None);
     output4.set_last_rendered_image_states(state3);
-    output4.add_pane_image_output_to_client(1, pane_image_output_with_kitty_scene(frame4_scene), None);
+    output4.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(frame4_scene),
+        None,
+    );
 
     let frame4_serialized = output4.serialize().unwrap();
     let frame4_client_output = frame4_serialized.get(&1).unwrap();

@@ -2750,6 +2750,9 @@ impl Options {
             "support_kitty_keyboard_protocol"
         )
         .map(|(v, _)| v);
+        let kitty_file_output =
+            kdl_property_first_arg_as_bool_or_error!(kdl_options, "kitty_file_output")
+                .map(|(v, _)| v);
         let web_server =
             kdl_property_first_arg_as_bool_or_error!(kdl_options, "web_server").map(|(v, _)| v);
         let web_sharing =
@@ -2856,6 +2859,7 @@ impl Options {
             serialization_interval,
             disable_session_metadata,
             support_kitty_keyboard_protocol,
+            kitty_file_output,
             web_server,
             web_sharing,
             stacked_resize,
@@ -3758,6 +3762,35 @@ impl Options {
             None
         }
     }
+    fn kitty_file_output_to_kdl(&self, add_comments: bool) -> Option<KdlNode> {
+        let comment_text = format!("{}\n{}\n{}\n{}\n{}\n{}",
+            " ",
+            "// Use regular files for outbound Kitty image data instead of inline escape-code payloads.",
+            "// This should only be enabled when the terminal emulator can read files from the Zellij server host.",
+            "// (Requires restart)",
+            "// Default: false",
+            "// ",
+        );
+
+        let create_node = |node_value: bool| -> KdlNode {
+            let mut node = KdlNode::new("kitty_file_output");
+            node.push(KdlValue::Bool(node_value));
+            node
+        };
+        if let Some(kitty_file_output) = self.kitty_file_output {
+            let mut node = create_node(kitty_file_output);
+            if add_comments {
+                node.set_leading(format!("{}\n", comment_text));
+            }
+            Some(node)
+        } else if add_comments {
+            let mut node = create_node(false);
+            node.set_leading(format!("{}\n// ", comment_text));
+            Some(node)
+        } else {
+            None
+        }
+    }
     fn web_server_to_kdl(&self, add_comments: bool) -> Option<KdlNode> {
         let comment_text = format!(
             "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
@@ -4339,6 +4372,9 @@ impl Options {
             self.support_kitty_keyboard_protocol_to_kdl(add_comments)
         {
             nodes.push(support_kitty_keyboard_protocol);
+        }
+        if let Some(kitty_file_output) = self.kitty_file_output_to_kdl(add_comments) {
+            nodes.push(kitty_file_output);
         }
         if let Some(web_server) = self.web_server_to_kdl(add_comments) {
             nodes.push(web_server);
@@ -7109,11 +7145,13 @@ fn config_options_to_string() {
         serialization_interval 1
         disable_session_metadata true
         support_kitty_keyboard_protocol false
+        kitty_file_output true
         web_server true
         web_sharing "disabled"
     "##;
     let document: KdlDocument = fake_config.parse().unwrap();
     let deserialized = Options::from_kdl(&document).unwrap();
+    assert_eq!(deserialized.kitty_file_output, Some(true));
     let mut serialized = Options::to_kdl(&deserialized, false);
     let mut fake_document = KdlDocument::new();
     fake_document.nodes_mut().append(&mut serialized);

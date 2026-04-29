@@ -1,7 +1,7 @@
 use super::{Output, Tab};
+use crate::output::{KittyOutputMediaCache, RenderedImageState};
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::sixel::SixelImageStore;
-use crate::output::RenderedImageState;
 use crate::screen::CopyOptions;
 use crate::Arc;
 
@@ -1333,6 +1333,7 @@ fn render_after_tiled_pane_resize(mode: KittyResizeRenderMode) -> (String, Strin
     let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,
@@ -3780,6 +3781,7 @@ fn move_floating_pane_with_sixel_image() {
     let mut output = Output::new(
         sixel_image_store.clone(),
         kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,
@@ -3846,6 +3848,7 @@ fn floating_pane_above_sixel_image() {
     let mut output = Output::new(
         sixel_image_store.clone(),
         kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,
@@ -3908,6 +3911,7 @@ fn render_tab_with_last_state(
     let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,
@@ -3926,8 +3930,10 @@ fn render_tab_with_last_state(
 
 #[test]
 fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
-
-    let size = Size { cols: 121, rows: 30 };
+    let size = Size {
+        cols: 121,
+        rows: 30,
+    };
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let mut tab = create_new_tab_with_image_stores(
@@ -3967,20 +3973,16 @@ fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
         Some(state2),
     );
     assert!(
-        frame3_output.contains("\u{1b}_Ga=d,d=i,i=1,")
-            && frame3_output.contains("\u{1b}_Ga=d,d=i,i=3,")
-            && frame3_output.contains("\u{1b}_Ga=d,d=i,i=4,"),
-        "redrawing the smoke scene after pane-local clear should delete the previously rendered placements, got: {frame3_output:?}"
+        frame3_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\")
+            && frame3_output.contains("\u{1b}_Ga=t,i=5,")
+            && frame3_output.contains("\u{1b}_Ga=p,i=5,"),
+        "redrawing the smoke scene after pane-local kitty clear should clear host kitty state and rebuild the scene, got: {frame3_output:?}"
     );
 
     tab.handle_pty_bytes(1, b"\x1b_Ga=d,d=q,x=24,y=19,z=-1\x1b\\".to_vec())
         .unwrap();
-    let (frame4_output, _state4) = render_tab_with_last_state(
-        &mut tab,
-        sixel_image_store,
-        kitty_asset_store,
-        Some(state3),
-    );
+    let (frame4_output, _state4) =
+        render_tab_with_last_state(&mut tab, sixel_image_store, kitty_asset_store, Some(state3));
     assert!(
         !frame4_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
         "later smoke-style geometry deletes should not fall back to delete-all"
@@ -3993,7 +3995,10 @@ fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
 
 #[test]
 fn kitty_ris_reset_emits_deletes_for_existing_images() {
-    let size = Size { cols: 121, rows: 30 };
+    let size = Size {
+        cols: 121,
+        rows: 30,
+    };
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let mut tab = create_new_tab_with_image_stores(
@@ -4012,12 +4017,8 @@ fn kitty_ris_reset_emits_deletes_for_existing_images() {
     );
 
     tab.handle_pty_bytes(1, b"\x1bc".to_vec()).unwrap();
-    let (frame2_output, _state2) = render_tab_with_last_state(
-        &mut tab,
-        sixel_image_store,
-        kitty_asset_store,
-        Some(state1),
-    );
+    let (frame2_output, _state2) =
+        render_tab_with_last_state(&mut tab, sixel_image_store, kitty_asset_store, Some(state1));
     assert!(
         frame2_output.contains("\u{1b}_Ga=d,d=i,i=1,")
             && frame2_output.contains("\u{1b}_Ga=d,d=i,i=2,")
@@ -4029,7 +4030,10 @@ fn kitty_ris_reset_emits_deletes_for_existing_images() {
 
 #[test]
 fn kitty_alt_screen_exit_emits_deletes_for_existing_images() {
-    let size = Size { cols: 121, rows: 30 };
+    let size = Size {
+        cols: 121,
+        rows: 30,
+    };
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
     let mut tab = create_new_tab_with_image_stores(
@@ -4049,12 +4053,8 @@ fn kitty_alt_screen_exit_emits_deletes_for_existing_images() {
     );
 
     tab.handle_pty_bytes(1, b"\x1b[?1049l".to_vec()).unwrap();
-    let (frame2_output, _state2) = render_tab_with_last_state(
-        &mut tab,
-        sixel_image_store,
-        kitty_asset_store,
-        Some(state1),
-    );
+    let (frame2_output, _state2) =
+        render_tab_with_last_state(&mut tab, sixel_image_store, kitty_asset_store, Some(state1));
     assert!(
         frame2_output.contains("\u{1b}_Ga=d,d=i,i=1,")
             && frame2_output.contains("\u{1b}_Ga=d,d=i,i=2,")
@@ -4088,6 +4088,7 @@ fn kitty_placeholder_survives_tab_resize_and_render() {
     let mut first_output = Output::new(
         sixel_image_store.clone(),
         kitty_asset_store.clone(),
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size.clone(),
         true,
         true,
@@ -4103,6 +4104,7 @@ fn kitty_placeholder_survives_tab_resize_and_render() {
     let mut resized_output = Output::new(
         sixel_image_store,
         kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,
@@ -11252,6 +11254,7 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
     let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,
@@ -11431,6 +11434,7 @@ fn kitty_shared_asset_resize_followup_frames_retransmit_and_redraw_both_modes() 
     let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,
@@ -11493,6 +11497,7 @@ fn kitty_alt_screen_proof_scene_retains_assets_in_shared_store() {
     let mut output = Output::new(
         sixel_image_store,
         kitty_asset_store.clone(),
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         character_cell_size,
         true,
         true,

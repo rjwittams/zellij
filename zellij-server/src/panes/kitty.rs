@@ -17,6 +17,7 @@ use crate::panes::pane_image_scene::{
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -271,6 +272,7 @@ enum KittyTransmissionMedium {
     Direct,
     RegularFile,
     TemporaryFile,
+    SharedMemory,
 }
 
 #[derive(Clone, Debug)]
@@ -278,6 +280,7 @@ pub struct KittyImageState {
     kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     placements: Vec<KittyPlacement>,
     protocol_image_id_to_internal_id: HashMap<u32, u32>,
+    internal_image_id_to_protocol_image_ids: HashMap<u32, HashSet<u32>>,
     image_number_to_protocol_image_ids: HashMap<u32, Vec<u32>>,
     protocol_image_id_to_image_number: HashMap<u32, u32>,
     next_generated_protocol_image_id: u32,
@@ -339,6 +342,7 @@ impl KittyImageState {
             kitty_asset_store,
             placements: vec![],
             protocol_image_id_to_internal_id: HashMap::new(),
+            internal_image_id_to_protocol_image_ids: HashMap::new(),
             image_number_to_protocol_image_ids: HashMap::new(),
             protocol_image_id_to_image_number: HashMap::new(),
             next_generated_protocol_image_id: 0x8000_0001,
@@ -381,6 +385,19 @@ impl KittyImageState {
         } else {
             None
         }
+    }
+
+    fn register_protocol_image_reference(
+        &mut self,
+        protocol_image_id: u32,
+        internal_image_id: u32,
+    ) {
+        self.protocol_image_id_to_internal_id
+            .insert(protocol_image_id, internal_image_id);
+        self.internal_image_id_to_protocol_image_ids
+            .entry(internal_image_id)
+            .or_default()
+            .insert(protocol_image_id);
     }
 
     fn relative_parent_placement(
@@ -639,8 +656,7 @@ impl KittyImageState {
                         *existing_image_id
                     } else {
                         let image_id = self.kitty_asset_store.borrow_mut().next_asset_id();
-                        self.protocol_image_id_to_internal_id
-                            .insert(protocol_image_id, image_id);
+                        self.register_protocol_image_reference(protocol_image_id, image_id);
                         image_id
                     }
                 } else {
@@ -977,6 +993,7 @@ impl KittyImageState {
     pub fn clear(&mut self) {
         self.placements.clear();
         self.protocol_image_id_to_internal_id.clear();
+        self.internal_image_id_to_protocol_image_ids.clear();
         self.image_number_to_protocol_image_ids.clear();
         self.protocol_image_id_to_image_number.clear();
         self.pending_transmit = None;
@@ -987,8 +1004,21 @@ impl KittyImageState {
     }
 
     fn remove_protocol_image_references(&mut self, protocol_image_id: u32) {
-        self.protocol_image_id_to_internal_id
-            .remove(&protocol_image_id);
+        if let Some(internal_image_id) = self
+            .protocol_image_id_to_internal_id
+            .remove(&protocol_image_id)
+        {
+            if let Some(protocol_image_ids) = self
+                .internal_image_id_to_protocol_image_ids
+                .get_mut(&internal_image_id)
+            {
+                protocol_image_ids.remove(&protocol_image_id);
+                if protocol_image_ids.is_empty() {
+                    self.internal_image_id_to_protocol_image_ids
+                        .remove(&internal_image_id);
+                }
+            }
+        }
         if let Some(image_number) = self
             .protocol_image_id_to_image_number
             .remove(&protocol_image_id)
@@ -1010,12 +1040,10 @@ impl KittyImageState {
 
     fn remove_protocol_references_for_internal_image_id(&mut self, internal_image_id: u32) {
         let protocol_image_ids = self
-            .protocol_image_id_to_internal_id
-            .iter()
-            .filter_map(|(protocol_image_id, mapped_internal_image_id)| {
-                (*mapped_internal_image_id == internal_image_id).then_some(*protocol_image_id)
-            })
-            .collect::<Vec<_>>();
+            .internal_image_id_to_protocol_image_ids
+            .get(&internal_image_id)
+            .cloned()
+            .unwrap_or_default();
         for protocol_image_id in protocol_image_ids {
             self.remove_protocol_image_references(protocol_image_id);
         }
@@ -1239,6 +1267,18 @@ impl KittyImageState {
             raw_vte_output.push_str(&transmit_command);
             raw_vte_output.push_str("\u{1b}\\");
         }
+        raw_vte_output
+    }
+
+    pub fn serialize_image_data_from_file(
+        image_id: u32,
+        image_data: &KittyImageData,
+        path: &Path,
+    ) -> String {
+        let mut raw_vte_output = String::new();
+        raw_vte_output.push_str("\u{1b}_G");
+        raw_vte_output.push_str(&serialize_transmit_file(image_id, image_data, path));
+        raw_vte_output.push_str("\u{1b}\\");
         raw_vte_output
     }
 
@@ -1540,6 +1580,7 @@ fn parse_kitty_transmission_medium(medium: Option<&str>) -> Option<KittyTransmis
     match medium {
         Some("f") => Some(KittyTransmissionMedium::RegularFile),
         Some("t") => Some(KittyTransmissionMedium::TemporaryFile),
+        Some("s") => Some(KittyTransmissionMedium::SharedMemory),
         Some("d") | None => Some(KittyTransmissionMedium::Direct),
         Some(_) => None,
     }
@@ -1558,6 +1599,19 @@ fn parse_kitty_payload_byte_range(
         None => 0,
     };
     Some((size, offset))
+}
+
+fn inferred_kitty_raw_payload_size(kv: &HashMap<&str, &str>) -> Option<usize> {
+    let bytes_per_pixel = match kv.get("f").copied().unwrap_or("32") {
+        "24" => 3usize,
+        "32" => 4usize,
+        _ => return None,
+    };
+    let width = kv.get("s")?.parse::<usize>().ok()?;
+    let height = kv.get("v")?.parse::<usize>().ok()?;
+    width
+        .checked_mul(height)
+        .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
 }
 
 fn kitty_path_payload(path_payload: &[u8]) -> Option<&Path> {
@@ -1629,11 +1683,91 @@ fn read_kitty_temporary_file_payload(
     Some(payload)
 }
 
+#[cfg(unix)]
+fn read_kitty_shared_memory_payload(
+    name_payload: &[u8],
+    size: Option<usize>,
+    offset: u64,
+) -> Option<Vec<u8>> {
+    use std::ffi::CString;
+
+    let name = std::str::from_utf8(name_payload).ok()?;
+    let c_name = CString::new(name).ok()?;
+    unsafe {
+        let fd = libc::shm_open(c_name.as_ptr(), libc::O_RDONLY, 0o600);
+        if fd < 0 {
+            return None;
+        }
+
+        let mut stat: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut stat) != 0 || stat.st_size < 0 {
+            libc::shm_unlink(c_name.as_ptr());
+            libc::close(fd);
+            return None;
+        }
+
+        let total_len = match usize::try_from(stat.st_size) {
+            Ok(total_len) => total_len,
+            Err(_) => {
+                libc::shm_unlink(c_name.as_ptr());
+                libc::close(fd);
+                return None;
+            },
+        };
+        let offset = match usize::try_from(offset) {
+            Ok(offset) => offset,
+            Err(_) => {
+                libc::shm_unlink(c_name.as_ptr());
+                libc::close(fd);
+                return None;
+            },
+        };
+        let available_len = total_len.saturating_sub(offset);
+        let copy_len = size.unwrap_or(available_len).min(available_len);
+
+        let payload = if copy_len == 0 || total_len == 0 {
+            Vec::new()
+        } else {
+            let mapping = libc::mmap(
+                std::ptr::null_mut(),
+                total_len,
+                libc::PROT_READ,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            );
+            if mapping == libc::MAP_FAILED {
+                libc::shm_unlink(c_name.as_ptr());
+                libc::close(fd);
+                return None;
+            }
+            let bytes =
+                std::slice::from_raw_parts((mapping as *const u8).add(offset), copy_len).to_vec();
+            libc::munmap(mapping, total_len);
+            bytes
+        };
+
+        libc::shm_unlink(c_name.as_ptr());
+        libc::close(fd);
+        Some(payload)
+    }
+}
+
+#[cfg(not(unix))]
+fn read_kitty_shared_memory_payload(
+    _name_payload: &[u8],
+    _size: Option<usize>,
+    _offset: u64,
+) -> Option<Vec<u8>> {
+    None
+}
+
 fn read_kitty_transmission_payload(
     payload_b64: &[u8],
     medium: Option<&str>,
     size: Option<&str>,
     offset: Option<&str>,
+    inferred_raw_payload_size: Option<usize>,
 ) -> Option<Vec<u8>> {
     let payload = decode_kitty_transport_payload(payload_b64)?;
     match parse_kitty_transmission_medium(medium)? {
@@ -1645,6 +1779,10 @@ fn read_kitty_transmission_payload(
         KittyTransmissionMedium::TemporaryFile => {
             let (size, offset) = parse_kitty_payload_byte_range(size, offset)?;
             read_kitty_temporary_file_payload(&payload, size, offset)
+        },
+        KittyTransmissionMedium::SharedMemory => {
+            let (size, offset) = parse_kitty_payload_byte_range(size, offset)?;
+            read_kitty_shared_memory_payload(&payload, size.or(inferred_raw_payload_size), offset)
         },
     }
 }
@@ -1859,6 +1997,7 @@ pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
             kv.get("t").copied(),
             kv.get("S").copied(),
             kv.get("O").copied(),
+            inferred_kitty_raw_payload_size(&kv),
         )
         .and_then(|payload| apply_kitty_transport_compression(payload, kv.get("o").copied()))
         {
@@ -2081,11 +2220,16 @@ impl ParsedKittyCommand {
         }
 
         let more = kv.get("m").and_then(|m| m.parse::<u8>().ok()).unwrap_or(0) != 0;
+        let transmission_medium = parse_kitty_transmission_medium(kv.get("t").copied())?;
+        if more && transmission_medium != KittyTransmissionMedium::Direct {
+            return None;
+        }
         let payload = read_kitty_transmission_payload(
             payload,
             kv.get("t").copied(),
             kv.get("S").copied(),
             kv.get("O").copied(),
+            inferred_kitty_raw_payload_size(&kv),
         )?;
 
         if let Some(action) = kv.get("a") {
@@ -2268,6 +2412,26 @@ fn serialize_transmit(image_id: u32, image_data: &KittyImageData) -> Vec<String>
             }
         })
         .collect()
+}
+
+fn serialize_transmit_file(image_id: u32, image_data: &KittyImageData, path: &Path) -> String {
+    let mut command = String::new();
+    let _ = write!(command, "a=t,i={image_id},q=2,");
+    match image_data {
+        KittyImageData::Png { .. } => {
+            command.push_str("f=100,");
+        },
+        KittyImageData::Rgb { width, height, .. } => {
+            let _ = write!(command, "f=24,s={width},v={height},");
+        },
+        KittyImageData::Rgba { width, height, .. } => {
+            let _ = write!(command, "f=32,s={width},v={height},");
+        },
+    };
+    let payload = base64::encode(path.to_string_lossy().as_bytes());
+    command.push_str("t=f;");
+    command.push_str(&payload);
+    command
 }
 
 fn serialize_display(chunk: &KittyImageChunk, placement_id: u32) -> String {
@@ -2476,6 +2640,140 @@ mod tests {
         offset: Option<usize>,
     ) -> Vec<u8> {
         kitty_file_media_query_apc("f", image_id, 32, path, size, offset)
+    }
+
+    fn kitty_shared_memory_transmit_apc(
+        image_id: u32,
+        name: &str,
+        image_format: u32,
+        size: Option<usize>,
+        offset: Option<usize>,
+    ) -> Vec<u8> {
+        let mut control = format!("Gq=0,a=t,t=s,f={image_format},i={image_id}");
+        if image_format != 100 {
+            control.push_str(",s=2,v=2");
+        }
+        if let Some(size) = size {
+            control.push_str(&format!(",S={size}"));
+        }
+        if let Some(offset) = offset {
+            control.push_str(&format!(",O={offset}"));
+        }
+        control.push(';');
+        control.push_str(&base64::encode(name.as_bytes()));
+        control.into_bytes()
+    }
+
+    fn kitty_shared_memory_query_apc(
+        image_id: u32,
+        name: &str,
+        image_format: u32,
+        size: Option<usize>,
+        offset: Option<usize>,
+    ) -> Vec<u8> {
+        let mut control = format!("Gq=0,a=q,t=s,f={image_format},i={image_id}");
+        if image_format != 100 {
+            control.push_str(",s=2,v=2");
+        }
+        if let Some(size) = size {
+            control.push_str(&format!(",S={size}"));
+        }
+        if let Some(offset) = offset {
+            control.push_str(&format!(",O={offset}"));
+        }
+        control.push(';');
+        control.push_str(&base64::encode(name.as_bytes()));
+        control.into_bytes()
+    }
+
+    #[cfg(unix)]
+    fn unique_kitty_shared_memory_name(label: &str) -> String {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos()
+            % 0xfffff;
+        format!(
+            "/zj{:x}{:x}{}",
+            std::process::id() % 0xffff,
+            unique,
+            label.chars().next().unwrap_or('x')
+        )
+    }
+
+    #[cfg(unix)]
+    fn create_kitty_shared_memory_fixture(label: &str, bytes: &[u8]) -> String {
+        use std::ffi::CString;
+
+        let name = unique_kitty_shared_memory_name(label);
+        let c_name = CString::new(name.clone()).expect("shm name should not contain nul");
+        unsafe {
+            libc::shm_unlink(c_name.as_ptr());
+            let fd = libc::shm_open(
+                c_name.as_ptr(),
+                libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+                0o600,
+            );
+            assert!(
+                fd >= 0,
+                "shm_open fixture failed for {name}: {}",
+                std::io::Error::last_os_error()
+            );
+            assert_eq!(
+                libc::ftruncate(fd, bytes.len() as libc::off_t),
+                0,
+                "ftruncate fixture shm failed for {name}"
+            );
+            let mapping = libc::mmap(
+                std::ptr::null_mut(),
+                bytes.len(),
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            );
+            assert_ne!(
+                mapping,
+                libc::MAP_FAILED,
+                "mmap fixture shm failed for {name}"
+            );
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapping as *mut u8, bytes.len());
+            libc::msync(mapping, bytes.len(), libc::MS_SYNC);
+            libc::munmap(mapping, bytes.len());
+            libc::close(fd);
+        }
+        name
+    }
+
+    #[cfg(unix)]
+    fn kitty_shared_memory_exists(name: &str) -> bool {
+        use std::ffi::CString;
+
+        let c_name = CString::new(name).expect("shm name should not contain nul");
+        unsafe {
+            let fd = libc::shm_open(c_name.as_ptr(), libc::O_RDONLY, 0o600);
+            if fd < 0 {
+                false
+            } else {
+                libc::close(fd);
+                true
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn unlink_kitty_shared_memory(name: &str) {
+        use std::ffi::CString;
+
+        let c_name = CString::new(name).expect("shm name should not contain nul");
+        unsafe {
+            libc::shm_unlink(c_name.as_ptr());
+        }
+    }
+
+    #[cfg(unix)]
+    fn platform_page_size() -> usize {
+        unsafe { libc::sysconf(libc::_SC_PAGESIZE).max(1) as usize }
     }
 
     fn assert_stored_rgba_payload(
@@ -2692,6 +2990,199 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn kitty_shared_memory_rgba_upload_reads_and_unlinks() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let name = create_kitty_shared_memory_fixture("whole", &payload);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_shared_memory_transmit_apc(611, &name, 32, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "shared memory upload should succeed, got {reply:?}"
+        );
+        assert!(
+            !kitty_shared_memory_exists(&name),
+            "shared memory object should be unlinked after read"
+        );
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 611, &payload);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kitty_shared_memory_rgba_upload_honors_zero_unaligned_and_page_offsets() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let cases = [
+            (612, 0usize, "zero"),
+            (613, 3usize, "unaligned"),
+            (614, platform_page_size(), "page"),
+        ];
+        for (image_id, offset, label) in cases {
+            let mut shm_bytes = vec![0xAA; offset];
+            shm_bytes.extend_from_slice(&payload);
+            shm_bytes.extend_from_slice(&[0xDD, 0xEE]);
+            let name = create_kitty_shared_memory_fixture(label, &shm_bytes);
+            let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+            let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+            let reply = kitty_state.handle_apc(
+                &kitty_shared_memory_transmit_apc(
+                    image_id,
+                    &name,
+                    32,
+                    Some(payload.len()),
+                    Some(offset),
+                ),
+                FlowAnchor::LogicalRow {
+                    logical_row: 0,
+                    column: 0,
+                },
+                0,
+                0,
+                None,
+            );
+
+            let reply = reply.reply.unwrap().to_apc_response();
+            assert!(
+                reply.contains("OK"),
+                "shared memory upload with offset {offset} should succeed, got {reply:?}"
+            );
+            assert!(
+                !kitty_shared_memory_exists(&name),
+                "shared memory object should be unlinked after offset read"
+            );
+            assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, image_id, &payload);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kitty_shared_memory_invalid_png_unlinks_after_read() {
+        let name = create_kitty_shared_memory_fixture("badpng", b"not a png");
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store);
+
+        let reply = kitty_state.handle_apc(
+            &kitty_shared_memory_transmit_apc(615, &name, 100, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("EINVAL:Invalid image payload for requested format"),
+            "invalid shared-memory PNG should fail after read, got {reply:?}"
+        );
+        assert!(
+            !kitty_shared_memory_exists(&name),
+            "invalid shared-memory payload should still be unlinked after read"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kitty_shared_memory_missing_returns_error_without_creating_asset() {
+        let name = unique_kitty_shared_memory_name("missing");
+        unlink_kitty_shared_memory(&name);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_shared_memory_transmit_apc(616, &name, 32, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("EINVAL:Invalid or unsupported kitty command"),
+            "missing shared memory should fail, got {reply:?}"
+        );
+        assert!(
+            !kitty_state
+                .protocol_image_id_to_internal_id
+                .contains_key(&616),
+            "missing shared memory should not create a protocol image mapping"
+        );
+        assert!(kitty_asset_store.borrow().image_data(616).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kitty_query_response_accepts_shared_memory_and_unlinks() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let name = create_kitty_shared_memory_fixture("query", &payload);
+        let query = kitty_shared_memory_query_apc(617, &name, 32, None, None);
+
+        let reply = kitty_query_response(&query).unwrap().to_apc_response();
+
+        assert_eq!(reply, "\u{1b}_Gi=617;OK\u{1b}\\");
+        assert!(
+            !kitty_shared_memory_exists(&name),
+            "query should unlink shared memory object after read"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kitty_query_response_invalid_shared_memory_png_unlinks_after_read() {
+        let name = create_kitty_shared_memory_fixture("qbadpng", b"not a png");
+        let query = kitty_shared_memory_query_apc(618, &name, 100, None, None);
+
+        let reply = kitty_query_response(&query).unwrap().to_apc_response();
+
+        assert!(
+            reply.contains("i=618;EINVAL:Invalid image payload for requested format"),
+            "invalid shared-memory PNG query should fail after read, got {reply:?}"
+        );
+        assert!(
+            !kitty_shared_memory_exists(&name),
+            "invalid shared-memory query should unlink after read"
+        );
+    }
+
+    #[test]
+    fn kitty_parser_rejects_chunked_external_media() {
+        let path = write_kitty_file_media_fixture("chunked-external", b"not image bytes");
+        let mut command = String::from("Gq=0,a=t,t=f,m=1,f=32,s=1,v=1,i=619;");
+        command.push_str(&base64::encode(path.to_string_lossy().as_bytes()));
+
+        assert!(
+            ParsedKittyCommand::parse(command.as_bytes()).is_none(),
+            "chunked external media should be rejected before reading the external object"
+        );
+        std::fs::remove_file(path).ok();
+    }
+
     #[test]
     fn local_quota_eviction_removes_oldest_unplaced_asset_but_keeps_visible_assets() {
         let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::with_decoded_byte_quota(8)));
@@ -2770,6 +3261,12 @@ mod tests {
                 .image_data(first_stored_internal_image_id)
                 .is_none(),
             "oldest unplaced image should be evicted under quota pressure"
+        );
+        assert!(
+            !kitty_state
+                .internal_image_id_to_protocol_image_ids
+                .contains_key(&first_stored_internal_image_id),
+            "reverse protocol-image index should forget evicted assets"
         );
         let second_stored_internal_image_id = *kitty_state
             .protocol_image_id_to_internal_id
@@ -2940,7 +3437,7 @@ mod tests {
     #[test]
     fn kitty_query_response_rejects_unsupported_transmission_media() {
         let cases = [(
-            b"Gq=0,a=q,t=s,f=24,s=1,v=1,i=47;a2l0dHktcXVlcnktc2ht" as &[u8],
+            b"Gq=0,a=q,t=x,f=24,s=1,v=1,i=47;a2l0dHktcXVlcnktc2ht" as &[u8],
             47u32,
         )];
 
@@ -2959,7 +3456,7 @@ mod tests {
     #[test]
     fn kitty_query_response_suppresses_unsupported_media_failures_for_q2() {
         let quiet_failure =
-            kitty_query_response(b"Gq=2,a=q,t=s,f=24,s=1,v=1,i=48;a2l0dHktcXVlcnktc2ht");
+            kitty_query_response(b"Gq=2,a=q,t=x,f=24,s=1,v=1,i=48;a2l0dHktcXVlcnktc2ht");
         assert!(quiet_failure.is_none());
     }
 

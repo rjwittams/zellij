@@ -30,6 +30,7 @@ pub struct KittyAssetStore {
     next_asset_id: u32,
     assets: HashMap<u32, KittyAsset>,
     asset_order: Vec<u32>,
+    decoded_bytes_total: usize,
     decoded_byte_quota: usize,
 }
 
@@ -39,6 +40,7 @@ impl Default for KittyAssetStore {
             next_asset_id: 1,
             assets: HashMap::new(),
             asset_order: Vec::new(),
+            decoded_bytes_total: 0,
             decoded_byte_quota: KITTY_DEFAULT_DECODED_BYTE_QUOTA,
         }
     }
@@ -76,6 +78,14 @@ impl KittyAssetStore {
             .unwrap_or(1);
         self.asset_order
             .retain(|existing_id| *existing_id != image_id);
+        if let Some(existing_asset) = self.assets.get(&image_id) {
+            self.decoded_bytes_total = self
+                .decoded_bytes_total
+                .saturating_sub(decoded_byte_size(&existing_asset.image_data));
+        }
+        self.decoded_bytes_total = self
+            .decoded_bytes_total
+            .saturating_add(decoded_byte_size(&image_data));
         self.assets.insert(
             image_id,
             KittyAsset {
@@ -98,7 +108,13 @@ impl KittyAssetStore {
     pub fn remove_asset(&mut self, image_id: u32) -> Option<KittyAsset> {
         self.asset_order
             .retain(|existing_id| *existing_id != image_id);
-        self.assets.remove(&image_id)
+        let removed_asset = self.assets.remove(&image_id);
+        if let Some(asset) = removed_asset.as_ref() {
+            self.decoded_bytes_total = self
+                .decoded_bytes_total
+                .saturating_sub(decoded_byte_size(&asset.image_data));
+        }
+        removed_asset
     }
 
     pub fn image_data(&self, image_id: u32) -> Option<KittyImageData> {
@@ -113,20 +129,13 @@ impl KittyAssetStore {
             .map(|asset| kitty_image_dimensions(&asset.image_data))
     }
 
-    fn total_decoded_bytes(&self) -> usize {
-        self.assets
-            .values()
-            .map(|asset| decoded_byte_size(&asset.image_data))
-            .sum()
-    }
-
     fn evict_to_decoded_byte_quota(
         &mut self,
         newest_image_id: u32,
         protected_image_ids: &HashSet<u32>,
     ) -> Vec<u32> {
         let mut evicted_image_ids = Vec::new();
-        while self.total_decoded_bytes() > self.decoded_byte_quota {
+        while self.decoded_bytes_total > self.decoded_byte_quota {
             let Some(candidate_image_id) = self.asset_order.iter().copied().find(|image_id| {
                 *image_id != newest_image_id && !protected_image_ids.contains(image_id)
             }) else {
@@ -136,5 +145,39 @@ impl KittyAssetStore {
             evicted_image_ids.push(candidate_image_id);
         }
         evicted_image_ids
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgba(width: u32, height: u32) -> KittyImageData {
+        KittyImageData::Rgba {
+            data: vec![0; (width * height * 4) as usize],
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn decoded_byte_total_tracks_insert_replace_remove_and_evict() {
+        let mut store = KittyAssetStore::with_decoded_byte_quota(20);
+
+        store.insert_asset(1, rgba(1, 1));
+        assert_eq!(store.decoded_bytes_total, 4);
+
+        store.insert_asset(1, rgba(2, 2));
+        assert_eq!(store.decoded_bytes_total, 16);
+
+        store.insert_asset(2, rgba(1, 1));
+        assert_eq!(store.decoded_bytes_total, 20);
+
+        let evicted = store.insert_asset(3, rgba(1, 1));
+        assert_eq!(evicted, vec![1]);
+        assert_eq!(store.decoded_bytes_total, 8);
+
+        store.remove_asset(2);
+        assert_eq!(store.decoded_bytes_total, 4);
     }
 }

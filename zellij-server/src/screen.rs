@@ -75,7 +75,7 @@ use crate::panes::terminal_pane::{BRACKETED_PASTE_BEGIN, BRACKETED_PASTE_END};
 use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
 
 use crate::{
-    output::{Output, RenderedImageState},
+    output::{KittyOutputMediaCache, Output, RenderedImageState},
     panes::kitty_asset_store::KittyAssetStore,
     panes::sixel::SixelImageStore,
     panes::PaneId,
@@ -1373,6 +1373,7 @@ pub(crate) struct Screen {
     stacked_resize: Rc<RefCell<bool>>,
     sixel_image_store: Rc<RefCell<SixelImageStore>>,
     kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+    kitty_output_media_cache: Rc<RefCell<KittyOutputMediaCache>>,
     terminal_emulator_colors: Rc<RefCell<Palette>>,
     terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
     connected_clients: Rc<RefCell<HashMap<ClientId, bool>>>, // bool -> is_web_client
@@ -1409,6 +1410,7 @@ pub(crate) struct Screen {
     #[cfg_attr(test, allow(dead_code))]
     default_layout_name: Option<String>,
     explicitly_disable_kitty_keyboard_protocol: bool,
+    kitty_file_output: bool,
     default_editor: Option<PathBuf>,
     web_clients_allowed: bool,
     web_sharing: WebSharing,
@@ -1539,6 +1541,7 @@ impl Screen {
         arrow_fonts: bool,
         layout_dir: Option<PathBuf>,
         explicitly_disable_kitty_keyboard_protocol: bool,
+        kitty_file_output: bool,
         stacked_resize: bool,
         default_editor: Option<PathBuf>,
         web_clients_allowed: bool,
@@ -1566,6 +1569,9 @@ impl Screen {
             stacked_resize: Rc::new(RefCell::new(stacked_resize)),
             sixel_image_store: Rc::new(RefCell::new(SixelImageStore::default())),
             kitty_asset_store: Rc::new(RefCell::new(KittyAssetStore::default())),
+            kitty_output_media_cache: Rc::new(RefCell::new(KittyOutputMediaCache::for_session(
+                &session_name,
+            ))),
             style: client_attributes.style,
             connected_clients: Rc::new(RefCell::new(HashMap::new())),
             active_tab_ids: BTreeMap::new(),
@@ -1597,6 +1603,7 @@ impl Screen {
             resurrectable_sessions_cache,
             layout_dir,
             explicitly_disable_kitty_keyboard_protocol,
+            kitty_file_output,
             default_editor,
             web_clients_allowed,
             web_sharing,
@@ -2522,6 +2529,17 @@ impl Screen {
         Ok(serialized_output.remove(&followed_client_id))
     }
 
+    fn configure_kitty_file_output_for_regular_clients(&self, output: &mut Output) {
+        if !self.kitty_file_output {
+            return;
+        }
+        for (client_id, is_web_client) in self.connected_clients.borrow().iter() {
+            if !*is_web_client && !self.watcher_clients.contains_key(client_id) {
+                output.set_kitty_file_output_enabled_for_client(*client_id, true);
+            }
+        }
+    }
+
     pub fn render_to_clients(&mut self) -> Result<()> {
         // this method does the actual rendering and is triggered by a debounced BackgroundJob (see
         // the render method for more details)
@@ -2545,6 +2563,7 @@ impl Screen {
             let mut output = Output::new(
                 self.sixel_image_store.clone(),
                 self.kitty_asset_store.clone(),
+                self.kitty_output_media_cache.clone(),
                 self.character_cell_size.clone(),
                 self.styled_underlines,
                 self.osc8_hyperlinks,
@@ -2563,6 +2582,7 @@ impl Screen {
                     tabs_to_close.push(*tab_index);
                 }
             }
+            self.configure_kitty_file_output_for_regular_clients(&mut output);
 
             let pane_render_report = output.drain_pane_render_report();
 
@@ -2661,6 +2681,7 @@ impl Screen {
                 let mut watcher_output = Output::new(
                     self.sixel_image_store.clone(),
                     self.kitty_asset_store.clone(),
+                    self.kitty_output_media_cache.clone(),
                     self.character_cell_size.clone(),
                     self.styled_underlines,
                     self.osc8_hyperlinks,
@@ -5217,6 +5238,7 @@ impl Screen {
     fn connected_clients_contains(&self, client_id: &ClientId) -> bool {
         self.connected_clients.borrow().contains_key(client_id)
     }
+
     fn get_client_pane_group(&self, client_id: &ClientId) -> HashSet<PaneId> {
         self.current_pane_group
             .borrow()
@@ -5764,6 +5786,7 @@ pub(crate) fn screen_thread_main(
         // explicitly_disable_kitty_keyboard_protocol is false and vice versa
         .unwrap_or(false); // by default, we try to support this if the terminal supports it and
                            // the program running inside a pane requests it
+    let kitty_file_output = config_options.kitty_file_output.unwrap_or(false);
     let stacked_resize = config_options.stacked_resize.unwrap_or(true);
     let web_clients_allowed = config_options
         .web_sharing
@@ -5807,6 +5830,7 @@ pub(crate) fn screen_thread_main(
         arrow_fonts,
         layout_dir,
         explicitly_disable_kitty_keyboard_protocol,
+        kitty_file_output,
         stacked_resize,
         default_editor,
         web_clients_allowed,
@@ -7502,6 +7526,7 @@ pub(crate) fn screen_thread_main(
                 screen.render(None)?;
             },
             ScreenInstruction::Exit => {
+                KittyOutputMediaCache::cleanup_session_media(&screen.session_name);
                 break;
             },
             ScreenInstruction::ToggleTab(
@@ -8832,6 +8857,10 @@ pub(crate) fn screen_thread_main(
                     {
                         log::error!("Failed to rename session_info folder: {:?}", e);
                     }
+                    screen
+                        .kitty_output_media_cache
+                        .borrow_mut()
+                        .rename_session(&old_session_name, &name);
 
                     // report
                     screen

@@ -1,5 +1,5 @@
 use super::{KittyImageChunk, KittyPlaceholderRender, PlacementId};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct KittyPlacementKey {
@@ -31,8 +31,8 @@ impl PlannedKittyPlacement {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct KittySceneState {
-    pub resident_asset_generations: BTreeMap<u32, u64>,
-    pub placements: BTreeMap<KittyPlacementKey, PlannedKittyPlacement>,
+    pub resident_asset_generations: HashMap<u32, u64>,
+    pub placements: HashMap<KittyPlacementKey, PlannedKittyPlacement>,
 }
 
 impl KittySceneState {
@@ -82,7 +82,7 @@ pub(crate) fn plan_kitty_scene(
     assumed: &KittySceneState,
     desired: &KittySceneState,
 ) -> KittyScenePlan {
-    let changed_asset_ids: BTreeSet<u32> = desired
+    let changed_asset_ids: HashSet<u32> = desired
         .resident_asset_generations
         .iter()
         .filter_map(|(&image_id, desired_generation)| {
@@ -93,17 +93,19 @@ pub(crate) fn plan_kitty_scene(
         })
         .collect();
 
-    let mut asset_ops = vec![];
-    for image_id in &changed_asset_ids {
-        let generation = *desired
-            .resident_asset_generations
-            .get(image_id)
-            .expect("changed asset must exist in desired scene");
-        asset_ops.push(KittyAssetOp::EnsureResident {
-            image_id: *image_id,
-            generation,
-        });
-    }
+    let asset_ops = changed_asset_ids
+        .iter()
+        .map(|image_id| {
+            let generation = *desired
+                .resident_asset_generations
+                .get(image_id)
+                .expect("changed asset must exist in desired scene");
+            KittyAssetOp::EnsureResident {
+                image_id: *image_id,
+                generation,
+            }
+        })
+        .collect();
 
     let mut placement_ops = vec![];
     for key in assumed.placements.keys() {

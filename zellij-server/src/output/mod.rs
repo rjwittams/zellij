@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 mod image_fragment;
 mod image_output;
 mod kitty_diff;
+mod kitty_output_media;
 
 use crate::panes::Row;
 
@@ -27,6 +28,7 @@ use zellij_utils::pane_size::SizeInPixels;
 
 use self::image_fragment::PreparedImageOutput;
 use self::image_output::ImageOutput;
+pub use self::kitty_output_media::KittyOutputMediaCache;
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use zellij_utils::pane_size::{PaneGeom, Size};
 
@@ -359,6 +361,7 @@ impl Output {
     pub fn new(
         sixel_image_store: Rc<RefCell<SixelImageStore>>,
         kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+        kitty_output_media_cache: Rc<RefCell<KittyOutputMediaCache>>,
         character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
         styled_underlines: bool,
         osc8_hyperlinks: bool,
@@ -367,6 +370,7 @@ impl Output {
             image_output: ImageOutput::new(
                 sixel_image_store,
                 kitty_asset_store,
+                kitty_output_media_cache,
                 character_cell_size,
             ),
             styled_underlines,
@@ -390,6 +394,11 @@ impl Output {
     ) {
         self.image_output
             .set_last_rendered_image_state_for_client(client_id, last_rendered_image_state);
+    }
+
+    pub fn set_kitty_file_output_enabled_for_client(&mut self, client_id: ClientId, enabled: bool) {
+        self.image_output
+            .set_kitty_file_output_enabled_for_client(client_id, enabled);
     }
 
     pub fn take_last_rendered_image_states(&mut self) -> HashMap<ClientId, RenderedImageState> {
@@ -982,6 +991,7 @@ pub struct PaneImageRenderOutput {
     pub kitty_scene: KittyRenderBundle,
     pub sixel_chunks: Vec<SixelImageChunk>,
     pub changed_rects: HashMap<usize, usize>,
+    pub kitty_host_state_cleared: bool,
 }
 
 #[derive(Debug, Clone, Default)]

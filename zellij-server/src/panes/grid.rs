@@ -711,6 +711,7 @@ pub struct Grid {
     ui_component_bytes: Option<Vec<u8>>,
     apc_bytes: Option<Vec<u8>>,
     image_scene: PaneImageScene,
+    kitty_host_state_cleared: bool,
     style: Style,
     debug: bool,
     arrow_fonts: bool,
@@ -1034,6 +1035,7 @@ impl Grid {
             ui_component_bytes: None,
             apc_bytes: None,
             image_scene: PaneImageScene::new(kitty_asset_store),
+            kitty_host_state_cleared: false,
             style,
             debug,
             arrow_fonts,
@@ -1902,10 +1904,12 @@ impl Grid {
             .into_iter()
             .map(|(start_row, line_count)| (content_y + start_row, line_count))
             .collect();
+        let kitty_host_state_cleared = std::mem::take(&mut self.kitty_host_state_cleared);
         let image_output = PaneImageRenderOutput {
             kitty_scene: self.visible_kitty_render_bundle(content_x, content_y),
             sixel_chunks: sixel_image_chunks,
             changed_rects,
+            kitty_host_state_cleared,
         };
 
         Ok(Some(PaneRenderOutput {
@@ -2584,6 +2588,12 @@ impl Grid {
     pub fn mark_for_rerender(&mut self) {
         self.should_render = true;
     }
+
+    fn clear_image_scene_and_request_host_clear(&mut self) {
+        self.image_scene.clear();
+        self.kitty_host_state_cleared = true;
+    }
+
     pub fn reset_terminal_state(&mut self) {
         self.lines_above = VecDeque::new();
         self.lines_below = VecDeque::new();
@@ -2625,10 +2635,8 @@ impl Grid {
     fn consume_kitty_placeholder_char(&mut self, c: char) -> bool {
         if c == KITTY_UNICODE_PLACEHOLDER_CHAR {
             self.finalize_pending_kitty_placeholder();
-            self.image_placeholder_tracker.begin_placeholder(
-                &self.cursor.pending_styles,
-                self.kitty_cursor_flow_anchor(),
-            );
+            self.image_placeholder_tracker
+                .begin_placeholder(&self.cursor.pending_styles, self.kitty_cursor_flow_anchor());
             self.move_cursor_forward_until_edge(1);
             return true;
         }
@@ -2654,8 +2662,7 @@ impl Grid {
         let Some(resolved) = pending.resolve_with_previous(
             self.image_placeholder_tracker
                 .previous_resolved_placeholder(),
-        )
-        else {
+        ) else {
             self.image_placeholder_tracker
                 .clear_last_resolved_placeholder();
             return;
@@ -3841,7 +3848,7 @@ impl Perform for Grid {
                     self.image_scene.abort_pending_kitty_transmit();
                     match delete_request.selector {
                         KittyDeleteSelector::AllVisible => {
-                            self.image_scene.clear();
+                            self.clear_image_scene_and_request_host_clear();
                             self.mark_for_rerender();
                             return;
                         },
@@ -4372,7 +4379,7 @@ impl Perform for Grid {
                     if let Some(images_to_reap) = self.sixel_grid.clear() {
                         self.sixel_grid.reap_images(images_to_reap);
                     }
-                    self.image_scene.clear();
+                    self.clear_image_scene_and_request_host_clear();
                 } else if clear_type == 3 {
                     self.clear_lines_above();
                     if let Some(images_to_reap) = self.sixel_grid.clear() {

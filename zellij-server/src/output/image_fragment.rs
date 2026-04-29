@@ -132,7 +132,9 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
-        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(chunk)));
+        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(
+            chunk,
+        )));
     }
     if intersection_bottom < chunk_bottom_edge {
         let removed_rows = intersection_bottom - chunk_top_edge;
@@ -144,7 +146,9 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
-        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(chunk)));
+        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(
+            chunk,
+        )));
     }
     if intersection_left > chunk_left_edge {
         let kept_cols = intersection_left - chunk_left_edge;
@@ -163,7 +167,9 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
-        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(chunk)));
+        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(
+            chunk,
+        )));
     }
     if intersection_right < chunk_right_edge {
         let removed_cols = intersection_right - chunk_left_edge;
@@ -185,7 +191,9 @@ fn clip_kitty_explicit_fragment(
             source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
-        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(chunk)));
+        uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(
+            chunk,
+        )));
     }
     uncovered
 }
@@ -421,7 +429,10 @@ mod tests {
             ..chunk.clone()
         });
 
-        assert!(matches!(split.placement_id, Some(PlacementId::Synthetic(_))));
+        assert!(matches!(
+            split.placement_id,
+            Some(PlacementId::Synthetic(_))
+        ));
         assert!(split.columns_specified);
         assert!(split.rows_specified);
         assert_eq!(split.image_id, chunk.image_id);

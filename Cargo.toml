@@ -119,6 +119,9 @@ zellij-utils = { path = "zellij-utils/", version = "0.45.0" }
 
 [profile.dev-opt]
 inherits = "dev"
+debug = "full"
+split-debuginfo = "packed"
+strip = "none"
 
 [profile.dev-opt.package."*"]
 opt-level = 3

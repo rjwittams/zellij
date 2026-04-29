@@ -722,7 +722,8 @@ impl PaneImageScene {
                             ProtocolPlacementIdentity::Kitty {
                                 image_id: Some(image_id),
                                 placement_id,
-                            } if insertion.placement_mode == KittyImagePlacementMode::Placeholder
+                            } if insertion.placement_mode
+                                == KittyImagePlacementMode::Placeholder
                                 || placement_id.is_some() =>
                             {
                                 Some(KittyProtocolPlacementKey {

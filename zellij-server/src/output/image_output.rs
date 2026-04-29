@@ -9,6 +9,7 @@ use super::{
     vte_goto_instruction, FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender,
     PaneImageRenderOutput, RenderedImageState, SixelImageChunk,
 };
+use crate::output::KittyOutputMediaCache;
 use crate::panes::kitty::KittyImageState;
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::pane_image_scene::KittyDamageRedraw;
@@ -16,7 +17,7 @@ use crate::panes::sixel::SixelImageStore;
 use crate::ClientId;
 use std::{
     cell::RefCell,
-    collections::{BTreeSet, HashMap},
+    collections::{HashMap, HashSet},
     rc::Rc,
 };
 use zellij_utils::errors::prelude::*;
@@ -28,6 +29,7 @@ struct CurrentImageState {
     kitty_chunks: Vec<KittyImageChunk>,
     kitty_placeholder_renders: Vec<KittyPlaceholderRender>,
     changed_rects: HashMap<usize, usize>,
+    kitty_host_state_cleared: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +48,7 @@ impl PreparedKittyRenderPlan {
         last_rendered_image_state: &RenderedImageState,
         last_rendered_kitty_scene: Option<&KittySceneState>,
         pre_vte_clears_display: bool,
+        kitty_host_state_cleared: bool,
     ) -> Self {
         let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
         let empty_resident_assets = HashMap::new();
@@ -55,7 +58,17 @@ impl PreparedKittyRenderPlan {
             current_kitty_placeholder_renders,
             kitty_asset_store,
         );
-        let assumed_kitty_scene = if pre_vte_clears_display {
+        let has_current_kitty_scene =
+            !current_kitty_chunks.is_empty() || !current_kitty_placeholder_renders.is_empty();
+        let has_previous_kitty_scene = !last_rendered_image_state.explicit_chunks.is_empty()
+            || !last_rendered_image_state.placeholder_renders.is_empty()
+            || !last_rendered_image_state
+                .resident_asset_generations
+                .is_empty();
+        let host_kitty_state_is_empty = pre_vte_clears_display || kitty_host_state_cleared;
+        let should_clear_kitty_before_text =
+            host_kitty_state_is_empty && (has_current_kitty_scene || has_previous_kitty_scene);
+        let assumed_kitty_scene = if host_kitty_state_is_empty {
             Some(KittySceneState::default())
         } else {
             last_rendered_kitty_scene.cloned().or_else(|| {
@@ -75,7 +88,7 @@ impl PreparedKittyRenderPlan {
                     placement_ops,
                 } = &mut kitty_plan
                 {
-                    let place_keys: BTreeSet<KittyPlacementKey> = placement_ops
+                    let place_keys: HashSet<KittyPlacementKey> = placement_ops
                         .iter()
                         .filter_map(|placement_op| match placement_op {
                             KittyPlacementOp::PlaceExplicit { key, .. }
@@ -110,21 +123,25 @@ impl PreparedKittyRenderPlan {
                 }
                 kitty_plan
             },
-            _ => {
-                ImageOutput::render_full_reset_plan(
-                    current_kitty_chunks,
-                    current_kitty_placeholder_renders,
-                )
-            },
+            _ => ImageOutput::render_full_reset_plan(
+                current_kitty_chunks,
+                current_kitty_placeholder_renders,
+            ),
         };
         let before_text_vte = match &kitty_plan {
             KittyScenePlan::Diff {
                 asset_ops: _,
                 placement_ops,
-            } => ImageOutput::serialize_kitty_delete_ops(placement_ops),
-            KittyScenePlan::FullResetAndResend { .. } => {
-                (!pre_vte_clears_display).then(kitty_clear_before_text_vte)
+            } => {
+                if should_clear_kitty_before_text {
+                    Some(kitty_clear_before_text_vte())
+                } else {
+                    ImageOutput::serialize_kitty_delete_ops(placement_ops)
+                }
             },
+            KittyScenePlan::FullResetAndResend { .. } => (has_current_kitty_scene
+                || has_previous_kitty_scene)
+                .then(kitty_clear_before_text_vte),
         };
         Self {
             desired_scene,
@@ -155,10 +172,6 @@ impl ClientImageRenderState {
         &self.last_rendered_image_state
     }
 
-    fn last_rendered_scene_state(&self) -> Option<&KittySceneState> {
-        self.last_rendered_scene_state.as_ref()
-    }
-
     fn clone_last_rendered_image_state(&self) -> RenderedImageState {
         self.last_rendered_image_state.clone()
     }
@@ -183,12 +196,13 @@ impl ClientImageRenderState {
     fn push_fragment(&mut self, fragment: ImageFragment) {
         match fragment {
             ImageFragment::Sixel(sixel_chunk) => self.current.sixel_chunks.push(sixel_chunk),
-            ImageFragment::KittyExplicit(kitty_chunk) => self.current.kitty_chunks.push(kitty_chunk),
-            ImageFragment::KittyPlaceholder(placeholder_render) => {
-                self.current
-                    .kitty_placeholder_renders
-                    .push(placeholder_render)
+            ImageFragment::KittyExplicit(kitty_chunk) => {
+                self.current.kitty_chunks.push(kitty_chunk)
             },
+            ImageFragment::KittyPlaceholder(placeholder_render) => self
+                .current
+                .kitty_placeholder_renders
+                .push(placeholder_render),
         }
     }
 
@@ -204,6 +218,10 @@ impl ClientImageRenderState {
         }
     }
 
+    fn set_kitty_host_state_cleared(&mut self) {
+        self.current.kitty_host_state_cleared = true;
+    }
+
     fn take_current_render_state(
         &mut self,
     ) -> (
@@ -211,12 +229,14 @@ impl ClientImageRenderState {
         Vec<KittyImageChunk>,
         Vec<KittyPlaceholderRender>,
         HashMap<usize, usize>,
+        bool,
     ) {
         (
             std::mem::take(&mut self.current.sixel_chunks),
             std::mem::take(&mut self.current.kitty_chunks),
             std::mem::take(&mut self.current.kitty_placeholder_renders),
             std::mem::take(&mut self.current.changed_rects),
+            std::mem::take(&mut self.current.kitty_host_state_cleared),
         )
     }
 }
@@ -224,8 +244,10 @@ impl ClientImageRenderState {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ImageOutput {
     client_image_states: HashMap<ClientId, ClientImageRenderState>,
+    clients_with_kitty_file_output: HashSet<ClientId>,
     pub(crate) sixel_image_store: Rc<RefCell<SixelImageStore>>,
     pub(crate) kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+    kitty_output_media_cache: Rc<RefCell<KittyOutputMediaCache>>,
     character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
 }
 
@@ -289,7 +311,7 @@ impl PreparedAfterTextImages {
             vte_output.push_str(restore_cursor_position);
         }
 
-        vte_output.push_str(&image_output.serialize_kitty_plan(&kitty_plan));
+        vte_output.push_str(&image_output.serialize_kitty_plan(client_id, &kitty_plan));
 
         image_output.finish_render_body_for_client(
             client_id,
@@ -314,13 +336,23 @@ impl ImageOutput {
     pub fn new(
         sixel_image_store: Rc<RefCell<SixelImageStore>>,
         kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+        kitty_output_media_cache: Rc<RefCell<KittyOutputMediaCache>>,
         character_cell_size: Rc<RefCell<Option<SizeInPixels>>>,
     ) -> Self {
         Self {
             sixel_image_store,
             kitty_asset_store,
+            kitty_output_media_cache,
             character_cell_size,
             ..Default::default()
+        }
+    }
+
+    pub fn set_kitty_file_output_enabled_for_client(&mut self, client_id: ClientId, enabled: bool) {
+        if enabled {
+            self.clients_with_kitty_file_output.insert(client_id);
+        } else {
+            self.clients_with_kitty_file_output.remove(&client_id);
         }
     }
 
@@ -332,9 +364,8 @@ impl ImageOutput {
         protocol_placement_id: Option<super::PlacementId>,
         stable_render_id: u64,
     ) -> super::PlacementId {
-        protocol_placement_id.unwrap_or_else(|| {
-            super::PlacementId::Synthetic((stable_render_id as u32).max(1))
-        })
+        protocol_placement_id
+            .unwrap_or_else(|| super::PlacementId::Synthetic((stable_render_id as u32).max(1)))
     }
 
     fn kitty_scene_state_from_rendered(
@@ -350,7 +381,7 @@ impl ImageOutput {
                 .collect(),
             ..Default::default()
         };
-        let mut referenced_asset_ids: BTreeSet<u32> = BTreeSet::new();
+        let mut referenced_asset_ids: HashSet<u32> = HashSet::new();
         for chunk in chunks {
             let placement_id =
                 ImageOutput::stable_wire_placement_id(chunk.placement_id, chunk.stable_render_id);
@@ -365,10 +396,8 @@ impl ImageOutput {
             });
         }
         for render in placeholder_renders {
-            let placement_id = ImageOutput::stable_wire_placement_id(
-                render.placement_id,
-                render.stable_render_id,
-            );
+            let placement_id =
+                ImageOutput::stable_wire_placement_id(render.placement_id, render.stable_render_id);
             referenced_asset_ids.insert(render.image_id);
             scene.insert_placement(PlannedKittyPlacement::Placeholder {
                 key: KittyPlacementKey {
@@ -468,7 +497,7 @@ impl ImageOutput {
         next_resident_assets
     }
 
-    fn serialize_kitty_plan(&mut self, kitty_plan: &KittyScenePlan) -> String {
+    fn serialize_kitty_plan(&mut self, client_id: ClientId, kitty_plan: &KittyScenePlan) -> String {
         match kitty_plan {
             KittyScenePlan::Diff {
                 asset_ops,
@@ -490,14 +519,19 @@ impl ImageOutput {
                             generation,
                         } => {
                             let kitty_asset_store = self.kitty_asset_store.borrow();
-                            let Some(asset) = kitty_asset_store.asset(*image_id) else {
+                            let asset = kitty_asset_store.asset(*image_id);
+                            let Some(asset) = asset else {
                                 continue;
                             };
                             if asset.generation != *generation {
                                 continue;
                             }
-                            vte_output.push_str(&KittyImageState::serialize_image_data(
+                            vte_output.push_str(&Self::serialize_kitty_image_data(
+                                &self.clients_with_kitty_file_output,
+                                &self.kitty_output_media_cache,
+                                client_id,
                                 *image_id,
+                                *generation,
                                 &asset.image_data,
                             ));
                         },
@@ -506,12 +540,12 @@ impl ImageOutput {
                 for placement_op in placement_ops {
                     match placement_op {
                         KittyPlacementOp::Delete { .. } => {},
-                        KittyPlacementOp::PlaceExplicit { key, chunk } => vte_output.push_str(
-                            &KittyImageState::serialize_explicit_placement(
+                        KittyPlacementOp::PlaceExplicit { key, chunk } => {
+                            vte_output.push_str(&KittyImageState::serialize_explicit_placement(
                                 chunk,
                                 key.wire_placement_id.wire_value(),
-                            ),
-                        ),
+                            ))
+                        },
                         KittyPlacementOp::PlacePlaceholder { key, render } => {
                             vte_output.push_str(&KittyImageState::serialize_placeholder_render(
                                 render,
@@ -526,15 +560,91 @@ impl ImageOutput {
             KittyScenePlan::FullResetAndResend {
                 explicit_chunks,
                 placeholder_renders,
-            } => {
-                let kitty_asset_store = self.kitty_asset_store.borrow();
-                KittyImageState::serialize_full_scene_with_asset_store(
-                    explicit_chunks,
-                    placeholder_renders,
-                    &kitty_asset_store,
-                )
-            },
+            } => self.serialize_kitty_full_reset(client_id, explicit_chunks, placeholder_renders),
         }
+    }
+
+    fn serialize_kitty_image_data(
+        clients_with_kitty_file_output: &HashSet<ClientId>,
+        kitty_output_media_cache: &Rc<RefCell<KittyOutputMediaCache>>,
+        client_id: ClientId,
+        image_id: u32,
+        generation: u64,
+        image_data: &crate::output::KittyImageData,
+    ) -> String {
+        if clients_with_kitty_file_output.contains(&client_id) {
+            if let Ok(path) = kitty_output_media_cache
+                .borrow_mut()
+                .ensure_regular_file(image_id, generation, image_data)
+            {
+                return KittyImageState::serialize_image_data_from_file(
+                    image_id, image_data, &path,
+                );
+            }
+        }
+        KittyImageState::serialize_image_data(image_id, image_data)
+    }
+
+    fn serialize_kitty_full_reset(
+        &mut self,
+        client_id: ClientId,
+        chunks: &[KittyImageChunk],
+        renders: &[KittyPlaceholderRender],
+    ) -> String {
+        if chunks.is_empty() && renders.is_empty() {
+            return String::new();
+        }
+        let mut raw_vte_output = String::new();
+        raw_vte_output.push_str("\u{1b}[s");
+
+        let mut transmitted_image_ids = std::collections::HashSet::new();
+        for image_id in chunks
+            .iter()
+            .map(|chunk| chunk.image_id)
+            .chain(renders.iter().map(|render| render.image_id))
+        {
+            if transmitted_image_ids.insert(image_id) {
+                let kitty_asset_store = self.kitty_asset_store.borrow();
+                let asset = kitty_asset_store.asset(image_id);
+                let Some(asset) = asset else {
+                    continue;
+                };
+                raw_vte_output.push_str(&Self::serialize_kitty_image_data(
+                    &self.clients_with_kitty_file_output,
+                    &self.kitty_output_media_cache,
+                    client_id,
+                    image_id,
+                    asset.generation,
+                    &asset.image_data,
+                ));
+            }
+        }
+
+        let mut next_synthesized_placement_id = 1u32;
+        for chunk in chunks {
+            let placement_id = chunk.placement_id.unwrap_or_else(|| {
+                let placement_id = next_synthesized_placement_id;
+                next_synthesized_placement_id += 1;
+                crate::output::PlacementId::Synthetic(placement_id)
+            });
+            raw_vte_output.push_str(&KittyImageState::serialize_explicit_placement(
+                chunk,
+                placement_id.wire_value(),
+            ));
+        }
+        for render in renders {
+            let placement_id = render.placement_id.unwrap_or_else(|| {
+                let placement_id = next_synthesized_placement_id;
+                next_synthesized_placement_id += 1;
+                crate::output::PlacementId::Synthetic(placement_id)
+            });
+            raw_vte_output.push_str(&KittyImageState::serialize_placeholder_render(
+                render,
+                placement_id.wire_value(),
+            ));
+        }
+        raw_vte_output.push_str("\u{1b}[u");
+        raw_vte_output
     }
 
     fn visible_image_fragments_from_pane_output(
@@ -598,7 +708,7 @@ impl ImageOutput {
                             .iter()
                             .map(|render| render.image_id),
                     )
-                    .collect::<BTreeSet<_>>()
+                    .collect::<HashSet<_>>()
                     .into_iter()
                     .any(|image_id| {
                         let Some(current_image_data) =
@@ -659,6 +769,16 @@ impl ImageOutput {
             &scene_input.placeholder_renders,
             &kitty_asset_store,
         );
+        if let Some(scene_state) = scene_state.as_ref() {
+            log::trace!(
+                target: "zellij::kitty_images",
+                "set last rendered kitty image state for client {client_id}: resident_assets={}, placements={}, explicit_chunks={}, placeholder_renders={}",
+                scene_state.resident_asset_generations.len(),
+                scene_state.placements.len(),
+                normalized_state.explicit_chunks.len(),
+                normalized_state.placeholder_renders.len(),
+            );
+        }
         client_state.set_last_rendered_state(normalized_state, scene_state);
     }
 
@@ -732,6 +852,9 @@ impl ImageOutput {
         for fragment in visible_fragments {
             client_state.push_fragment(fragment);
         }
+        if pane_image_output.kitty_host_state_cleared {
+            client_state.set_kitty_host_state_cleared();
+        }
         self.add_changed_rects_to_client(client_id, pane_image_output.changed_rects);
     }
 
@@ -753,6 +876,9 @@ impl ImageOutput {
             for fragment in visible_fragments.iter().cloned() {
                 client_state.push_fragment(fragment);
             }
+            if pane_image_output.kitty_host_state_cleared {
+                client_state.set_kitty_host_state_cleared();
+            }
         }
         self.add_changed_rects_to_multiple_clients(
             pane_image_output.changed_rects,
@@ -770,6 +896,7 @@ impl ImageOutput {
             current_kitty_chunks,
             current_kitty_placeholder_renders,
             changed_rects,
+            kitty_host_state_cleared,
             last_rendered_image_state,
             last_rendered_kitty_scene,
         ) = {
@@ -779,12 +906,14 @@ impl ImageOutput {
                 current_kitty_chunks,
                 current_kitty_placeholder_renders,
                 changed_rects,
+                kitty_host_state_cleared,
             ) = client_state.take_current_render_state();
             (
                 sixel_chunks,
                 current_kitty_chunks,
                 current_kitty_placeholder_renders,
                 changed_rects,
+                kitty_host_state_cleared,
                 client_state.clone_last_rendered_image_state(),
                 client_state.clone_last_rendered_scene_state(),
             )
@@ -800,6 +929,7 @@ impl ImageOutput {
                 &last_rendered_image_state,
                 last_rendered_kitty_scene.as_ref(),
                 pre_vte_clears_display,
+                kitty_host_state_cleared,
             )
         };
 
@@ -830,7 +960,12 @@ impl ImageOutput {
         let previous_resident_assets = self
             .client_image_states
             .get(&client_id)
-            .map(|client_state| client_state.last_rendered_image_state().resident_asset_generations.clone())
+            .map(|client_state| {
+                client_state
+                    .last_rendered_image_state()
+                    .resident_asset_generations
+                    .clone()
+            })
             .unwrap_or_default();
         let next_resident_assets = {
             let kitty_asset_store = self.kitty_asset_store.borrow();
@@ -848,6 +983,16 @@ impl ImageOutput {
                     .map(|(image_id, generation)| (*image_id, *generation)),
             );
         }
+        if let Some(scene_state) = current_kitty_scene.as_ref() {
+            log::trace!(
+                target: "zellij::kitty_images",
+                "finished kitty image render for client {client_id}: resident_assets={}, placements={}, explicit_chunks={}, placeholder_renders={}",
+                scene_state.resident_asset_generations.len(),
+                scene_state.placements.len(),
+                current_kitty_chunks.len(),
+                current_kitty_placeholder_renders.len(),
+            );
+        }
         let client_state = self.client_image_state_mut(client_id);
         client_state.set_last_rendered_state(
             RenderedImageState {
@@ -860,15 +1005,16 @@ impl ImageOutput {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.client_image_states.values().any(|client_state| {
-            client_state.pending_has_rendered_assets()
-        }) || self.kitty_scene_is_dirty()
+        self.client_image_states
+            .values()
+            .any(|client_state| client_state.pending_has_rendered_assets())
+            || self.kitty_scene_is_dirty()
     }
 
     pub fn has_rendered_assets(&self) -> bool {
-        self.client_image_states.values().any(|client_state| {
-            client_state.pending_has_rendered_assets()
-        })
+        self.client_image_states
+            .values()
+            .any(|client_state| client_state.pending_has_rendered_assets())
     }
 }
 
@@ -911,14 +1057,15 @@ mod tests {
             ..Default::default()
         };
 
-        client_state.set_last_rendered_state(expected_state.clone(), Some(KittySceneState::default()));
+        client_state
+            .set_last_rendered_state(expected_state.clone(), Some(KittySceneState::default()));
 
         assert_eq!(
             client_state.take_last_rendered_image_state(),
             Some(expected_state),
         );
         assert_eq!(client_state.take_last_rendered_image_state(), None);
-        assert!(client_state.last_rendered_scene_state().is_none());
+        assert!(client_state.last_rendered_scene_state.is_none());
     }
 
     #[test]
@@ -949,6 +1096,7 @@ mod tests {
             HashMap::from([(0, 1)]),
             &last_rendered_image_state,
             None,
+            false,
             false,
         );
 

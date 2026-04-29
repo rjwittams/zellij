@@ -43,20 +43,20 @@ use zellij_utils::{
     ipc::{ClientAttributes, ClientToServerMsg, ServerToClientMsg},
 };
 
+use crate::output::{
+    KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyOutputMediaCache, Output,
+    PaneImageRenderOutput, PlacementId, RenderedImageState,
+};
 use crate::panes::grid::Grid;
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::link_handler::LinkHandler;
-use crate::panes::sixel::SixelImageStore;
 use crate::panes::pane_image_scene::KittyRenderBundle;
+use crate::panes::sixel::SixelImageStore;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use zellij_utils::data::{PaneContents, PaneRenderReport};
 use zellij_utils::ipc::ExitReason;
-use crate::output::{
-    KittyImageChunk, KittyImageData, KittyImagePlacementMode, Output, PaneImageRenderOutput,
-    PlacementId, RenderedImageState,
-};
 
 fn take_snapshot_and_cursor_coordinates(
     ansi_instructions: &str,
@@ -446,6 +446,7 @@ fn create_new_screen(
         arrow_fonts,
         layout_dir,
         explicitly_disable_kitty_keyboard_protocol,
+        false, // kitty_file_output
         stacked_resize,
         None,
         false,
@@ -5509,6 +5510,7 @@ fn create_new_screen_with_message_capture(
         arrow_fonts,
         layout_dir,
         explicitly_disable_kitty_keyboard_protocol,
+        false, // kitty_file_output
         stacked_resize,
         None,
         false,
@@ -5547,6 +5549,59 @@ fn test_kitty_chunk(image_id: u32, placement_id: u32) -> KittyImageChunk {
 }
 
 #[test]
+fn screen_enables_kitty_file_output_for_regular_clients_only() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    screen.kitty_file_output = true;
+    screen.connected_clients.borrow_mut().insert(1, false);
+    screen.connected_clients.borrow_mut().insert(2, true);
+
+    let chunk = test_kitty_chunk(77, 1);
+    screen.kitty_asset_store.borrow_mut().insert_asset(
+        chunk.image_id,
+        KittyImageData::Png {
+            data: vec![1, 2, 3, 4],
+            width: 1,
+            height: 1,
+        },
+    );
+
+    let mut output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+    output.add_clients(
+        &HashSet::from([1, 2]),
+        Rc::new(RefCell::new(LinkHandler::new())),
+        None,
+    );
+    screen.configure_kitty_file_output_for_regular_clients(&mut output);
+    output.add_pane_image_output_to_multiple_clients(
+        PaneImageRenderOutput {
+            kitty_scene: KittyRenderBundle {
+                explicit_chunks: vec![chunk],
+                placeholder_renders: vec![],
+            },
+            ..Default::default()
+        },
+        [1, 2].into_iter(),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let regular_client_output = serialized.get(&1).unwrap();
+    let web_client_output = serialized.get(&2).unwrap();
+    assert!(regular_client_output.contains("t=f;"));
+    assert!(!regular_client_output.contains("AQIDBA=="));
+    assert!(!web_client_output.contains("t=f;"));
+    assert!(web_client_output.contains("AQIDBA=="));
+}
+
+#[test]
 fn watcher_helper_round_trips_followed_client_image_state() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);
@@ -5573,6 +5628,7 @@ fn watcher_helper_round_trips_followed_client_image_state() {
     let mut watcher_output = Output::new(
         screen.sixel_image_store.clone(),
         screen.kitty_asset_store.clone(),
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
         screen.character_cell_size.clone(),
         true,
         true,
@@ -5590,12 +5646,7 @@ fn watcher_helper_round_trips_followed_client_image_state() {
     );
 
     let rendered = screen
-        .serialize_watcher_output_for_client(
-            &watcher_output,
-            watcher_id,
-            followed_client_id,
-            size,
-        )
+        .serialize_watcher_output_for_client(&watcher_output, watcher_id, followed_client_id, size)
         .unwrap();
 
     assert!(
@@ -5610,14 +5661,8 @@ fn watcher_helper_round_trips_followed_client_image_state() {
         .get(&watcher_id)
         .expect("watcher render state should be updated");
     assert_eq!(watcher_state.explicit_chunks, vec![current_chunk]);
-    assert_eq!(
-        watcher_state.resident_asset_generations.get(&91),
-        Some(&3),
-    );
-    assert_eq!(
-        watcher_state.resident_asset_generations.get(&92),
-        Some(&1),
-    );
+    assert_eq!(watcher_state.resident_asset_generations.get(&91), Some(&3),);
+    assert_eq!(watcher_state.resident_asset_generations.get(&92), Some(&1),);
 }
 
 #[test]

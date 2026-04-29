@@ -179,6 +179,12 @@ pub struct Options {
     #[serde(default)]
     pub support_kitty_keyboard_protocol: Option<bool>,
 
+    /// Whether to use regular files for outbound Kitty image data.
+    /// This is intended for local testing until per-client probing is available.
+    #[clap(long, value_parser)]
+    #[serde(default)]
+    pub kitty_file_output: Option<bool>,
+
     /// Whether to make sure a local web server is running when a new Zellij session starts.
     /// This web server will allow creating new sessions and attaching to existing ones that have
     /// opted in to being shared in the browser.
@@ -359,6 +365,7 @@ impl Options {
         let support_kitty_keyboard_protocol = other
             .support_kitty_keyboard_protocol
             .or(self.support_kitty_keyboard_protocol);
+        let kitty_file_output = other.kitty_file_output.or(self.kitty_file_output);
         let web_server = other.web_server.or(self.web_server);
         let web_sharing = other.web_sharing.or(self.web_sharing);
         let stacked_resize = other.stacked_resize.or(self.stacked_resize);
@@ -416,6 +423,7 @@ impl Options {
             serialization_interval,
             disable_session_metadata,
             support_kitty_keyboard_protocol,
+            kitty_file_output,
             web_server,
             web_sharing,
             stacked_resize,
@@ -494,6 +502,7 @@ impl Options {
         let support_kitty_keyboard_protocol = other
             .support_kitty_keyboard_protocol
             .or(self.support_kitty_keyboard_protocol);
+        let kitty_file_output = other.kitty_file_output.or(self.kitty_file_output);
         let web_server = other.web_server.or(self.web_server);
         let web_sharing = other.web_sharing.or(self.web_sharing);
         let stacked_resize = other.stacked_resize.or(self.stacked_resize);
@@ -551,6 +560,7 @@ impl Options {
             serialization_interval,
             disable_session_metadata,
             support_kitty_keyboard_protocol,
+            kitty_file_output,
             web_server,
             web_sharing,
             stacked_resize,
