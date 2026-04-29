@@ -3923,7 +3923,8 @@ fn render_tab_with_last_state(
     let serialized = output.serialize().unwrap();
     let rendered = serialized.get(&client_id).cloned().unwrap_or_default();
     let next_state = output
-        .take_last_rendered_image_state_for_client(client_id)
+        .last_rendered_image_state_for_client(client_id)
+        .map(|state| state.rendered_image_state().clone())
         .unwrap_or_default();
     (rendered, next_state)
 }

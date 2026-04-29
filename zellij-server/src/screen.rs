@@ -75,7 +75,7 @@ use crate::panes::terminal_pane::{BRACKETED_PASTE_BEGIN, BRACKETED_PASTE_END};
 use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
 
 use crate::{
-    output::{KittyOutputMediaCache, Output, RenderedImageState},
+    output::{KittyOutputMediaCache, LastRenderedImageState, Output},
     panes::kitty_asset_store::KittyAssetStore,
     panes::sixel::SixelImageStore,
     panes::PaneId,
@@ -1469,8 +1469,8 @@ pub(crate) struct Screen {
     /// Resolved styling to apply when `host_terminal_theme_mode == Light`.
     /// `None` disables auto-switch. Refreshed on each reconfigure.
     host_theme_light_styling: Option<Styling>,
-    regular_last_rendered_image_state: HashMap<ClientId, RenderedImageState>,
-    watcher_last_rendered_image_state: HashMap<ClientId, RenderedImageState>,
+    regular_last_rendered_image_state: HashMap<ClientId, Rc<LastRenderedImageState>>,
+    watcher_last_rendered_image_state: HashMap<ClientId, Rc<LastRenderedImageState>>,
 }
 
 /// A pending forward waiting to be dispatched once the current in-flight
@@ -2518,7 +2518,7 @@ impl Screen {
             watcher_specific_output.serialize_with_size(Some(watcher_size), Some(self.size))?;
 
         if let Some(watcher_last_rendered_state) =
-            watcher_specific_output.take_last_rendered_image_state_for_client(followed_client_id)
+            watcher_specific_output.last_rendered_image_state_for_client(followed_client_id)
         {
             self.watcher_last_rendered_image_state
                 .insert(watcher_id, watcher_last_rendered_state);
@@ -2653,7 +2653,7 @@ impl Screen {
 
             if non_watcher_output_was_dirty || has_bell {
                 let serialized_output = output.serialize().context(err_context)?;
-                self.regular_last_rendered_image_state = output.take_last_rendered_image_states();
+                self.regular_last_rendered_image_state = output.last_rendered_image_states();
                 let _ = self
                     .bus
                     .senders

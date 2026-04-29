@@ -44,8 +44,8 @@ use zellij_utils::{
 };
 
 use crate::output::{
-    KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyOutputMediaCache, Output,
-    PaneImageRenderOutput, PlacementId, RenderedImageState,
+    KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyOutputMediaCache,
+    LastRenderedImageState, Output, PaneImageRenderOutput, PlacementId, RenderedImageState,
 };
 use crate::panes::grid::Grid;
 use crate::panes::kitty_asset_store::KittyAssetStore;
@@ -5619,10 +5619,10 @@ fn watcher_helper_round_trips_followed_client_image_state() {
     );
     screen.watcher_last_rendered_image_state.insert(
         watcher_id,
-        RenderedImageState {
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
             resident_asset_generations: HashMap::from([(91, 3)]),
             ..Default::default()
-        },
+        })),
     );
 
     let mut watcher_output = Output::new(
@@ -5660,6 +5660,7 @@ fn watcher_helper_round_trips_followed_client_image_state() {
         .watcher_last_rendered_image_state
         .get(&watcher_id)
         .expect("watcher render state should be updated");
+    let watcher_state = watcher_state.rendered_image_state();
     assert_eq!(watcher_state.explicit_chunks, vec![current_chunk]);
     assert_eq!(watcher_state.resident_asset_generations.get(&91), Some(&3),);
     assert_eq!(watcher_state.resident_asset_generations.get(&92), Some(&1),);

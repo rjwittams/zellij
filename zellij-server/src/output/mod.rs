@@ -351,6 +351,65 @@ pub struct RenderedImageState {
     pub resident_asset_generations: HashMap<u32, u64>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LastRenderedImageState {
+    rendered_image_state: RenderedImageState,
+    kitty_scene_state: Option<kitty_diff::KittySceneState>,
+}
+
+impl LastRenderedImageState {
+    pub fn new(rendered_image_state: RenderedImageState) -> Self {
+        Self {
+            rendered_image_state,
+            kitty_scene_state: None,
+        }
+    }
+
+    pub fn rendered_image_state(&self) -> &RenderedImageState {
+        &self.rendered_image_state
+    }
+
+    pub(crate) fn with_kitty_scene_state(
+        rendered_image_state: RenderedImageState,
+        kitty_scene_state: Option<kitty_diff::KittySceneState>,
+    ) -> Self {
+        Self {
+            rendered_image_state,
+            kitty_scene_state,
+        }
+    }
+
+    pub(crate) fn kitty_scene_state(&self) -> Option<&kitty_diff::KittySceneState> {
+        self.kitty_scene_state.as_ref()
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.rendered_image_state == RenderedImageState::default()
+    }
+}
+
+pub trait IntoLastRenderedImageState {
+    fn into_last_rendered_image_state(self) -> Rc<LastRenderedImageState>;
+}
+
+impl IntoLastRenderedImageState for Rc<LastRenderedImageState> {
+    fn into_last_rendered_image_state(self) -> Rc<LastRenderedImageState> {
+        self
+    }
+}
+
+impl IntoLastRenderedImageState for LastRenderedImageState {
+    fn into_last_rendered_image_state(self) -> Rc<LastRenderedImageState> {
+        Rc::new(self)
+    }
+}
+
+impl IntoLastRenderedImageState for RenderedImageState {
+    fn into_last_rendered_image_state(self) -> Rc<LastRenderedImageState> {
+        Rc::new(LastRenderedImageState::new(self))
+    }
+}
+
 #[derive(Clone, Debug)]
 struct PreVteInstruction {
     bytes: String,
@@ -379,19 +438,23 @@ impl Output {
         }
     }
 
-    pub fn set_last_rendered_image_states(
+    pub fn set_last_rendered_image_states<T>(
         &mut self,
-        last_rendered_image_states: HashMap<ClientId, RenderedImageState>,
-    ) {
+        last_rendered_image_states: HashMap<ClientId, T>,
+    ) where
+        T: IntoLastRenderedImageState,
+    {
         self.image_output
             .set_last_rendered_image_states(last_rendered_image_states);
     }
 
-    pub fn set_last_rendered_image_state_for_client(
+    pub fn set_last_rendered_image_state_for_client<T>(
         &mut self,
         client_id: ClientId,
-        last_rendered_image_state: RenderedImageState,
-    ) {
+        last_rendered_image_state: T,
+    ) where
+        T: IntoLastRenderedImageState,
+    {
         self.image_output
             .set_last_rendered_image_state_for_client(client_id, last_rendered_image_state);
     }
@@ -401,16 +464,16 @@ impl Output {
             .set_kitty_file_output_enabled_for_client(client_id, enabled);
     }
 
-    pub fn take_last_rendered_image_states(&mut self) -> HashMap<ClientId, RenderedImageState> {
-        self.image_output.take_last_rendered_image_states()
+    pub fn last_rendered_image_states(&self) -> HashMap<ClientId, Rc<LastRenderedImageState>> {
+        self.image_output.last_rendered_image_states()
     }
 
-    pub fn take_last_rendered_image_state_for_client(
-        &mut self,
+    pub fn last_rendered_image_state_for_client(
+        &self,
         client_id: ClientId,
-    ) -> Option<RenderedImageState> {
+    ) -> Option<Rc<LastRenderedImageState>> {
         self.image_output
-            .take_last_rendered_image_state_for_client(client_id)
+            .last_rendered_image_state_for_client(client_id)
     }
 
     fn ensure_client_slot(&mut self, client_id: ClientId) {

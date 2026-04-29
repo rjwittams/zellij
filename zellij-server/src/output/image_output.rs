@@ -6,8 +6,9 @@ use super::{
         plan_kitty_scene, KittyAssetOp, KittyPlacementKey, KittyPlacementOp, KittyScenePlan,
         KittySceneState, PlannedKittyPlacement,
     },
-    vte_goto_instruction, FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender,
-    PaneImageRenderOutput, RenderedImageState, SixelImageChunk,
+    vte_goto_instruction, FloatingPanesStack, IntoLastRenderedImageState, KittyImageChunk,
+    KittyPlaceholderRender, LastRenderedImageState, PaneImageRenderOutput, RenderedImageState,
+    SixelImageChunk,
 };
 use crate::output::KittyOutputMediaCache;
 use crate::panes::kitty::KittyImageState;
@@ -154,37 +155,20 @@ impl PreparedKittyRenderPlan {
 #[derive(Clone, Debug, Default)]
 struct ClientImageRenderState {
     current: CurrentImageState,
-    last_rendered_image_state: RenderedImageState,
-    last_rendered_scene_state: Option<KittySceneState>,
+    last_rendered_state: Rc<LastRenderedImageState>,
 }
 
 impl ClientImageRenderState {
-    fn set_last_rendered_state(
-        &mut self,
-        image_state: RenderedImageState,
-        scene_state: Option<KittySceneState>,
-    ) {
-        self.last_rendered_image_state = image_state;
-        self.last_rendered_scene_state = scene_state;
+    fn set_last_rendered_state(&mut self, state: Rc<LastRenderedImageState>) {
+        self.last_rendered_state = state;
     }
 
     fn last_rendered_image_state(&self) -> &RenderedImageState {
-        &self.last_rendered_image_state
+        self.last_rendered_state.rendered_image_state()
     }
 
-    fn clone_last_rendered_image_state(&self) -> RenderedImageState {
-        self.last_rendered_image_state.clone()
-    }
-
-    fn clone_last_rendered_scene_state(&self) -> Option<KittySceneState> {
-        self.last_rendered_scene_state.clone()
-    }
-
-    fn take_last_rendered_image_state(&mut self) -> Option<RenderedImageState> {
-        let had_state = self.last_rendered_image_state != RenderedImageState::default();
-        let image_state = std::mem::take(&mut self.last_rendered_image_state);
-        self.last_rendered_scene_state = None;
-        had_state.then_some(image_state)
+    fn clone_last_rendered_state(&self) -> Option<Rc<LastRenderedImageState>> {
+        (!self.last_rendered_state.is_empty()).then(|| Rc::clone(&self.last_rendered_state))
     }
 
     fn pending_has_rendered_assets(&self) -> bool {
@@ -725,6 +709,55 @@ impl ImageOutput {
         })
     }
 
+    fn set_last_rendered_image_state<T>(&mut self, client_id: ClientId, image_state: T)
+    where
+        T: IntoLastRenderedImageState,
+    {
+        let image_state = self.prepare_last_rendered_snapshot(image_state);
+        if let Some(scene_state) = image_state.kitty_scene_state() {
+            log::trace!(
+                target: "zellij::kitty_images",
+                "set last rendered kitty image state for client {client_id}: resident_assets={}, placements={}, explicit_chunks={}, placeholder_renders={}",
+                scene_state.resident_asset_generations.len(),
+                scene_state.placements.len(),
+                image_state.rendered_image_state().explicit_chunks.len(),
+                image_state.rendered_image_state().placeholder_renders.len(),
+            );
+        }
+        self.client_image_state_mut(client_id)
+            .set_last_rendered_state(image_state);
+    }
+
+    fn prepare_last_rendered_snapshot<T>(&self, image_state: T) -> Rc<LastRenderedImageState>
+    where
+        T: IntoLastRenderedImageState,
+    {
+        let image_state = image_state.into_last_rendered_image_state();
+        if image_state.kitty_scene_state().is_some() || image_state.is_empty() {
+            return image_state;
+        }
+        let normalized_state = {
+            let kitty_asset_store = self.kitty_asset_store.borrow();
+            Self::normalize_rendered_image_state(
+                &kitty_asset_store,
+                image_state.rendered_image_state().clone(),
+            )
+        };
+        let scene_state = {
+            let kitty_asset_store = self.kitty_asset_store.borrow();
+            Self::kitty_scene_state_from_rendered(
+                &normalized_state.resident_asset_generations,
+                &normalized_state.explicit_chunks,
+                &normalized_state.placeholder_renders,
+                &kitty_asset_store,
+            )
+        };
+        Rc::new(LastRenderedImageState::with_kitty_scene_state(
+            normalized_state,
+            scene_state,
+        ))
+    }
+
     fn normalize_rendered_image_state(
         kitty_asset_store: &KittyAssetStore,
         mut image_state: RenderedImageState,
@@ -750,71 +783,43 @@ impl ImageOutput {
         image_state
     }
 
-    fn set_last_rendered_image_state(
+    pub fn set_last_rendered_image_states<T>(
         &mut self,
-        client_id: ClientId,
-        image_state: RenderedImageState,
-    ) {
-        let normalized_state = {
-            let kitty_asset_store = self.kitty_asset_store.borrow();
-            Self::normalize_rendered_image_state(&kitty_asset_store, image_state)
-        };
-        let scene_input = normalized_state.clone();
-        let kitty_asset_store = self.kitty_asset_store.clone();
-        let kitty_asset_store = kitty_asset_store.borrow();
-        let client_state = self.client_image_state_mut(client_id);
-        let scene_state = Self::kitty_scene_state_from_rendered(
-            &scene_input.resident_asset_generations,
-            &scene_input.explicit_chunks,
-            &scene_input.placeholder_renders,
-            &kitty_asset_store,
-        );
-        if let Some(scene_state) = scene_state.as_ref() {
-            log::trace!(
-                target: "zellij::kitty_images",
-                "set last rendered kitty image state for client {client_id}: resident_assets={}, placements={}, explicit_chunks={}, placeholder_renders={}",
-                scene_state.resident_asset_generations.len(),
-                scene_state.placements.len(),
-                normalized_state.explicit_chunks.len(),
-                normalized_state.placeholder_renders.len(),
-            );
-        }
-        client_state.set_last_rendered_state(normalized_state, scene_state);
-    }
-
-    pub fn set_last_rendered_image_states(
-        &mut self,
-        last_rendered_image_states: HashMap<ClientId, RenderedImageState>,
-    ) {
+        last_rendered_image_states: HashMap<ClientId, T>,
+    ) where
+        T: IntoLastRenderedImageState,
+    {
         for (client_id, image_state) in last_rendered_image_states {
             self.set_last_rendered_image_state(client_id, image_state);
         }
     }
 
-    pub fn set_last_rendered_image_state_for_client(
+    pub fn set_last_rendered_image_state_for_client<T>(
         &mut self,
         client_id: ClientId,
-        image_state: RenderedImageState,
-    ) {
+        image_state: T,
+    ) where
+        T: IntoLastRenderedImageState,
+    {
         self.set_last_rendered_image_state(client_id, image_state);
     }
 
-    pub fn take_last_rendered_image_states(&mut self) -> HashMap<ClientId, RenderedImageState> {
+    pub fn last_rendered_image_states(&self) -> HashMap<ClientId, Rc<LastRenderedImageState>> {
         let mut last_rendered_image_states = HashMap::new();
-        for (client_id, client_state) in &mut self.client_image_states {
-            if let Some(image_state) = client_state.take_last_rendered_image_state() {
+        for (client_id, client_state) in &self.client_image_states {
+            if let Some(image_state) = client_state.clone_last_rendered_state() {
                 last_rendered_image_states.insert(*client_id, image_state);
             }
         }
         last_rendered_image_states
     }
 
-    pub fn take_last_rendered_image_state_for_client(
-        &mut self,
+    pub fn last_rendered_image_state_for_client(
+        &self,
         client_id: ClientId,
-    ) -> Option<RenderedImageState> {
-        let client_state = self.client_image_states.get_mut(&client_id)?;
-        client_state.take_last_rendered_image_state()
+    ) -> Option<Rc<LastRenderedImageState>> {
+        let client_state = self.client_image_states.get(&client_id)?;
+        client_state.clone_last_rendered_state()
     }
 
     fn add_changed_rects_to_client(
@@ -897,8 +902,7 @@ impl ImageOutput {
             current_kitty_placeholder_renders,
             changed_rects,
             kitty_host_state_cleared,
-            last_rendered_image_state,
-            last_rendered_kitty_scene,
+            last_rendered_state,
         ) = {
             let client_state = self.client_image_state_mut(client_id);
             let (
@@ -914,8 +918,7 @@ impl ImageOutput {
                 current_kitty_placeholder_renders,
                 changed_rects,
                 kitty_host_state_cleared,
-                client_state.clone_last_rendered_image_state(),
-                client_state.clone_last_rendered_scene_state(),
+                Rc::clone(&client_state.last_rendered_state),
             )
         };
 
@@ -926,8 +929,8 @@ impl ImageOutput {
                 &current_kitty_chunks,
                 &current_kitty_placeholder_renders,
                 changed_rects,
-                &last_rendered_image_state,
-                last_rendered_kitty_scene.as_ref(),
+                last_rendered_state.rendered_image_state(),
+                last_rendered_state.kitty_scene_state(),
                 pre_vte_clears_display,
                 kitty_host_state_cleared,
             )
@@ -994,14 +997,16 @@ impl ImageOutput {
             );
         }
         let client_state = self.client_image_state_mut(client_id);
-        client_state.set_last_rendered_state(
-            RenderedImageState {
-                explicit_chunks: current_kitty_chunks,
-                placeholder_renders: current_kitty_placeholder_renders,
-                resident_asset_generations: next_resident_assets,
-            },
-            current_kitty_scene,
-        );
+        client_state.set_last_rendered_state(Rc::new(
+            LastRenderedImageState::with_kitty_scene_state(
+                RenderedImageState {
+                    explicit_chunks: current_kitty_chunks,
+                    placeholder_renders: current_kitty_placeholder_renders,
+                    resident_asset_generations: next_resident_assets,
+                },
+                current_kitty_scene,
+            ),
+        ));
     }
 
     pub fn is_dirty(&self) -> bool {
@@ -1050,22 +1055,28 @@ mod tests {
     }
 
     #[test]
-    fn client_image_render_state_round_trips_and_drains_last_rendered_state() {
+    fn client_image_render_state_round_trips_last_rendered_snapshot() {
         let mut client_state = ClientImageRenderState::default();
         let expected_state = RenderedImageState {
             resident_asset_generations: HashMap::from([(9, 42)]),
             ..Default::default()
         };
+        let expected_snapshot = Rc::new(LastRenderedImageState::with_kitty_scene_state(
+            expected_state.clone(),
+            Some(KittySceneState::default()),
+        ));
 
-        client_state
-            .set_last_rendered_state(expected_state.clone(), Some(KittySceneState::default()));
+        client_state.set_last_rendered_state(Rc::clone(&expected_snapshot));
 
-        assert_eq!(
-            client_state.take_last_rendered_image_state(),
-            Some(expected_state),
-        );
-        assert_eq!(client_state.take_last_rendered_image_state(), None);
-        assert!(client_state.last_rendered_scene_state.is_none());
+        assert!(Rc::ptr_eq(
+            &client_state.clone_last_rendered_state().unwrap(),
+            &expected_snapshot
+        ));
+        assert_eq!(client_state.last_rendered_image_state(), &expected_state,);
+        assert!(client_state
+            .last_rendered_state
+            .kitty_scene_state()
+            .is_some());
     }
 
     #[test]

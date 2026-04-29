@@ -5,8 +5,8 @@ use super::super::kitty_diff::{
 };
 use super::super::{
     CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, KittyOutputMediaCache,
-    KittyPlaceholderCellRender, Output, OutputBuffer, PaneImageRenderOutput, PlacementId,
-    RenderedImageState, SixelImageChunk,
+    KittyPlaceholderCellRender, LastRenderedImageState, Output, OutputBuffer,
+    PaneImageRenderOutput, PlacementId, RenderedImageState, SixelImageChunk,
 };
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::pane_image_scene::KittyRenderBundle;
@@ -1434,7 +1434,7 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
         None,
     );
     let _ = output1.serialize().unwrap();
-    let state1 = output1.take_last_rendered_image_states();
+    let state1 = output1.last_rendered_image_states();
 
     let (mut output2, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
         create_test_output_with_state();
@@ -1452,7 +1452,7 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
         frame2_client_output.contains("\u{1b}_Ga=d,d=i,i=202,p=1\u{1b}\\"),
         "frame 2 should delete the removed top-right placement using its original protocol placement id, got: {frame2_client_output:?}"
     );
-    let state2 = output2.take_last_rendered_image_states();
+    let state2 = output2.last_rendered_image_states();
 
     let (mut output3, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
         create_test_output_with_state();
@@ -1465,7 +1465,7 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
         None,
     );
     let _ = output3.serialize().unwrap();
-    let state3 = output3.take_last_rendered_image_states();
+    let state3 = output3.last_rendered_image_states();
 
     let (mut output4, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
         create_test_output_with_state();
@@ -1772,11 +1772,20 @@ fn test_output_round_trips_last_rendered_image_state_for_single_client() {
         placeholder_renders: vec![placeholder_render.clone()],
         resident_asset_generations: HashMap::from([(9, 42)]),
     };
+    let expected_snapshot = Rc::new(LastRenderedImageState::with_kitty_scene_state(
+        expected_state.clone(),
+        Some(KittySceneState::default()),
+    ));
 
-    output.set_last_rendered_image_state_for_client(7, expected_state.clone());
-    let actual_state = output
-        .take_last_rendered_image_state_for_client(7)
+    output.set_last_rendered_image_state_for_client(7, Rc::clone(&expected_snapshot));
+    let actual_snapshot = output
+        .last_rendered_image_state_for_client(7)
         .expect("client image state should round-trip");
+    assert!(
+        Rc::ptr_eq(&actual_snapshot, &expected_snapshot),
+        "previous render state should be shared by snapshot reference"
+    );
+    let actual_state = actual_snapshot.rendered_image_state();
 
     assert_eq!(actual_state.explicit_chunks, expected_state.explicit_chunks);
     assert_eq!(
@@ -1787,12 +1796,43 @@ fn test_output_round_trips_last_rendered_image_state_for_single_client() {
         actual_state.resident_asset_generations,
         expected_state.resident_asset_generations
     );
-    assert!(
-        output
-            .take_last_rendered_image_state_for_client(7)
-            .is_none(),
-        "taking a client's rendered image state should drain it"
+    assert!(output.last_rendered_image_state_for_client(8).is_none());
+}
+
+#[test]
+fn test_output_round_trips_cached_kitty_scene_snapshot() {
+    let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    let chunk = create_kitty_chunk(9, 2, 2);
+    kitty_asset_store.borrow_mut().insert_asset(
+        chunk.image_id,
+        KittyImageData::Png {
+            data: vec![1],
+            width: 1,
+            height: 1,
+        },
     );
+    output.add_pane_image_output_to_client(
+        7,
+        pane_image_output_with_kitty_scene(vec![chunk.clone()]),
+        None,
+    );
+
+    output.serialize().unwrap();
+    let snapshot = output
+        .last_rendered_image_state_for_client(7)
+        .expect("serialized kitty output should publish last rendered image state");
+    assert!(
+        snapshot.kitty_scene_state().is_some(),
+        "snapshot should carry the cached scene state"
+    );
+
+    let mut next_output = create_test_output();
+    next_output.set_last_rendered_image_state_for_client(7, Rc::clone(&snapshot));
+    let next_snapshot = next_output
+        .last_rendered_image_state_for_client(7)
+        .expect("snapshot should be installed by reference");
+    assert!(Rc::ptr_eq(&snapshot, &next_snapshot));
 }
 
 #[test]
