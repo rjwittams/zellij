@@ -369,6 +369,13 @@ impl LastRenderedImageState {
         &self.rendered_image_state
     }
 
+    pub fn resident_asset_generations(&self) -> &HashMap<u32, u64> {
+        self.kitty_scene_state
+            .as_ref()
+            .map(|scene_state| &scene_state.resident_asset_generations)
+            .unwrap_or(&self.rendered_image_state.resident_asset_generations)
+    }
+
     pub(crate) fn with_kitty_scene_state(
         rendered_image_state: RenderedImageState,
         kitty_scene_state: Option<kitty_diff::KittySceneState>,
@@ -384,7 +391,15 @@ impl LastRenderedImageState {
     }
 
     pub(crate) fn is_empty(&self) -> bool {
-        self.rendered_image_state == RenderedImageState::default()
+        let scene_has_placements = self
+            .kitty_scene_state
+            .as_ref()
+            .map(|scene_state| !scene_state.placements.is_empty())
+            .unwrap_or(false);
+        self.rendered_image_state.explicit_chunks.is_empty()
+            && self.rendered_image_state.placeholder_renders.is_empty()
+            && self.resident_asset_generations().is_empty()
+            && !scene_has_placements
     }
 }
 

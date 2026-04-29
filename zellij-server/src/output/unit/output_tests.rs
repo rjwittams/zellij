@@ -1772,9 +1772,11 @@ fn test_output_round_trips_last_rendered_image_state_for_single_client() {
         placeholder_renders: vec![placeholder_render.clone()],
         resident_asset_generations: HashMap::from([(9, 42)]),
     };
+    let mut expected_scene = KittySceneState::default();
+    expected_scene.insert_asset(9, 42);
     let expected_snapshot = Rc::new(LastRenderedImageState::with_kitty_scene_state(
         expected_state.clone(),
-        Some(KittySceneState::default()),
+        Some(expected_scene),
     ));
 
     output.set_last_rendered_image_state_for_client(7, Rc::clone(&expected_snapshot));
@@ -1825,6 +1827,20 @@ fn test_output_round_trips_cached_kitty_scene_snapshot() {
     assert!(
         snapshot.kitty_scene_state().is_some(),
         "snapshot should carry the cached scene state"
+    );
+    assert!(
+        snapshot
+            .rendered_image_state()
+            .resident_asset_generations
+            .is_empty(),
+        "cached scene snapshots should not duplicate resident asset state"
+    );
+    assert_eq!(
+        snapshot.resident_asset_generations().get(&chunk.image_id),
+        kitty_asset_store
+            .borrow()
+            .generation(chunk.image_id)
+            .as_ref()
     );
 
     let mut next_output = create_test_output();

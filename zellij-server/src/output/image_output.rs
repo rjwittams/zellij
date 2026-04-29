@@ -46,11 +46,12 @@ impl PreparedKittyRenderPlan {
         current_kitty_chunks: &[KittyImageChunk],
         current_kitty_placeholder_renders: &[KittyPlaceholderRender],
         changed_rects: HashMap<usize, usize>,
-        last_rendered_image_state: &RenderedImageState,
-        last_rendered_kitty_scene: Option<&KittySceneState>,
+        last_rendered_state: &LastRenderedImageState,
         pre_vte_clears_display: bool,
         kitty_host_state_cleared: bool,
     ) -> Self {
+        let last_rendered_image_state = last_rendered_state.rendered_image_state();
+        let last_rendered_resident_assets = last_rendered_state.resident_asset_generations();
         let kitty_damage_redraw = KittyDamageRedraw::from_changed_rects(changed_rects);
         let empty_resident_assets = HashMap::new();
         let desired_scene = ImageOutput::kitty_scene_state_from_rendered(
@@ -63,23 +64,24 @@ impl PreparedKittyRenderPlan {
             !current_kitty_chunks.is_empty() || !current_kitty_placeholder_renders.is_empty();
         let has_previous_kitty_scene = !last_rendered_image_state.explicit_chunks.is_empty()
             || !last_rendered_image_state.placeholder_renders.is_empty()
-            || !last_rendered_image_state
-                .resident_asset_generations
-                .is_empty();
+            || !last_rendered_resident_assets.is_empty();
         let host_kitty_state_is_empty = pre_vte_clears_display || kitty_host_state_cleared;
         let should_clear_kitty_before_text =
             host_kitty_state_is_empty && (has_current_kitty_scene || has_previous_kitty_scene);
         let assumed_kitty_scene = if host_kitty_state_is_empty {
             Some(KittySceneState::default())
         } else {
-            last_rendered_kitty_scene.cloned().or_else(|| {
-                ImageOutput::kitty_scene_state_from_rendered(
-                    &last_rendered_image_state.resident_asset_generations,
-                    &last_rendered_image_state.explicit_chunks,
-                    &last_rendered_image_state.placeholder_renders,
-                    kitty_asset_store,
-                )
-            })
+            last_rendered_state
+                .kitty_scene_state()
+                .cloned()
+                .or_else(|| {
+                    ImageOutput::kitty_scene_state_from_rendered(
+                        last_rendered_resident_assets,
+                        &last_rendered_image_state.explicit_chunks,
+                        &last_rendered_image_state.placeholder_renders,
+                        kitty_asset_store,
+                    )
+                })
         };
         let kitty_plan = match (assumed_kitty_scene, desired_scene.clone()) {
             (Some(assumed_kitty_scene), Some(desired_kitty_scene)) => {
@@ -705,8 +707,8 @@ impl ImageOutput {
                             return false;
                         };
                         client_state
-                            .last_rendered_image_state()
-                            .resident_asset_generations
+                            .last_rendered_state
+                            .resident_asset_generations()
                             .get(&image_id)
                             != Some(&current_image_data)
                     })
@@ -933,8 +935,7 @@ impl ImageOutput {
                 &current_kitty_chunks,
                 &current_kitty_placeholder_renders,
                 changed_rects,
-                last_rendered_state.rendered_image_state(),
-                last_rendered_state.kitty_scene_state(),
+                &last_rendered_state,
                 pre_vte_clears_display,
                 kitty_host_state_cleared,
             )
@@ -969,8 +970,8 @@ impl ImageOutput {
             .get(&client_id)
             .map(|client_state| {
                 client_state
-                    .last_rendered_image_state()
-                    .resident_asset_generations
+                    .last_rendered_state
+                    .resident_asset_generations()
                     .clone()
             })
             .unwrap_or_default();
@@ -982,9 +983,13 @@ impl ImageOutput {
                 kitty_plan,
             )
         };
-        if let Some(scene_state) = current_kitty_scene.as_mut() {
-            scene_state.resident_asset_generations = next_resident_assets.clone();
-        }
+        let rendered_resident_assets = match current_kitty_scene.as_mut() {
+            Some(scene_state) => {
+                scene_state.resident_asset_generations = next_resident_assets;
+                HashMap::new()
+            },
+            None => next_resident_assets,
+        };
         if let Some(scene_state) = current_kitty_scene.as_ref() {
             log::trace!(
                 target: "zellij::kitty_images",
@@ -1001,7 +1006,7 @@ impl ImageOutput {
                 RenderedImageState {
                     explicit_chunks: current_kitty_chunks,
                     placeholder_renders: current_kitty_placeholder_renders,
-                    resident_asset_generations: next_resident_assets,
+                    resident_asset_generations: rendered_resident_assets,
                 },
                 current_kitty_scene,
             ),
@@ -1057,12 +1062,13 @@ mod tests {
     fn client_image_render_state_round_trips_last_rendered_snapshot() {
         let mut client_state = ClientImageRenderState::default();
         let expected_state = RenderedImageState {
-            resident_asset_generations: HashMap::from([(9, 42)]),
             ..Default::default()
         };
+        let mut expected_scene = KittySceneState::default();
+        expected_scene.insert_asset(9, 42);
         let expected_snapshot = Rc::new(LastRenderedImageState::with_kitty_scene_state(
             expected_state.clone(),
-            Some(KittySceneState::default()),
+            Some(expected_scene),
         ));
 
         client_state.set_last_rendered_state(Rc::clone(&expected_snapshot));
@@ -1072,6 +1078,12 @@ mod tests {
             &expected_snapshot
         ));
         assert_eq!(client_state.last_rendered_image_state(), &expected_state,);
+        assert_eq!(
+            client_state
+                .last_rendered_state
+                .resident_asset_generations(),
+            &HashMap::from([(9, 42)])
+        );
         assert!(client_state
             .last_rendered_state
             .kitty_scene_state()
@@ -1104,8 +1116,7 @@ mod tests {
             &[top_chunk.clone(), bottom_chunk.clone()],
             &[],
             HashMap::from([(0, 1)]),
-            &last_rendered_image_state,
-            None,
+            &LastRenderedImageState::new(last_rendered_image_state),
             false,
             false,
         );

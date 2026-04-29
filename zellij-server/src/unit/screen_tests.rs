@@ -5660,10 +5660,18 @@ fn watcher_helper_round_trips_followed_client_image_state() {
         .watcher_last_rendered_image_state
         .get(&watcher_id)
         .expect("watcher render state should be updated");
-    let watcher_state = watcher_state.rendered_image_state();
-    assert_eq!(watcher_state.explicit_chunks, vec![current_chunk]);
-    assert_eq!(watcher_state.resident_asset_generations.get(&91), Some(&3),);
-    assert_eq!(watcher_state.resident_asset_generations.get(&92), Some(&1),);
+    assert_eq!(
+        watcher_state.rendered_image_state().explicit_chunks,
+        vec![current_chunk]
+    );
+    assert_eq!(
+        watcher_state.resident_asset_generations().get(&91),
+        Some(&3),
+    );
+    assert_eq!(
+        watcher_state.resident_asset_generations().get(&92),
+        Some(&1),
+    );
 }
 
 #[test]
