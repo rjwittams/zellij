@@ -68,7 +68,7 @@ impl KittyDamageRedraw {
 }
 
 use crate::panes::kitty::{
-    KittyApcEffect, KittyApcOutcome, KittyCursorMovementPolicy, KittyDeleteRequest,
+    KittyApc, KittyApcEffect, KittyApcOutcome, KittyCursorMovementPolicy, KittyDeleteRequest,
     KittyDeleteSelector, KittyGeometrySelector, KittyImageInsertion, KittyImageState,
     KittyQueryResponse, KittyRelativePlacement,
 };
@@ -584,7 +584,7 @@ impl PaneImageScene {
 
     pub fn handle_kitty_apc<F>(
         &mut self,
-        apc_bytes: &[u8],
+        apc: &KittyApc<'_>,
         anchor: FlowAnchor,
         cursor_x: usize,
         scrollback_row: usize,
@@ -596,8 +596,8 @@ impl PaneImageScene {
     where
         F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
     {
-        let KittyApcOutcome { effect, reply } = self.kitty.handle_apc(
-            apc_bytes,
+        let KittyApcOutcome { effect, reply } = self.kitty.handle_parsed_apc(
+            apc,
             anchor.clone(),
             cursor_x,
             scrollback_row,

@@ -162,8 +162,7 @@ use crate::output::{
 use crate::panes::alacritty_functions::{parse_number, xparse_color};
 use crate::panes::hyperlink_tracker::HyperlinkTracker;
 use crate::panes::kitty::{
-    kitty_delete_request, kitty_query_response, KittyDeleteSelector, PendingKittyPlaceholder,
-    ResolvedKittyPlaceholder,
+    KittyApc, KittyDeleteSelector, PendingKittyPlaceholder, ResolvedKittyPlaceholder,
 };
 use crate::panes::link_handler::LinkHandler;
 use crate::panes::pane_image_scene::{
@@ -3840,11 +3839,14 @@ impl Perform for Grid {
     fn apc_end(&mut self) {
         if let Some(apc_bytes) = self.apc_bytes.take() {
             if apc_bytes.first() == Some(&b'G') {
-                if let Some(query_response) = kitty_query_response(&apc_bytes) {
+                let Some(kitty_apc) = KittyApc::parse(&apc_bytes) else {
+                    return;
+                };
+                if let Some(query_response) = kitty_apc.query_response() {
                     self.queue_pending_message_to_pty(query_response.to_apc_response());
                     return;
                 }
-                if let Some(delete_request) = kitty_delete_request(&apc_bytes) {
+                if let Some(delete_request) = kitty_apc.delete_request() {
                     self.image_scene.abort_pending_kitty_transmit();
                     match delete_request.selector {
                         KittyDeleteSelector::AllVisible => {
@@ -3903,7 +3905,7 @@ impl Perform for Grid {
                 let viewport = &self.viewport;
                 let width = self.width;
                 let image_effect = self.image_scene.handle_kitty_apc(
-                    &apc_bytes,
+                    &kitty_apc,
                     self.kitty_cursor_flow_anchor(),
                     self.cursor.x,
                     self.lines_above.len() + self.cursor.y,

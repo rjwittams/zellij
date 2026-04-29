@@ -620,8 +620,25 @@ impl KittyImageState {
         scrollback_row: usize,
         character_cell_size: Option<SizeInPixels>,
     ) -> KittyApcOutcome {
-        let reply_context = parse_non_query_reply_context(apc_bytes);
-        let Some(command) = ParsedKittyCommand::parse(apc_bytes) else {
+        let Some(apc) = KittyApc::parse(apc_bytes) else {
+            return KittyApcOutcome {
+                effect: None,
+                reply: None,
+            };
+        };
+        self.handle_parsed_apc(&apc, anchor, cursor_x, scrollback_row, character_cell_size)
+    }
+
+    pub fn handle_parsed_apc(
+        &mut self,
+        apc: &KittyApc<'_>,
+        anchor: FlowAnchor,
+        cursor_x: usize,
+        scrollback_row: usize,
+        character_cell_size: Option<SizeInPixels>,
+    ) -> KittyApcOutcome {
+        let reply_context = apc.reply_context();
+        let Some(command) = ParsedKittyCommand::parse(apc) else {
             return KittyApcOutcome {
                 effect: None,
                 reply: reply_context.and_then(|reply_context| {
@@ -866,8 +883,8 @@ impl KittyImageState {
                         reply: None,
                     };
                 };
-                if let Some(quiet) = parse_chunk_quiet(apc_bytes) {
-                    pending.reply_context.quiet = quiet;
+                if apc.quiet.is_some() {
+                    pending.reply_context.quiet = apc.quiet();
                 }
                 pending.payload.extend(payload);
                 if more {
@@ -1372,6 +1389,418 @@ impl KittyQueryResponse {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct KittyApc<'a> {
+    payload: &'a [u8],
+    action: Option<&'a str>,
+    quiet: Option<&'a str>,
+    image_id: Option<&'a str>,
+    image_number: Option<&'a str>,
+    placement_id: Option<&'a str>,
+    delete_selector: Option<&'a str>,
+    format: Option<&'a str>,
+    width: Option<&'a str>,
+    height: Option<&'a str>,
+    medium: Option<&'a str>,
+    size: Option<&'a str>,
+    offset: Option<&'a str>,
+    compression: Option<&'a str>,
+    more: Option<&'a str>,
+    parent_image_id: Option<&'a str>,
+    parent_placement_id: Option<&'a str>,
+    parent_offset_x: Option<&'a str>,
+    parent_offset_y: Option<&'a str>,
+    placement_mode: Option<&'a str>,
+    source_x: Option<&'a str>,
+    source_y: Option<&'a str>,
+    source_width: Option<&'a str>,
+    source_height: Option<&'a str>,
+    columns: Option<&'a str>,
+    rows: Option<&'a str>,
+    x_offset: Option<&'a str>,
+    y_offset: Option<&'a str>,
+    z_index: Option<&'a str>,
+    cursor_policy: Option<&'a str>,
+}
+
+impl<'a> KittyApc<'a> {
+    pub fn parse(apc_bytes: &'a [u8]) -> Option<Self> {
+        let rest = apc_bytes.strip_prefix(b"G")?;
+        let mut parts = rest.splitn(2, |b| *b == b';');
+        let header = std::str::from_utf8(parts.next()?).ok()?;
+        let payload = parts.next().unwrap_or_default();
+        let mut apc = KittyApc {
+            payload,
+            action: None,
+            quiet: None,
+            image_id: None,
+            image_number: None,
+            placement_id: None,
+            delete_selector: None,
+            format: None,
+            width: None,
+            height: None,
+            medium: None,
+            size: None,
+            offset: None,
+            compression: None,
+            more: None,
+            parent_image_id: None,
+            parent_placement_id: None,
+            parent_offset_x: None,
+            parent_offset_y: None,
+            placement_mode: None,
+            source_x: None,
+            source_y: None,
+            source_width: None,
+            source_height: None,
+            columns: None,
+            rows: None,
+            x_offset: None,
+            y_offset: None,
+            z_index: None,
+            cursor_policy: None,
+        };
+        for part in header.split(',') {
+            if part.is_empty() {
+                continue;
+            }
+            let mut split = part.splitn(2, '=');
+            let key = split.next()?;
+            let value = split.next().unwrap_or("");
+            match key {
+                "a" => apc.action = Some(value),
+                "q" => apc.quiet = Some(value),
+                "i" => apc.image_id = Some(value),
+                "I" => apc.image_number = Some(value),
+                "p" => apc.placement_id = Some(value),
+                "d" => apc.delete_selector = Some(value),
+                "f" => apc.format = Some(value),
+                "s" => apc.width = Some(value),
+                "v" => apc.height = Some(value),
+                "t" => apc.medium = Some(value),
+                "S" => apc.size = Some(value),
+                "O" => apc.offset = Some(value),
+                "o" => apc.compression = Some(value),
+                "m" => apc.more = Some(value),
+                "P" => apc.parent_image_id = Some(value),
+                "Q" => apc.parent_placement_id = Some(value),
+                "H" => apc.parent_offset_x = Some(value),
+                "V" => apc.parent_offset_y = Some(value),
+                "U" => apc.placement_mode = Some(value),
+                "x" => apc.source_x = Some(value),
+                "y" => apc.source_y = Some(value),
+                "w" => apc.source_width = Some(value),
+                "h" => apc.source_height = Some(value),
+                "c" => apc.columns = Some(value),
+                "r" => apc.rows = Some(value),
+                "X" => apc.x_offset = Some(value),
+                "Y" => apc.y_offset = Some(value),
+                "z" => apc.z_index = Some(value),
+                "C" => apc.cursor_policy = Some(value),
+                _ => {},
+            }
+        }
+        Some(apc)
+    }
+
+    fn quiet(&self) -> u8 {
+        self.quiet.and_then(|q| q.parse::<u8>().ok()).unwrap_or(0)
+    }
+
+    fn parsed_image_id(&self) -> Option<u32> {
+        self.image_id
+            .and_then(|image_id| image_id.parse::<u32>().ok())
+    }
+
+    fn placement_id(&self) -> Option<PlacementId> {
+        self.placement_id
+            .and_then(|placement_id| placement_id.parse::<u32>().ok())
+            .filter(|placement_id| *placement_id != 0)
+            .map(PlacementId::Protocol)
+    }
+
+    fn placement_id_u32(&self) -> Option<u32> {
+        self.placement_id
+            .and_then(|placement_id| placement_id.parse::<u32>().ok())
+            .filter(|placement_id| *placement_id != 0)
+    }
+
+    fn image_number(&self) -> Option<u32> {
+        self.image_number
+            .and_then(|image_number| image_number.parse::<u32>().ok())
+    }
+
+    fn more(&self) -> bool {
+        self.more
+            .and_then(|more| more.parse::<u8>().ok())
+            .unwrap_or(0)
+            != 0
+    }
+
+    fn raw_payload_size(&self) -> Option<usize> {
+        let bytes_per_pixel = match self.format.unwrap_or("32") {
+            "24" => 3usize,
+            "32" => 4usize,
+            _ => return None,
+        };
+        let width = self.width?.parse::<usize>().ok()?;
+        let height = self.height?.parse::<usize>().ok()?;
+        width
+            .checked_mul(height)
+            .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
+    }
+
+    fn read_payload(&self) -> Option<Vec<u8>> {
+        read_kitty_transmission_payload(
+            self.payload,
+            self.medium,
+            self.size,
+            self.offset,
+            self.raw_payload_size(),
+        )
+    }
+
+    fn reply_context(&self) -> Option<PendingKittyReplyContext> {
+        let kind = match self.action? {
+            "t" | "T" => PendingKittyReplyKind::Transmit,
+            "p" => PendingKittyReplyKind::Placement,
+            _ => return None,
+        };
+        Some(PendingKittyReplyContext {
+            kind,
+            quiet: self.quiet(),
+            parsed_image_id: self.parsed_image_id(),
+            placement_id: self.placement_id_u32(),
+            image_number: self.image_number(),
+        })
+    }
+
+    pub fn query_response(&self) -> Option<KittyQueryResponse> {
+        if self.action != Some("q") {
+            return None;
+        }
+
+        let quiet = self.quiet();
+        let image_id = self.parsed_image_id();
+        let placement_id = self.placement_id_u32();
+        let image_number = self.image_number();
+        let transport = parse_kitty_transmission_medium(self.medium);
+
+        let reply = if image_id.is_some() && image_number.is_some() {
+            KittyQueryResponse::Error {
+                image_id,
+                placement_id,
+                image_number,
+                message: "EINVAL:Must not specify both i and I".to_string(),
+            }
+        } else if transport.is_none() {
+            KittyQueryResponse::Error {
+                image_id,
+                placement_id,
+                image_number,
+                message: "EINVAL:Unsupported transmission medium".to_string(),
+            }
+        } else {
+            let payload = match self
+                .read_payload()
+                .and_then(|payload| apply_kitty_transport_compression(payload, self.compression))
+            {
+                Some(payload) => payload,
+                None => {
+                    let response = KittyQueryResponse::Error {
+                        image_id,
+                        placement_id,
+                        image_number,
+                        message: "EINVAL:Invalid image payload encoding".to_string(),
+                    };
+                    return if quiet == 2 { None } else { Some(response) };
+                },
+            };
+            let format = self.format.unwrap_or("32");
+            let valid = match format {
+                "24" => {
+                    let width = match self.width.and_then(|v| v.parse::<usize>().ok()) {
+                        Some(width) => width,
+                        None => {
+                            let response = KittyQueryResponse::Error {
+                                image_id,
+                                placement_id,
+                                image_number,
+                                message: "EINVAL:Missing or invalid s for RGB payload".to_string(),
+                            };
+                            return if quiet == 2 { None } else { Some(response) };
+                        },
+                    };
+                    let height = match self.height.and_then(|v| v.parse::<usize>().ok()) {
+                        Some(height) => height,
+                        None => {
+                            let response = KittyQueryResponse::Error {
+                                image_id,
+                                placement_id,
+                                image_number,
+                                message: "EINVAL:Missing or invalid v for RGB payload".to_string(),
+                            };
+                            return if quiet == 2 { None } else { Some(response) };
+                        },
+                    };
+                    payload.len() == width * height * 3
+                },
+                "32" => {
+                    let width = match self.width.and_then(|v| v.parse::<usize>().ok()) {
+                        Some(width) => width,
+                        None => {
+                            let response = KittyQueryResponse::Error {
+                                image_id,
+                                placement_id,
+                                image_number,
+                                message: "EINVAL:Missing or invalid s for RGBA payload".to_string(),
+                            };
+                            return if quiet == 2 { None } else { Some(response) };
+                        },
+                    };
+                    let height = match self.height.and_then(|v| v.parse::<usize>().ok()) {
+                        Some(height) => height,
+                        None => {
+                            let response = KittyQueryResponse::Error {
+                                image_id,
+                                placement_id,
+                                image_number,
+                                message: "EINVAL:Missing or invalid v for RGBA payload".to_string(),
+                            };
+                            return if quiet == 2 { None } else { Some(response) };
+                        },
+                    };
+                    payload.len() == width * height * 4
+                },
+                "100" => parse_png_dimensions(&payload).is_some(),
+                _ => false,
+            };
+            if valid {
+                KittyQueryResponse::Ok {
+                    image_id,
+                    placement_id,
+                    image_number,
+                }
+            } else {
+                KittyQueryResponse::Error {
+                    image_id,
+                    placement_id,
+                    image_number,
+                    message: "EINVAL:Invalid image payload for requested format".to_string(),
+                }
+            }
+        };
+
+        match (&reply, quiet) {
+            (KittyQueryResponse::Ok { .. }, 1 | 2) => None,
+            (KittyQueryResponse::Error { .. }, 2) => None,
+            _ => Some(reply),
+        }
+    }
+
+    pub fn delete_request(&self) -> Option<KittyDeleteRequest> {
+        if self.action != Some("d") {
+            return None;
+        }
+        let delete_selector = self.delete_selector.unwrap_or("a");
+        let mode = match delete_selector {
+            "A" | "I" | "N" | "C" | "P" | "Q" | "R" | "X" | "Y" | "Z" => {
+                KittyDeleteMode::PlacementsAndBackingData
+            },
+            "a" | "i" | "n" | "c" | "p" | "q" | "r" | "x" | "y" | "z" => {
+                KittyDeleteMode::PlacementsOnly
+            },
+            _ => return None,
+        };
+        let placement_id = self.placement_id();
+        let selector = match delete_selector {
+            "a" | "A" => KittyDeleteSelector::AllVisible,
+            "i" | "I" => KittyDeleteSelector::ImageId {
+                image_id: self.parsed_image_id()?,
+                placement_id,
+            },
+            "n" | "N" => KittyDeleteSelector::ImageNumber {
+                image_number: self.image_number()?,
+                placement_id,
+            },
+            "c" | "C" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cursor),
+            "p" | "P" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
+                x: self.source_x?.parse::<u32>().ok()?,
+                y: self.source_y?.parse::<u32>().ok()?,
+                z: None,
+            }),
+            "q" | "Q" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
+                x: self.source_x?.parse::<u32>().ok()?,
+                y: self.source_y?.parse::<u32>().ok()?,
+                z: Some(self.z_index?.parse::<i32>().ok()?),
+            }),
+            "x" | "X" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Column {
+                x: self.source_x?.parse::<u32>().ok()?,
+            }),
+            "y" | "Y" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Row {
+                y: self.source_y?.parse::<u32>().ok()?,
+            }),
+            "z" | "Z" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Z {
+                z: self.z_index?.parse::<i32>().ok()?,
+            }),
+            "r" | "R" => KittyDeleteSelector::Range {
+                first_image_id: self.source_x?.parse::<u32>().ok()?,
+                last_image_id: self.source_y?.parse::<u32>().ok()?,
+            },
+            _ => return None,
+        };
+        Some(KittyDeleteRequest { selector, mode })
+    }
+
+    fn placement(&self) -> KittyPlacement {
+        KittyPlacement {
+            image_id: 0,
+            placement_id: self.placement_id(),
+            relative_to: self
+                .parent_image_id
+                .and_then(|parent_image_id| parent_image_id.parse::<u32>().ok())
+                .map(|parent_image_id| KittyRelativePlacement {
+                    parent_image_id,
+                    parent_placement_id: self
+                        .parent_placement_id
+                        .and_then(|placement_id| placement_id.parse::<u32>().ok())
+                        .filter(|placement_id| *placement_id != 0)
+                        .map(PlacementId::Protocol),
+                    offset_x: self
+                        .parent_offset_x
+                        .and_then(|offset| offset.parse::<i32>().ok())
+                        .unwrap_or(0),
+                    offset_y: self
+                        .parent_offset_y
+                        .and_then(|offset| offset.parse::<i32>().ok())
+                        .unwrap_or(0),
+                }),
+            placement_mode: if self.placement_mode == Some("1") {
+                KittyImagePlacementMode::Placeholder
+            } else {
+                KittyImagePlacementMode::Explicit
+            },
+            source_x: self.source_x.and_then(|v| v.parse::<u32>().ok()),
+            source_y: self.source_y.and_then(|v| v.parse::<u32>().ok()),
+            source_width: self.source_width.and_then(|v| v.parse::<u32>().ok()),
+            source_height: self.source_height.and_then(|v| v.parse::<u32>().ok()),
+            columns: self.columns.and_then(|v| v.parse::<u32>().ok()),
+            rows: self.rows.and_then(|v| v.parse::<u32>().ok()),
+            columns_specified: self.columns.is_some(),
+            rows_specified: self.rows.is_some(),
+            x_offset: self.x_offset.and_then(|v| v.parse::<u32>().ok()),
+            y_offset: self.y_offset.and_then(|v| v.parse::<u32>().ok()),
+            z_index: self.z_index.and_then(|v| v.parse::<i32>().ok()),
+            cursor_movement_policy: match self.cursor_policy {
+                Some("1") => KittyCursorMovementPolicy::NoMovement,
+                _ => KittyCursorMovementPolicy::AfterPlacement,
+            },
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 enum ParsedKittyCommand {
     ImmediateTransmit {
@@ -1544,23 +1973,6 @@ fn kitty_image_dimensions(image_data: &KittyImageData) -> (u32, u32) {
     }
 }
 
-fn kitty_delete_header(apc_bytes: &[u8]) -> Option<HashMap<&str, &str>> {
-    let rest = apc_bytes.strip_prefix(b"G")?;
-    let mut parts = rest.splitn(2, |b| *b == b';');
-    let header = std::str::from_utf8(parts.next()?).ok()?;
-    let mut kv = HashMap::new();
-    for part in header.split(',') {
-        if part.is_empty() {
-            continue;
-        }
-        let mut split = part.splitn(2, '=');
-        let key = split.next()?;
-        let value = split.next().unwrap_or("");
-        kv.insert(key, value);
-    }
-    Some(kv)
-}
-
 fn apply_kitty_transport_compression(
     payload: Vec<u8>,
     compression: Option<&str>,
@@ -1599,19 +2011,6 @@ fn parse_kitty_payload_byte_range(
         None => 0,
     };
     Some((size, offset))
-}
-
-fn inferred_kitty_raw_payload_size(kv: &HashMap<&str, &str>) -> Option<usize> {
-    let bytes_per_pixel = match kv.get("f").copied().unwrap_or("32") {
-        "24" => 3usize,
-        "32" => 4usize,
-        _ => return None,
-    };
-    let width = kv.get("s")?.parse::<usize>().ok()?;
-    let height = kv.get("v")?.parse::<usize>().ok()?;
-    width
-        .checked_mul(height)
-        .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
 }
 
 fn kitty_path_payload(path_payload: &[u8]) -> Option<&Path> {
@@ -1843,62 +2242,7 @@ impl KittyDeleteRequest {
 }
 
 pub fn kitty_delete_request(apc_bytes: &[u8]) -> Option<KittyDeleteRequest> {
-    let kv = kitty_delete_header(apc_bytes)?;
-    if kv.get("a").copied() != Some("d") {
-        return None;
-    }
-    let delete_selector = kv.get("d").copied().unwrap_or("a");
-    let mode = match delete_selector {
-        "A" | "I" | "N" | "C" | "P" | "Q" | "R" | "X" | "Y" | "Z" => {
-            KittyDeleteMode::PlacementsAndBackingData
-        },
-        "a" | "i" | "n" | "c" | "p" | "q" | "r" | "x" | "y" | "z" => {
-            KittyDeleteMode::PlacementsOnly
-        },
-        _ => return None,
-    };
-    let placement_id = kv
-        .get("p")
-        .and_then(|p| p.parse::<u32>().ok())
-        .filter(|placement_id| *placement_id != 0)
-        .map(PlacementId::Protocol);
-    let selector = match delete_selector {
-        "a" | "A" => KittyDeleteSelector::AllVisible,
-        "i" | "I" => KittyDeleteSelector::ImageId {
-            image_id: kv.get("i")?.parse::<u32>().ok()?,
-            placement_id,
-        },
-        "n" | "N" => KittyDeleteSelector::ImageNumber {
-            image_number: kv.get("I")?.parse::<u32>().ok()?,
-            placement_id,
-        },
-        "c" | "C" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cursor),
-        "p" | "P" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
-            x: kv.get("x")?.parse::<u32>().ok()?,
-            y: kv.get("y")?.parse::<u32>().ok()?,
-            z: None,
-        }),
-        "q" | "Q" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
-            x: kv.get("x")?.parse::<u32>().ok()?,
-            y: kv.get("y")?.parse::<u32>().ok()?,
-            z: Some(kv.get("z")?.parse::<i32>().ok()?),
-        }),
-        "x" | "X" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Column {
-            x: kv.get("x")?.parse::<u32>().ok()?,
-        }),
-        "y" | "Y" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Row {
-            y: kv.get("y")?.parse::<u32>().ok()?,
-        }),
-        "z" | "Z" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Z {
-            z: kv.get("z")?.parse::<i32>().ok()?,
-        }),
-        "r" | "R" => KittyDeleteSelector::Range {
-            first_image_id: kv.get("x")?.parse::<u32>().ok()?,
-            last_image_id: kv.get("y")?.parse::<u32>().ok()?,
-        },
-        _ => return None,
-    };
-    Some(KittyDeleteRequest { selector, mode })
+    KittyApc::parse(apc_bytes)?.delete_request()
 }
 
 pub fn kitty_delete_all_visible(apc_bytes: &[u8]) -> bool {
@@ -1948,150 +2292,7 @@ pub fn kitty_delete_by_image_number(apc_bytes: &[u8]) -> Option<(u32, Option<Pla
 }
 
 pub fn kitty_query_response(apc_bytes: &[u8]) -> Option<KittyQueryResponse> {
-    let rest = apc_bytes.strip_prefix(b"G")?;
-    let mut parts = rest.splitn(2, |b| *b == b';');
-    let header = std::str::from_utf8(parts.next()?).ok()?;
-    let payload_b64 = parts.next().unwrap_or_default();
-
-    let mut kv = HashMap::new();
-    for part in header.split(',') {
-        if part.is_empty() {
-            continue;
-        }
-        let mut split = part.splitn(2, '=');
-        let key = split.next()?;
-        let value = split.next().unwrap_or("");
-        kv.insert(key, value);
-    }
-
-    if kv.get("a").copied() != Some("q") {
-        return None;
-    }
-
-    let quiet = kv.get("q").and_then(|q| q.parse::<u8>().ok()).unwrap_or(0);
-    let image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
-    let placement_id = kv
-        .get("p")
-        .and_then(|p| p.parse::<u32>().ok())
-        .filter(|placement_id| *placement_id != 0);
-    let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok());
-    let transport = parse_kitty_transmission_medium(kv.get("t").copied());
-
-    let reply = if image_id.is_some() && image_number.is_some() {
-        KittyQueryResponse::Error {
-            image_id,
-            placement_id,
-            image_number,
-            message: "EINVAL:Must not specify both i and I".to_string(),
-        }
-    } else if transport.is_none() {
-        KittyQueryResponse::Error {
-            image_id,
-            placement_id,
-            image_number,
-            message: "EINVAL:Unsupported transmission medium".to_string(),
-        }
-    } else {
-        let payload = match read_kitty_transmission_payload(
-            payload_b64,
-            kv.get("t").copied(),
-            kv.get("S").copied(),
-            kv.get("O").copied(),
-            inferred_kitty_raw_payload_size(&kv),
-        )
-        .and_then(|payload| apply_kitty_transport_compression(payload, kv.get("o").copied()))
-        {
-            Some(payload) => payload,
-            None => {
-                let response = KittyQueryResponse::Error {
-                    image_id,
-                    placement_id,
-                    image_number,
-                    message: "EINVAL:Invalid image payload encoding".to_string(),
-                };
-                return if quiet == 2 { None } else { Some(response) };
-            },
-        };
-        let format = kv.get("f").copied().unwrap_or("32");
-        let valid = match format {
-            "24" => {
-                let width = match kv.get("s").and_then(|v| v.parse::<usize>().ok()) {
-                    Some(width) => width,
-                    None => {
-                        let response = KittyQueryResponse::Error {
-                            image_id,
-                            placement_id,
-                            image_number,
-                            message: "EINVAL:Missing or invalid s for RGB payload".to_string(),
-                        };
-                        return if quiet == 2 { None } else { Some(response) };
-                    },
-                };
-                let height = match kv.get("v").and_then(|v| v.parse::<usize>().ok()) {
-                    Some(height) => height,
-                    None => {
-                        let response = KittyQueryResponse::Error {
-                            image_id,
-                            placement_id,
-                            image_number,
-                            message: "EINVAL:Missing or invalid v for RGB payload".to_string(),
-                        };
-                        return if quiet == 2 { None } else { Some(response) };
-                    },
-                };
-                payload.len() == width * height * 3
-            },
-            "32" => {
-                let width = match kv.get("s").and_then(|v| v.parse::<usize>().ok()) {
-                    Some(width) => width,
-                    None => {
-                        let response = KittyQueryResponse::Error {
-                            image_id,
-                            placement_id,
-                            image_number,
-                            message: "EINVAL:Missing or invalid s for RGBA payload".to_string(),
-                        };
-                        return if quiet == 2 { None } else { Some(response) };
-                    },
-                };
-                let height = match kv.get("v").and_then(|v| v.parse::<usize>().ok()) {
-                    Some(height) => height,
-                    None => {
-                        let response = KittyQueryResponse::Error {
-                            image_id,
-                            placement_id,
-                            image_number,
-                            message: "EINVAL:Missing or invalid v for RGBA payload".to_string(),
-                        };
-                        return if quiet == 2 { None } else { Some(response) };
-                    },
-                };
-                payload.len() == width * height * 4
-            },
-            "100" => parse_png_dimensions(&payload).is_some(),
-            _ => false,
-        };
-        if valid {
-            KittyQueryResponse::Ok {
-                image_id,
-                placement_id,
-                image_number,
-            }
-        } else {
-            KittyQueryResponse::Error {
-                image_id,
-                placement_id,
-                image_number,
-                message: "EINVAL:Invalid image payload for requested format".to_string(),
-            }
-        }
-    };
-
-    match (&reply, quiet) {
-        (KittyQueryResponse::Ok { .. }, 1 | 2) => None,
-        (KittyQueryResponse::Error { .. }, 2) => None,
-        _ => Some(reply),
-    }
+    KittyApc::parse(apc_bytes)?.query_response()
 }
 
 pub fn kitty_non_query_response(
@@ -2100,7 +2301,7 @@ pub fn kitty_non_query_response(
     resolved_image_id: Option<u32>,
     resolved_image_number: Option<u32>,
 ) -> Option<KittyQueryResponse> {
-    let reply_context = parse_non_query_reply_context(apc_bytes)?;
+    let reply_context = KittyApc::parse(apc_bytes)?.reply_context()?;
     let error =
         (!command_succeeded).then(|| non_query_failure_message(reply_context.kind).to_string());
     build_non_query_reply(
@@ -2109,54 +2310,6 @@ pub fn kitty_non_query_response(
         resolved_image_number.or(reply_context.image_number),
         error,
     )
-}
-
-fn parse_non_query_reply_context(apc_bytes: &[u8]) -> Option<PendingKittyReplyContext> {
-    let rest = apc_bytes.strip_prefix(b"G")?;
-    let mut parts = rest.splitn(2, |b| *b == b';');
-    let header = std::str::from_utf8(parts.next()?).ok()?;
-
-    let mut kv = HashMap::new();
-    for part in header.split(',') {
-        if part.is_empty() {
-            continue;
-        }
-        let mut split = part.splitn(2, '=');
-        let key = split.next()?;
-        let value = split.next().unwrap_or("");
-        kv.insert(key, value);
-    }
-
-    let kind = match kv.get("a").copied()? {
-        "t" | "T" => PendingKittyReplyKind::Transmit,
-        "p" => PendingKittyReplyKind::Placement,
-        _ => return None,
-    };
-    Some(PendingKittyReplyContext {
-        kind,
-        quiet: kv.get("q").and_then(|q| q.parse::<u8>().ok()).unwrap_or(0),
-        parsed_image_id: kv.get("i").and_then(|i| i.parse::<u32>().ok()),
-        placement_id: kv
-            .get("p")
-            .and_then(|p| p.parse::<u32>().ok())
-            .filter(|placement_id| *placement_id != 0),
-        image_number: kv.get("I").and_then(|i| i.parse::<u32>().ok()),
-    })
-}
-
-fn parse_chunk_quiet(apc_bytes: &[u8]) -> Option<u8> {
-    let rest = apc_bytes.strip_prefix(b"G")?;
-    let mut parts = rest.splitn(2, |b| *b == b';');
-    let header = std::str::from_utf8(parts.next()?).ok()?;
-    for part in header.split(',') {
-        let mut split = part.splitn(2, '=');
-        let key = split.next()?;
-        let value = split.next().unwrap_or("");
-        if key == "q" {
-            return value.parse::<u8>().ok();
-        }
-    }
-    None
 }
 
 fn non_query_failure_message(kind: PendingKittyReplyKind) -> &'static str {
@@ -2202,110 +2355,41 @@ fn build_non_query_reply(
 }
 
 impl ParsedKittyCommand {
-    fn parse(apc_bytes: &[u8]) -> Option<Self> {
-        let rest = apc_bytes.strip_prefix(b"G")?;
-        let mut parts = rest.splitn(2, |b| *b == b';');
-        let header = std::str::from_utf8(parts.next()?).ok()?;
-        let payload = parts.next().unwrap_or_default();
-
-        let mut kv = HashMap::new();
-        for part in header.split(',') {
-            if part.is_empty() {
-                continue;
-            }
-            let mut split = part.splitn(2, '=');
-            let key = split.next()?;
-            let value = split.next().unwrap_or("");
-            kv.insert(key, value);
-        }
-
-        let more = kv.get("m").and_then(|m| m.parse::<u8>().ok()).unwrap_or(0) != 0;
-        let transmission_medium = parse_kitty_transmission_medium(kv.get("t").copied())?;
+    fn parse(apc: &KittyApc<'_>) -> Option<Self> {
+        let more = apc.more();
+        let transmission_medium = parse_kitty_transmission_medium(apc.medium)?;
         if more && transmission_medium != KittyTransmissionMedium::Direct {
             return None;
         }
-        let payload = read_kitty_transmission_payload(
-            payload,
-            kv.get("t").copied(),
-            kv.get("S").copied(),
-            kv.get("O").copied(),
-            inferred_kitty_raw_payload_size(&kv),
-        )?;
+        let payload = apc.read_payload()?;
 
-        if let Some(action) = kv.get("a") {
-            let placement = KittyPlacement {
-                image_id: 0,
-                placement_id: kv
-                    .get("p")
-                    .and_then(|p| p.parse::<u32>().ok())
-                    .filter(|placement_id| *placement_id != 0)
-                    .map(PlacementId::Protocol),
-                relative_to: kv
-                    .get("P")
-                    .and_then(|parent_image_id| parent_image_id.parse::<u32>().ok())
-                    .map(|parent_image_id| KittyRelativePlacement {
-                        parent_image_id,
-                        parent_placement_id: kv
-                            .get("Q")
-                            .and_then(|placement_id| placement_id.parse::<u32>().ok())
-                            .filter(|placement_id| *placement_id != 0)
-                            .map(PlacementId::Protocol),
-                        offset_x: kv
-                            .get("H")
-                            .and_then(|offset| offset.parse::<i32>().ok())
-                            .unwrap_or(0),
-                        offset_y: kv
-                            .get("V")
-                            .and_then(|offset| offset.parse::<i32>().ok())
-                            .unwrap_or(0),
-                    }),
-                placement_mode: if kv.get("U").copied() == Some("1") {
-                    KittyImagePlacementMode::Placeholder
-                } else {
-                    KittyImagePlacementMode::Explicit
-                },
-                source_x: kv.get("x").and_then(|v| v.parse::<u32>().ok()),
-                source_y: kv.get("y").and_then(|v| v.parse::<u32>().ok()),
-                source_width: kv.get("w").and_then(|v| v.parse::<u32>().ok()),
-                source_height: kv.get("h").and_then(|v| v.parse::<u32>().ok()),
-                columns: kv.get("c").and_then(|v| v.parse::<u32>().ok()),
-                rows: kv.get("r").and_then(|v| v.parse::<u32>().ok()),
-                columns_specified: kv.contains_key("c"),
-                rows_specified: kv.contains_key("r"),
-                x_offset: kv.get("X").and_then(|v| v.parse::<u32>().ok()),
-                y_offset: kv.get("Y").and_then(|v| v.parse::<u32>().ok()),
-                z_index: kv.get("z").and_then(|v| v.parse::<i32>().ok()),
-                cursor_movement_policy: match kv.get("C").copied() {
-                    Some("1") => KittyCursorMovementPolicy::NoMovement,
-                    _ => KittyCursorMovementPolicy::AfterPlacement,
-                },
-                ..Default::default()
-            };
-            match *action {
+        if let Some(action) = apc.action {
+            let placement = apc.placement();
+            match action {
                 "T" | "t" => {
-                    let image_format = match kv.get("f").copied().unwrap_or("32") {
+                    let image_format = match apc.format.unwrap_or("32") {
                         "100" => KittyImageFormat::Png,
                         "24" => KittyImageFormat::Rgb,
                         "32" => KittyImageFormat::Rgba,
                         _ => return None,
                     };
-                    let compression = parse_kitty_transport_compression(kv.get("o").copied())?;
-                    let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
-                    let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok());
-                    let width = kv.get("s").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
-                    let height = kv.get("v").and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
-                    let should_create_placement = *action == "T"
-                        || kv.contains_key("p")
-                        || kv.contains_key("c")
-                        || kv.contains_key("r")
-                        || kv.contains_key("x")
-                        || kv.contains_key("y")
-                        || kv.contains_key("w")
-                        || kv.contains_key("h")
-                        || kv.contains_key("X")
-                        || kv.contains_key("Y")
-                        || kv.contains_key("z")
-                        || kv.get("U").copied() == Some("1");
+                    let compression = parse_kitty_transport_compression(apc.compression)?;
+                    let protocol_image_id = apc.parsed_image_id();
+                    let image_number = apc.image_number();
+                    let width = apc.width.and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+                    let height = apc.height.and_then(|v| v.parse::<u32>().ok()).unwrap_or(0);
+                    let should_create_placement = action == "T"
+                        || apc.placement_id.is_some()
+                        || apc.columns.is_some()
+                        || apc.rows.is_some()
+                        || apc.source_x.is_some()
+                        || apc.source_y.is_some()
+                        || apc.source_width.is_some()
+                        || apc.source_height.is_some()
+                        || apc.x_offset.is_some()
+                        || apc.y_offset.is_some()
+                        || apc.z_index.is_some()
+                        || apc.placement_mode == Some("1");
                     Some(ParsedKittyCommand::ImmediateTransmit {
                         protocol_image_id,
                         image_number,
@@ -2323,8 +2407,8 @@ impl ParsedKittyCommand {
                     })
                 },
                 "p" => {
-                    let protocol_image_id = kv.get("i").and_then(|i| i.parse::<u32>().ok());
-                    let image_number = kv.get("I").and_then(|i| i.parse::<u32>().ok());
+                    let protocol_image_id = apc.parsed_image_id();
+                    let image_number = apc.image_number();
                     if protocol_image_id.is_none() && image_number.is_none() {
                         return None;
                     }
@@ -3177,10 +3261,39 @@ mod tests {
         command.push_str(&base64::encode(path.to_string_lossy().as_bytes()));
 
         assert!(
-            ParsedKittyCommand::parse(command.as_bytes()).is_none(),
+            ParsedKittyCommand::parse(&KittyApc::parse(command.as_bytes()).unwrap()).is_none(),
             "chunked external media should be rejected before reading the external object"
         );
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn parsed_kitty_apc_matches_query_delete_and_transmit_parsing() {
+        let query = KittyApc::parse(b"Gq=0,a=q,t=d,f=24,s=1,v=1,i=41;EjRW").unwrap();
+        assert_eq!(
+            query.query_response().map(|reply| reply.to_apc_response()),
+            kitty_query_response(b"Gq=0,a=q,t=d,f=24,s=1,v=1,i=41;EjRW")
+                .map(|reply| reply.to_apc_response())
+        );
+
+        let delete = KittyApc::parse(b"Ga=d,d=I,i=51,p=7").unwrap();
+        assert_eq!(
+            delete.delete_request(),
+            kitty_delete_request(b"Ga=d,d=I,i=51,p=7")
+        );
+
+        let transmit = KittyApc::parse(b"Ga=t,f=24,s=1,v=1,i=7;EjRW").unwrap();
+        assert!(matches!(
+            ParsedKittyCommand::parse(&transmit),
+            Some(ParsedKittyCommand::ImmediateTransmit {
+                protocol_image_id: Some(7),
+                image_format: KittyImageFormat::Rgb,
+                width: 1,
+                height: 1,
+                ref payload,
+                ..
+            }) if payload == &[0x12, 0x34, 0x56]
+        ));
     }
 
     #[test]
@@ -3535,7 +3648,8 @@ mod tests {
     #[test]
     fn kitty_rgb24_payloads_roundtrip_natively() {
         let payload = vec![0x12, 0x34, 0x56];
-        let parsed = ParsedKittyCommand::parse(b"Ga=t,f=24,s=1,v=1,i=7;EjRW").unwrap();
+        let apc = KittyApc::parse(b"Ga=t,f=24,s=1,v=1,i=7;EjRW").unwrap();
+        let parsed = ParsedKittyCommand::parse(&apc).unwrap();
         let ParsedKittyCommand::ImmediateTransmit {
             protocol_image_id,
             image_format,
