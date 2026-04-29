@@ -40,6 +40,7 @@ impl KittySceneState {
         self.placements.insert(placement.key(), placement);
     }
 
+    #[cfg(test)]
     pub(crate) fn insert_asset(&mut self, image_id: u32, generation: u64) {
         self.resident_asset_generations.insert(image_id, generation);
     }

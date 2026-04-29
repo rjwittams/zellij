@@ -18,7 +18,7 @@ use crate::panes::sixel::SixelImageStore;
 use crate::ClientId;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
+    collections::{hash_map::Entry, HashMap, HashSet},
     rc::Rc,
 };
 use zellij_utils::errors::prelude::*;
@@ -358,18 +358,24 @@ impl ImageOutput {
         placeholder_renders: &[KittyPlaceholderRender],
         kitty_asset_store: &KittyAssetStore,
     ) -> Option<KittySceneState> {
+        let placement_count = chunks.len() + placeholder_renders.len();
         let mut scene = KittySceneState {
-            resident_asset_generations: resident_kitty_asset_generations
-                .iter()
-                .map(|(image_id, generation)| (*image_id, *generation))
-                .collect(),
-            ..Default::default()
+            resident_asset_generations: HashMap::with_capacity(
+                resident_kitty_asset_generations.len() + placement_count,
+            ),
+            placements: HashMap::with_capacity(placement_count),
         };
-        let mut referenced_asset_ids: HashSet<u32> = HashSet::new();
+        scene.resident_asset_generations.extend(
+            resident_kitty_asset_generations
+                .iter()
+                .map(|(image_id, generation)| (*image_id, *generation)),
+        );
         for chunk in chunks {
             let placement_id =
                 ImageOutput::stable_wire_placement_id(chunk.placement_id, chunk.stable_render_id);
-            referenced_asset_ids.insert(chunk.image_id);
+            if let Entry::Vacant(entry) = scene.resident_asset_generations.entry(chunk.image_id) {
+                entry.insert(kitty_asset_store.generation(chunk.image_id)?);
+            }
             scene.insert_placement(PlannedKittyPlacement::Explicit {
                 key: KittyPlacementKey {
                     stable_render_id: chunk.stable_render_id,
@@ -382,7 +388,9 @@ impl ImageOutput {
         for render in placeholder_renders {
             let placement_id =
                 ImageOutput::stable_wire_placement_id(render.placement_id, render.stable_render_id);
-            referenced_asset_ids.insert(render.image_id);
+            if let Entry::Vacant(entry) = scene.resident_asset_generations.entry(render.image_id) {
+                entry.insert(kitty_asset_store.generation(render.image_id)?);
+            }
             scene.insert_placement(PlannedKittyPlacement::Placeholder {
                 key: KittyPlacementKey {
                     stable_render_id: render.stable_render_id,
@@ -391,12 +399,6 @@ impl ImageOutput {
                 },
                 render: render.clone(),
             });
-        }
-        for image_id in referenced_asset_ids {
-            if !scene.resident_asset_generations.contains_key(&image_id) {
-                let generation = kitty_asset_store.generation(image_id)?;
-                scene.insert_asset(image_id, generation);
-            }
         }
         Some(scene)
     }
@@ -441,31 +443,33 @@ impl ImageOutput {
 
     fn next_resident_assets_for_plan(
         kitty_asset_store: &KittyAssetStore,
-        previous_resident_assets: HashMap<u32, u64>,
+        mut previous_resident_assets: HashMap<u32, u64>,
         kitty_plan: &KittyScenePlan,
     ) -> HashMap<u32, u64> {
-        let mut next_resident_assets = HashMap::new();
         match kitty_plan {
             KittyScenePlan::Diff {
                 asset_ops,
                 placement_ops: _,
             } => {
-                next_resident_assets = previous_resident_assets;
+                previous_resident_assets.reserve(asset_ops.len());
                 for asset_op in asset_ops {
                     match asset_op {
                         KittyAssetOp::EnsureResident {
                             image_id,
                             generation,
                         } => {
-                            next_resident_assets.insert(*image_id, *generation);
+                            previous_resident_assets.insert(*image_id, *generation);
                         },
                     }
                 }
+                previous_resident_assets
             },
             KittyScenePlan::FullResetAndResend {
                 explicit_chunks,
                 placeholder_renders,
             } => {
+                let mut next_resident_assets =
+                    HashMap::with_capacity(explicit_chunks.len() + placeholder_renders.len());
                 for chunk in explicit_chunks {
                     if let Some(generation) = kitty_asset_store.generation(chunk.image_id) {
                         next_resident_assets.insert(chunk.image_id, generation);
@@ -476,9 +480,9 @@ impl ImageOutput {
                         next_resident_assets.insert(render.image_id, generation);
                     }
                 }
+                next_resident_assets
             },
         }
-        next_resident_assets
     }
 
     fn serialize_kitty_plan(&mut self, client_id: ClientId, kitty_plan: &KittyScenePlan) -> String {
@@ -979,12 +983,7 @@ impl ImageOutput {
             )
         };
         if let Some(scene_state) = current_kitty_scene.as_mut() {
-            scene_state.resident_asset_generations.clear();
-            scene_state.resident_asset_generations.extend(
-                next_resident_assets
-                    .iter()
-                    .map(|(image_id, generation)| (*image_id, *generation)),
-            );
+            scene_state.resident_asset_generations = next_resident_assets.clone();
         }
         if let Some(scene_state) = current_kitty_scene.as_ref() {
             log::trace!(
