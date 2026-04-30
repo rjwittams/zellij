@@ -4,9 +4,10 @@ use super::super::kitty_diff::{
     KittySceneState, PlannedKittyPlacement,
 };
 use super::super::{
-    CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, KittyOutputMediaCache,
-    KittyOutputMediaRetention, KittyPlaceholderCellRender, LastRenderedImageState, Output,
-    OutputBuffer, PaneImageRenderOutput, PlacementId, RenderedImageState, SixelImageChunk,
+    CharacterChunk, FloatingPanesStack, KittyFileOutputAcknowledgementPolicy, KittyImageChunk,
+    KittyImageData, KittyOutputMediaCache, KittyOutputMediaRetention, KittyPlaceholderCellRender,
+    LastRenderedImageState, Output, OutputBuffer, PaneImageRenderOutput, PlacementId,
+    RenderedImageState, SixelImageChunk,
 };
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::pane_image_scene::KittyRenderBundle;
@@ -1221,7 +1222,10 @@ fn test_image_output_can_request_acknowledgements_for_file_transport() {
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
     output.set_kitty_file_output_enabled_for_client(1, true);
-    output.set_kitty_file_output_acknowledgements_enabled_for_client(1, true);
+    output.set_kitty_file_output_acknowledgement_policy_for_client(
+        1,
+        KittyFileOutputAcknowledgementPolicy::Always,
+    );
     output.add_pane_image_output_to_client(
         1,
         pane_image_output_with_kitty_scene(vec![chunk]),
@@ -1233,6 +1237,41 @@ fn test_image_output_can_request_acknowledgements_for_file_transport() {
     assert!(
         client_output.contains("a=t,i=1,q=0,f=100,t=f;"),
         "ack-enabled file uploads should request a terminal reply"
+    );
+}
+
+#[test]
+fn test_image_output_watermark_requests_acknowledgement_only_for_last_file_upload() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    let client_ids = create_test_clients(1);
+    let first_chunk = create_kitty_chunk(1, 2, 2);
+    let second_chunk = create_kitty_chunk(2, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_file_output_enabled_for_client(1, true);
+    output.set_kitty_file_output_acknowledgement_policy_for_client(
+        1,
+        KittyFileOutputAcknowledgementPolicy::Watermark,
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![first_chunk, second_chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=1,q=2,f=100,t=f;"),
+        "watermark should track earlier file uploads without requesting replies"
+    );
+    assert!(
+        client_output.contains("a=t,i=2,q=0,f=100,t=f;"),
+        "watermark should request a reply for the last file upload"
     );
 }
 
@@ -1296,7 +1335,7 @@ fn test_output_media_cache_explicit_retention_keeps_pending_file_reads_until_ack
     let media_path = media_cache
         .ensure_regular_file(1, 1, &image_data)
         .expect("should write test media file");
-    media_cache.mark_pending_regular_file_read(1, 1, 1);
+    media_cache.mark_pending_regular_file_read(1, 1, 1, true);
     media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
     assert!(
         media_path.exists(),
@@ -1308,6 +1347,37 @@ fn test_output_media_cache_explicit_retention_keeps_pending_file_reads_until_ack
     assert!(
         !media_path.exists(),
         "acknowledged file reads should no longer retain media"
+    );
+}
+
+#[test]
+fn test_output_media_cache_watermark_acknowledgement_releases_earlier_pending_reads() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+
+    let first_path = media_cache
+        .ensure_regular_file(1, 1, &image_data)
+        .expect("should write first media file");
+    let second_path = media_cache
+        .ensure_regular_file(2, 1, &image_data)
+        .expect("should write second media file");
+    media_cache.mark_pending_regular_file_read(1, 1, 1, false);
+    media_cache.mark_pending_regular_file_read(1, 2, 1, true);
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+    assert!(first_path.exists());
+    assert!(second_path.exists());
+
+    media_cache.acknowledge_regular_file_read(1, 2);
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+    assert!(
+        !first_path.exists() && !second_path.exists(),
+        "watermark ack should release all pending file reads through the acknowledged upload"
     );
 }
 

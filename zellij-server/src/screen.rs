@@ -76,7 +76,10 @@ use crate::panes::terminal_pane::{BRACKETED_PASTE_BEGIN, BRACKETED_PASTE_END};
 use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
 
 use crate::{
-    output::{KittyOutputMediaCache, KittyOutputMediaRetention, LastRenderedImageState, Output},
+    output::{
+        KittyFileOutputAcknowledgementPolicy, KittyOutputMediaCache, KittyOutputMediaRetention,
+        LastRenderedImageState, Output,
+    },
     panes::kitty_asset_store::KittyAssetStore,
     panes::sixel::SixelImageStore,
     panes::PaneId,
@@ -2549,10 +2552,21 @@ impl Screen {
         }
         for (client_id, is_web_client) in self.connected_clients.borrow().iter() {
             if !*is_web_client && !self.watcher_clients.contains_key(client_id) {
+                let acknowledgement_policy = match self.kitty_image_file_lifetime {
+                    KittyImageFileLifetime::GraceWindow => {
+                        KittyFileOutputAcknowledgementPolicy::None
+                    },
+                    KittyImageFileLifetime::Watermark => {
+                        KittyFileOutputAcknowledgementPolicy::Watermark
+                    },
+                    KittyImageFileLifetime::AlwaysAck => {
+                        KittyFileOutputAcknowledgementPolicy::Always
+                    },
+                };
                 output.set_kitty_file_output_enabled_for_client(*client_id, true);
-                output.set_kitty_file_output_acknowledgements_enabled_for_client(
+                output.set_kitty_file_output_acknowledgement_policy_for_client(
                     *client_id,
-                    self.kitty_image_file_lifetime == KittyImageFileLifetime::AlwaysAck,
+                    acknowledgement_policy,
                 );
             }
         }
@@ -2598,10 +2612,12 @@ impl Screen {
 
     fn kitty_output_media_retention(&self) -> KittyOutputMediaRetention {
         match self.kitty_image_file_lifetime {
-            KittyImageFileLifetime::GraceWindow | KittyImageFileLifetime::Watermark => {
+            KittyImageFileLifetime::GraceWindow => {
                 KittyOutputMediaRetention::KeepRecentlyReferenced
             },
-            KittyImageFileLifetime::AlwaysAck => KittyOutputMediaRetention::OnlyExplicitlyKept,
+            KittyImageFileLifetime::Watermark | KittyImageFileLifetime::AlwaysAck => {
+                KittyOutputMediaRetention::OnlyExplicitlyKept
+            },
         }
     }
 

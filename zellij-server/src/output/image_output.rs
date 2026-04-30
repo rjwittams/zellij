@@ -24,6 +24,40 @@ use std::{
 use zellij_utils::errors::prelude::*;
 use zellij_utils::pane_size::{Size, SizeInPixels};
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KittyFileOutputAcknowledgementPolicy {
+    #[default]
+    None,
+    Always,
+    Watermark,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KittyFileOutputAcknowledgement {
+    None,
+    TrackWithoutRequesting,
+    Request,
+}
+
+impl KittyFileOutputAcknowledgement {
+    fn for_upload(
+        policy: KittyFileOutputAcknowledgementPolicy,
+        upload_index: usize,
+        upload_count: usize,
+    ) -> Self {
+        match policy {
+            KittyFileOutputAcknowledgementPolicy::None => KittyFileOutputAcknowledgement::None,
+            KittyFileOutputAcknowledgementPolicy::Always => KittyFileOutputAcknowledgement::Request,
+            KittyFileOutputAcknowledgementPolicy::Watermark if upload_index == upload_count => {
+                KittyFileOutputAcknowledgement::Request
+            },
+            KittyFileOutputAcknowledgementPolicy::Watermark => {
+                KittyFileOutputAcknowledgement::TrackWithoutRequesting
+            },
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct CurrentImageState {
     sixel_chunks: Vec<SixelImageChunk>,
@@ -231,7 +265,8 @@ impl ClientImageRenderState {
 pub(crate) struct ImageOutput {
     client_image_states: HashMap<ClientId, ClientImageRenderState>,
     clients_with_kitty_file_output: HashSet<ClientId>,
-    clients_with_kitty_file_output_acknowledgements: HashSet<ClientId>,
+    kitty_file_output_acknowledgement_policies:
+        HashMap<ClientId, KittyFileOutputAcknowledgementPolicy>,
     pub(crate) sixel_image_store: Rc<RefCell<SixelImageStore>>,
     pub(crate) kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     kitty_output_media_cache: Rc<RefCell<KittyOutputMediaCache>>,
@@ -340,27 +375,41 @@ impl ImageOutput {
             self.clients_with_kitty_file_output.insert(client_id);
         } else {
             self.clients_with_kitty_file_output.remove(&client_id);
-            self.clients_with_kitty_file_output_acknowledgements
+            self.kitty_file_output_acknowledgement_policies
                 .remove(&client_id);
         }
     }
 
-    pub fn set_kitty_file_output_acknowledgements_enabled_for_client(
+    pub fn set_kitty_file_output_acknowledgement_policy_for_client(
         &mut self,
         client_id: ClientId,
-        enabled: bool,
+        policy: KittyFileOutputAcknowledgementPolicy,
     ) {
-        if enabled {
-            self.clients_with_kitty_file_output_acknowledgements
-                .insert(client_id);
-        } else {
-            self.clients_with_kitty_file_output_acknowledgements
-                .remove(&client_id);
+        match policy {
+            KittyFileOutputAcknowledgementPolicy::None => {
+                self.kitty_file_output_acknowledgement_policies
+                    .remove(&client_id);
+            },
+            KittyFileOutputAcknowledgementPolicy::Always
+            | KittyFileOutputAcknowledgementPolicy::Watermark => {
+                self.kitty_file_output_acknowledgement_policies
+                    .insert(client_id, policy);
+            },
         }
     }
 
     fn client_image_state_mut(&mut self, client_id: ClientId) -> &mut ClientImageRenderState {
         self.client_image_states.entry(client_id).or_default()
+    }
+
+    fn kitty_file_output_acknowledgement_policy(
+        &self,
+        client_id: ClientId,
+    ) -> KittyFileOutputAcknowledgementPolicy {
+        self.kitty_file_output_acknowledgement_policies
+            .get(&client_id)
+            .copied()
+            .unwrap_or_default()
     }
 
     fn stable_wire_placement_id(
@@ -508,6 +557,7 @@ impl ImageOutput {
     }
 
     fn serialize_kitty_plan(&mut self, client_id: ClientId, kitty_plan: &KittyScenePlan) -> String {
+        let acknowledgement_policy = self.kitty_file_output_acknowledgement_policy(client_id);
         match kitty_plan {
             KittyScenePlan::Diff {
                 asset_ops,
@@ -522,6 +572,12 @@ impl ImageOutput {
                     return vte_output;
                 }
                 vte_output.push_str("\u{1b}[s");
+                let watermark_upload_count = self.kitty_file_upload_count_for_diff(
+                    client_id,
+                    acknowledgement_policy,
+                    asset_ops,
+                );
+                let mut upload_index = 0;
                 for asset_op in asset_ops {
                     match asset_op {
                         KittyAssetOp::EnsureResident {
@@ -536,14 +592,19 @@ impl ImageOutput {
                             if asset.generation != *generation {
                                 continue;
                             }
+                            upload_index += 1;
                             vte_output.push_str(&Self::serialize_kitty_image_data(
                                 &self.clients_with_kitty_file_output,
-                                &self.clients_with_kitty_file_output_acknowledgements,
                                 &self.kitty_output_media_cache,
                                 client_id,
                                 *image_id,
                                 *generation,
                                 &asset.image_data,
+                                KittyFileOutputAcknowledgement::for_upload(
+                                    acknowledgement_policy,
+                                    upload_index,
+                                    watermark_upload_count,
+                                ),
                             ));
                         },
                     }
@@ -577,25 +638,30 @@ impl ImageOutput {
 
     fn serialize_kitty_image_data(
         clients_with_kitty_file_output: &HashSet<ClientId>,
-        clients_with_kitty_file_output_acknowledgements: &HashSet<ClientId>,
         kitty_output_media_cache: &Rc<RefCell<KittyOutputMediaCache>>,
         client_id: ClientId,
         image_id: u32,
         generation: u64,
         image_data: &crate::output::KittyImageData,
+        acknowledgement: KittyFileOutputAcknowledgement,
     ) -> String {
         if clients_with_kitty_file_output.contains(&client_id) {
             let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
             if let Ok(path) =
                 kitty_output_media_cache.ensure_regular_file(image_id, generation, image_data)
             {
-                let quiet = if clients_with_kitty_file_output_acknowledgements.contains(&client_id)
-                {
-                    kitty_output_media_cache
-                        .mark_pending_regular_file_read(client_id, image_id, generation);
-                    0
-                } else {
-                    2
+                let quiet = match acknowledgement {
+                    KittyFileOutputAcknowledgement::None => 2,
+                    KittyFileOutputAcknowledgement::TrackWithoutRequesting => {
+                        kitty_output_media_cache
+                            .mark_pending_regular_file_read(client_id, image_id, generation, false);
+                        2
+                    },
+                    KittyFileOutputAcknowledgement::Request => {
+                        kitty_output_media_cache
+                            .mark_pending_regular_file_read(client_id, image_id, generation, true);
+                        0
+                    },
                 };
                 return KittyImageState::serialize_image_data_from_file(
                     image_id, image_data, &path, quiet,
@@ -603,6 +669,56 @@ impl ImageOutput {
             }
         }
         KittyImageState::serialize_image_data(image_id, image_data)
+    }
+
+    fn kitty_file_upload_count_for_diff(
+        &self,
+        client_id: ClientId,
+        acknowledgement_policy: KittyFileOutputAcknowledgementPolicy,
+        asset_ops: &[KittyAssetOp],
+    ) -> usize {
+        if !self.clients_with_kitty_file_output.contains(&client_id)
+            || acknowledgement_policy != KittyFileOutputAcknowledgementPolicy::Watermark
+        {
+            return 0;
+        }
+        let kitty_asset_store = self.kitty_asset_store.borrow();
+        asset_ops
+            .iter()
+            .filter(|asset_op| match asset_op {
+                KittyAssetOp::EnsureResident {
+                    image_id,
+                    generation,
+                } => kitty_asset_store
+                    .asset(*image_id)
+                    .is_some_and(|asset| asset.generation == *generation),
+            })
+            .count()
+    }
+
+    fn kitty_file_upload_count_for_full_reset(
+        &self,
+        client_id: ClientId,
+        acknowledgement_policy: KittyFileOutputAcknowledgementPolicy,
+        chunks: &[KittyImageChunk],
+        renders: &[KittyPlaceholderRender],
+    ) -> usize {
+        if !self.clients_with_kitty_file_output.contains(&client_id)
+            || acknowledgement_policy != KittyFileOutputAcknowledgementPolicy::Watermark
+        {
+            return 0;
+        }
+        let kitty_asset_store = self.kitty_asset_store.borrow();
+        let mut transmitted_image_ids = HashSet::new();
+        chunks
+            .iter()
+            .map(|chunk| chunk.image_id)
+            .chain(renders.iter().map(|render| render.image_id))
+            .filter(|image_id| {
+                transmitted_image_ids.insert(*image_id)
+                    && kitty_asset_store.asset(*image_id).is_some()
+            })
+            .count()
     }
 
     fn serialize_kitty_full_reset(
@@ -617,6 +733,14 @@ impl ImageOutput {
         let mut raw_vte_output = String::new();
         raw_vte_output.push_str("\u{1b}[s");
 
+        let acknowledgement_policy = self.kitty_file_output_acknowledgement_policy(client_id);
+        let watermark_upload_count = self.kitty_file_upload_count_for_full_reset(
+            client_id,
+            acknowledgement_policy,
+            chunks,
+            renders,
+        );
+        let mut upload_index = 0;
         let mut transmitted_image_ids = std::collections::HashSet::new();
         for image_id in chunks
             .iter()
@@ -629,14 +753,19 @@ impl ImageOutput {
                 let Some(asset) = asset else {
                     continue;
                 };
+                upload_index += 1;
                 raw_vte_output.push_str(&Self::serialize_kitty_image_data(
                     &self.clients_with_kitty_file_output,
-                    &self.clients_with_kitty_file_output_acknowledgements,
                     &self.kitty_output_media_cache,
                     client_id,
                     image_id,
                     asset.generation,
                     &asset.image_data,
+                    KittyFileOutputAcknowledgement::for_upload(
+                        acknowledgement_policy,
+                        upload_index,
+                        watermark_upload_count,
+                    ),
                 ));
             }
         }

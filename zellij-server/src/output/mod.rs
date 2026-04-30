@@ -28,6 +28,7 @@ use zellij_utils::pane_size::SizeInPixels;
 
 use self::image_fragment::PreparedImageOutput;
 use self::image_output::ImageOutput;
+pub(crate) use self::image_output::KittyFileOutputAcknowledgementPolicy;
 pub use self::kitty_output_media::{KittyOutputMediaCache, KittyOutputMediaRetention};
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use zellij_utils::pane_size::{PaneGeom, Size};
@@ -479,13 +480,13 @@ impl Output {
             .set_kitty_file_output_enabled_for_client(client_id, enabled);
     }
 
-    pub fn set_kitty_file_output_acknowledgements_enabled_for_client(
+    pub fn set_kitty_file_output_acknowledgement_policy_for_client(
         &mut self,
         client_id: ClientId,
-        enabled: bool,
+        policy: KittyFileOutputAcknowledgementPolicy,
     ) {
         self.image_output
-            .set_kitty_file_output_acknowledgements_enabled_for_client(client_id, enabled);
+            .set_kitty_file_output_acknowledgement_policy_for_client(client_id, policy);
     }
 
     pub fn last_rendered_image_states(&self) -> HashMap<ClientId, Rc<LastRenderedImageState>> {

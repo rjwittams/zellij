@@ -5848,15 +5848,14 @@ fn screen_keeps_recent_output_media_files_for_assets_that_are_no_longer_local() 
     );
 }
 
-fn screen_keeps_recent_output_media_files_for_lifetime(
-    kitty_image_file_lifetime: KittyImageFileLifetime,
-) {
+#[test]
+fn screen_watermark_lifetime_keeps_pending_output_media_until_watermark_response() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);
     let tempdir = tempfile::tempdir().unwrap();
     let media_dir = tempdir.path().join("session-media/test/image");
     let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
-    screen.kitty_image_file_lifetime = kitty_image_file_lifetime;
+    screen.kitty_image_file_lifetime = KittyImageFileLifetime::Watermark;
     screen.kitty_output_media_cache = media_cache.clone();
     screen.connected_clients.borrow_mut().insert(1, false);
 
@@ -5869,31 +5868,51 @@ fn screen_keeps_recent_output_media_files_for_lifetime(
         .kitty_asset_store
         .borrow_mut()
         .insert_asset(250, image_data.clone());
-    let generation = screen.kitty_asset_store.borrow().generation(250).unwrap();
-    let media_path = media_cache
+    screen
+        .kitty_asset_store
         .borrow_mut()
-        .ensure_regular_file(250, generation, &image_data)
+        .insert_asset(251, image_data.clone());
+    let first_generation = screen.kitty_asset_store.borrow().generation(250).unwrap();
+    let second_generation = screen.kitty_asset_store.borrow().generation(251).unwrap();
+    let first_media_path = media_cache
+        .borrow_mut()
+        .ensure_regular_file(250, first_generation, &image_data)
         .unwrap();
+    let second_media_path = media_cache
+        .borrow_mut()
+        .ensure_regular_file(251, second_generation, &image_data)
+        .unwrap();
+    media_cache
+        .borrow_mut()
+        .mark_pending_regular_file_read(1, 250, first_generation, false);
+    media_cache
+        .borrow_mut()
+        .mark_pending_regular_file_read(1, 251, second_generation, true);
     screen.regular_last_rendered_image_state.insert(
         1,
         Rc::new(LastRenderedImageState::new(RenderedImageState {
-            resident_asset_generations: HashMap::from([(250, generation)]),
+            resident_asset_generations: HashMap::from([
+                (250, first_generation),
+                (251, second_generation),
+            ]),
             ..Default::default()
         })),
     );
 
     screen.kitty_asset_store.borrow_mut().remove_asset(250);
+    screen.kitty_asset_store.borrow_mut().remove_asset(251);
     screen.reap_stale_kitty_output_media_files();
-
     assert!(
-        media_path.exists(),
-        "watermark lifetime should retain the grace behavior until sampled replies are wired"
+        first_media_path.exists() && second_media_path.exists(),
+        "watermark should keep unacknowledged file reads alive without a grace window"
     );
-}
 
-#[test]
-fn screen_keeps_recent_output_media_files_for_watermark_lifetime_until_replies_are_wired() {
-    screen_keeps_recent_output_media_files_for_lifetime(KittyImageFileLifetime::Watermark);
+    screen.handle_kitty_image_terminal_response(b"Gi=251;OK", 1);
+    screen.reap_stale_kitty_output_media_files();
+    assert!(
+        !first_media_path.exists() && !second_media_path.exists(),
+        "watermark should reap reads up to the acknowledged high-water upload"
+    );
 }
 
 #[test]
@@ -5923,7 +5942,7 @@ fn screen_always_ack_lifetime_keeps_pending_output_media_until_terminal_response
         .unwrap();
     media_cache
         .borrow_mut()
-        .mark_pending_regular_file_read(1, 250, generation);
+        .mark_pending_regular_file_read(1, 250, generation, true);
 
     screen.kitty_asset_store.borrow_mut().remove_asset(250);
     screen.reap_stale_kitty_output_media_files();
