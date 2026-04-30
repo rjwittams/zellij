@@ -39,7 +39,11 @@ use zellij_utils::ipc::PixelDimensions;
 use interprocess::local_socket::Stream as LocalSocketStream;
 use zellij_utils::{
     channels::{self, ChannelWithContext, Receiver},
-    data::{Direction, FloatingPaneCoordinates, InputMode, ModeInfo, NewPanePlacement, Palette},
+    data::{
+        Direction, FloatingPaneCoordinates, InputMode, ModeInfo, NewPanePlacement, Palette,
+        PluginCapabilities,
+    },
+    input::options::{KittyImageFileLifetime, KittyImageOutputTransport},
     ipc::{ClientAttributes, ClientToServerMsg, ServerToClientMsg},
 };
 
@@ -446,7 +450,8 @@ fn create_new_screen(
         arrow_fonts,
         layout_dir,
         explicitly_disable_kitty_keyboard_protocol,
-        false, // kitty_file_output
+        vec![KittyImageOutputTransport::Direct],
+        KittyImageFileLifetime::GraceWindow,
         stacked_resize,
         None,
         false,
@@ -5510,7 +5515,8 @@ fn create_new_screen_with_message_capture(
         arrow_fonts,
         layout_dir,
         explicitly_disable_kitty_keyboard_protocol,
-        false, // kitty_file_output
+        vec![KittyImageOutputTransport::Direct],
+        KittyImageFileLifetime::GraceWindow,
         stacked_resize,
         None,
         false,
@@ -5549,10 +5555,13 @@ fn test_kitty_chunk(image_id: u32, placement_id: u32) -> KittyImageChunk {
 }
 
 #[test]
-fn screen_enables_kitty_file_output_for_regular_clients_only() {
+fn screen_enables_kitty_file_transport_for_regular_clients_only() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);
-    screen.kitty_file_output = true;
+    screen.kitty_image_output_transports = vec![
+        KittyImageOutputTransport::File,
+        KittyImageOutputTransport::Direct,
+    ];
     screen.connected_clients.borrow_mut().insert(1, false);
     screen.connected_clients.borrow_mut().insert(2, true);
 
@@ -5677,6 +5686,125 @@ fn watcher_helper_round_trips_followed_client_image_state() {
         watcher_state.resident_asset_generations().get(&92),
         Some(&1),
     );
+}
+
+#[test]
+fn screen_converting_client_to_watcher_removes_regular_image_state() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    let client_id = 1;
+
+    screen
+        .connected_clients
+        .borrow_mut()
+        .insert(client_id, false);
+    screen.active_tab_ids.insert(client_id, 0);
+    screen.tab_history.insert(client_id, vec![0]);
+    screen.followed_client_id = Some(client_id);
+    screen.regular_last_rendered_image_state.insert(
+        client_id,
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
+            resident_asset_generations: HashMap::from([(250, 1)]),
+            ..Default::default()
+        })),
+    );
+
+    screen.add_watcher_client(client_id).unwrap();
+
+    assert!(
+        screen.watcher_clients.contains_key(&client_id),
+        "client should be tracked as a watcher after conversion"
+    );
+    assert!(
+        !screen.connected_clients.borrow().contains_key(&client_id),
+        "watchers should not remain in regular client rendering state"
+    );
+    assert!(
+        !screen.active_tab_ids.contains_key(&client_id),
+        "watchers should not retain regular active-tab state"
+    );
+    assert!(
+        !screen
+            .regular_last_rendered_image_state
+            .contains_key(&client_id),
+        "watcher conversion should drop regular image state for the same client id"
+    );
+    assert_eq!(
+        screen.followed_client_id,
+        Some(client_id),
+        "watcher-only sessions keep the old followed id as a virtual render target"
+    );
+}
+
+#[test]
+fn screen_removing_watcher_removes_all_image_state_for_client_id() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    let client_id = 1;
+
+    screen
+        .connected_clients
+        .borrow_mut()
+        .insert(client_id, false);
+    screen.active_tab_ids.insert(client_id, 0);
+    screen.tab_history.insert(client_id, vec![0]);
+    screen.followed_client_id = Some(client_id);
+    screen
+        .watcher_clients
+        .insert(client_id, super::WatcherState::new(size));
+    screen.regular_last_rendered_image_state.insert(
+        client_id,
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
+            resident_asset_generations: HashMap::from([(250, 1)]),
+            ..Default::default()
+        })),
+    );
+    screen.watcher_last_rendered_image_state.insert(
+        client_id,
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
+            resident_asset_generations: HashMap::from([(251, 1)]),
+            ..Default::default()
+        })),
+    );
+
+    screen.remove_watcher_client(client_id).unwrap();
+
+    assert!(!screen.watcher_clients.contains_key(&client_id));
+    assert!(!screen.connected_clients.borrow().contains_key(&client_id));
+    assert!(!screen.active_tab_ids.contains_key(&client_id));
+    assert!(!screen
+        .regular_last_rendered_image_state
+        .contains_key(&client_id));
+    assert!(!screen
+        .watcher_last_rendered_image_state
+        .contains_key(&client_id));
+    assert_eq!(screen.followed_client_id, None);
+}
+
+#[test]
+fn screen_removing_followed_watcher_keeps_virtual_target_for_remaining_watchers() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    let followed_watcher_id = 1;
+    let remaining_watcher_id = 2;
+
+    screen.followed_client_id = Some(followed_watcher_id);
+    screen
+        .watcher_clients
+        .insert(followed_watcher_id, super::WatcherState::new(size));
+    screen
+        .watcher_clients
+        .insert(remaining_watcher_id, super::WatcherState::new(size));
+
+    screen.remove_watcher_client(followed_watcher_id).unwrap();
+
+    assert_eq!(
+        screen.followed_client_id,
+        Some(followed_watcher_id),
+        "remaining watchers should keep the previous virtual render target"
+    );
+    assert!(!screen.watcher_clients.contains_key(&followed_watcher_id));
+    assert!(screen.watcher_clients.contains_key(&remaining_watcher_id));
 }
 
 #[test]

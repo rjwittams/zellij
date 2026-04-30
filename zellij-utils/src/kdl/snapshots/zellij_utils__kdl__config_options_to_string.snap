@@ -1,6 +1,5 @@
 ---
 source: zellij-utils/src/kdl/mod.rs
-assertion_line: 7093
 expression: fake_document.to_string()
 ---
 simplified_ui true
@@ -30,7 +29,7 @@ styled_underlines false
 serialization_interval 1
 disable_session_metadata true
 support_kitty_keyboard_protocol false
-kitty_file_output true
+kitty_image_output_transports "shm" "file" "direct"
+kitty_image_file_lifetime "watermark"
 web_server true
 web_sharing "disabled"
-

@@ -1174,7 +1174,8 @@ message Options {
   optional bool mouse_click_through = 45;
   optional string theme_dark = 46;
   optional string theme_light = 47;
-  optional bool kitty_file_output = 48;
+  repeated string kitty_image_output_transports = 48;
+  optional string kitty_image_file_lifetime = 49;
 }
 
 enum OnForceClose {

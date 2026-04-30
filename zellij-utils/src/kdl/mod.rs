@@ -12,7 +12,9 @@ use crate::input::keybinds::Keybinds;
 use crate::input::layout::{
     Layout, PercentOrFixed, PluginUserConfiguration, RunPlugin, RunPluginOrAlias, TabLayoutInfo,
 };
-use crate::input::options::{Clipboard, OnForceClose, Options};
+use crate::input::options::{
+    Clipboard, KittyImageFileLifetime, KittyImageOutputTransport, OnForceClose, Options,
+};
 use crate::input::permission::{GrantedPermission, PermissionCache};
 use crate::input::plugins::PluginAliases;
 use crate::input::theme::{FrameConfig, Theme, Themes, UiConfig};
@@ -2750,9 +2752,43 @@ impl Options {
             "support_kitty_keyboard_protocol"
         )
         .map(|(v, _)| v);
-        let kitty_file_output =
-            kdl_property_first_arg_as_bool_or_error!(kdl_options, "kitty_file_output")
-                .map(|(v, _)| v);
+        let kitty_image_output_transports =
+            if let Some(property) = kdl_options.get("kitty_image_output_transports") {
+                let transports = kdl_arguments_that_are_strings(property.entries().iter())?;
+                Some(
+                    transports
+                        .into_iter()
+                        .map(|transport| {
+                            KittyImageOutputTransport::from_str(&transport).map_err(|_| {
+                                ConfigError::new_kdl_error(
+                                    format!(
+                                        "Invalid value for kitty_image_output_transports: '{}'",
+                                        transport
+                                    ),
+                                    property.span().offset(),
+                                    property.span().len(),
+                                )
+                            })
+                        })
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            } else {
+                None
+            };
+        let kitty_image_file_lifetime = match kdl_property_first_arg_as_string_or_error!(
+            kdl_options,
+            "kitty_image_file_lifetime"
+        ) {
+            Some((string, entry)) => {
+                Some(KittyImageFileLifetime::from_str(string).map_err(|_| {
+                    kdl_parsing_error!(
+                        format!("Invalid value for kitty_image_file_lifetime: '{}'", string),
+                        entry
+                    )
+                })?)
+            },
+            None => None,
+        };
         let web_server =
             kdl_property_first_arg_as_bool_or_error!(kdl_options, "web_server").map(|(v, _)| v);
         let web_sharing =
@@ -2859,7 +2895,8 @@ impl Options {
             serialization_interval,
             disable_session_metadata,
             support_kitty_keyboard_protocol,
-            kitty_file_output,
+            kitty_image_output_transports,
+            kitty_image_file_lifetime,
             web_server,
             web_sharing,
             stacked_resize,
@@ -3762,29 +3799,63 @@ impl Options {
             None
         }
     }
-    fn kitty_file_output_to_kdl(&self, add_comments: bool) -> Option<KdlNode> {
-        let comment_text = format!("{}\n{}\n{}\n{}\n{}\n{}",
+    fn kitty_image_output_transports_to_kdl(&self, add_comments: bool) -> Option<KdlNode> {
+        let comment_text = format!(
+            "{}\n{}\n{}\n{}\n{}\n{}",
             " ",
-            "// Use regular files for outbound Kitty image data instead of inline escape-code payloads.",
-            "// This should only be enabled when the terminal emulator can read files from the Zellij server host.",
+            "// Ordered preference list for outbound Kitty image transport.",
+            "// Values: \"direct\", \"file\", \"temp-file\", \"shm\".",
             "// (Requires restart)",
-            "// Default: false",
+            "// Default: \"direct\"",
             "// ",
         );
 
-        let create_node = |node_value: bool| -> KdlNode {
-            let mut node = KdlNode::new("kitty_file_output");
-            node.push(KdlValue::Bool(node_value));
+        let create_node = |node_value: &[KittyImageOutputTransport]| -> KdlNode {
+            let mut node = KdlNode::new("kitty_image_output_transports");
+            for transport in node_value {
+                node.push(KdlValue::String(transport.to_string()));
+            }
             node
         };
-        if let Some(kitty_file_output) = self.kitty_file_output {
-            let mut node = create_node(kitty_file_output);
+        if let Some(kitty_image_output_transports) = self.kitty_image_output_transports.as_ref() {
+            let mut node = create_node(kitty_image_output_transports);
             if add_comments {
                 node.set_leading(format!("{}\n", comment_text));
             }
             Some(node)
         } else if add_comments {
-            let mut node = create_node(false);
+            let mut node = create_node(&[KittyImageOutputTransport::Direct]);
+            node.set_leading(format!("{}\n// ", comment_text));
+            Some(node)
+        } else {
+            None
+        }
+    }
+
+    fn kitty_image_file_lifetime_to_kdl(&self, add_comments: bool) -> Option<KdlNode> {
+        let comment_text = format!(
+            "{}\n{}\n{}\n{}\n{}\n{}",
+            " ",
+            "// Lifetime policy for Zellij-managed regular-file Kitty image transports.",
+            "// Values: \"grace-window\", \"watermark\", \"always-ack\".",
+            "// (Requires restart)",
+            "// Default: \"grace-window\"",
+            "// ",
+        );
+
+        let create_node = |node_value: KittyImageFileLifetime| -> KdlNode {
+            let mut node = KdlNode::new("kitty_image_file_lifetime");
+            node.push(KdlValue::String(node_value.to_string()));
+            node
+        };
+        if let Some(kitty_image_file_lifetime) = self.kitty_image_file_lifetime {
+            let mut node = create_node(kitty_image_file_lifetime);
+            if add_comments {
+                node.set_leading(format!("{}\n", comment_text));
+            }
+            Some(node)
+        } else if add_comments {
+            let mut node = create_node(KittyImageFileLifetime::GraceWindow);
             node.set_leading(format!("{}\n// ", comment_text));
             Some(node)
         } else {
@@ -4373,8 +4444,14 @@ impl Options {
         {
             nodes.push(support_kitty_keyboard_protocol);
         }
-        if let Some(kitty_file_output) = self.kitty_file_output_to_kdl(add_comments) {
-            nodes.push(kitty_file_output);
+        if let Some(kitty_image_output_transports) =
+            self.kitty_image_output_transports_to_kdl(add_comments)
+        {
+            nodes.push(kitty_image_output_transports);
+        }
+        if let Some(kitty_image_file_lifetime) = self.kitty_image_file_lifetime_to_kdl(add_comments)
+        {
+            nodes.push(kitty_image_file_lifetime);
         }
         if let Some(web_server) = self.web_server_to_kdl(add_comments) {
             nodes.push(web_server);
@@ -7145,13 +7222,25 @@ fn config_options_to_string() {
         serialization_interval 1
         disable_session_metadata true
         support_kitty_keyboard_protocol false
-        kitty_file_output true
+        kitty_image_output_transports "shm" "file" "direct"
+        kitty_image_file_lifetime "watermark"
         web_server true
         web_sharing "disabled"
     "##;
     let document: KdlDocument = fake_config.parse().unwrap();
     let deserialized = Options::from_kdl(&document).unwrap();
-    assert_eq!(deserialized.kitty_file_output, Some(true));
+    assert_eq!(
+        deserialized.kitty_image_output_transports,
+        Some(vec![
+            KittyImageOutputTransport::SharedMemory,
+            KittyImageOutputTransport::File,
+            KittyImageOutputTransport::Direct
+        ])
+    );
+    assert_eq!(
+        deserialized.kitty_image_file_lifetime,
+        Some(KittyImageFileLifetime::Watermark)
+    );
     let mut serialized = Options::to_kdl(&deserialized, false);
     let mut fake_document = KdlDocument::new();
     fake_document.nodes_mut().append(&mut serialized);

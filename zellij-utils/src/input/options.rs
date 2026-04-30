@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use std::fmt;
 use std::net::IpAddr;
 
 #[derive(Copy, Clone, Debug, PartialEq, Deserialize, Serialize, ArgEnum)]
@@ -30,6 +31,80 @@ impl FromStr for OnForceClose {
             "quit" => Ok(Self::Quit),
             "detach" => Ok(Self::Detach),
             e => Err(e.to_string().into()),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum KittyImageOutputTransport {
+    #[serde(alias = "direct")]
+    Direct,
+    #[serde(alias = "file")]
+    File,
+    #[serde(alias = "temp-file")]
+    TemporaryFile,
+    #[serde(alias = "shm")]
+    SharedMemory,
+}
+
+impl fmt::Display for KittyImageOutputTransport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Direct => "direct",
+            Self::File => "file",
+            Self::TemporaryFile => "temp-file",
+            Self::SharedMemory => "shm",
+        })
+    }
+}
+
+impl FromStr for KittyImageOutputTransport {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "direct" => Ok(Self::Direct),
+            "file" => Ok(Self::File),
+            "temp-file" => Ok(Self::TemporaryFile),
+            "shm" => Ok(Self::SharedMemory),
+            _ => Err(format!("Invalid Kitty image output transport: {}", s)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+pub enum KittyImageFileLifetime {
+    #[serde(alias = "grace-window")]
+    GraceWindow,
+    #[serde(alias = "watermark")]
+    Watermark,
+    #[serde(alias = "always-ack")]
+    AlwaysAck,
+}
+
+impl Default for KittyImageFileLifetime {
+    fn default() -> Self {
+        Self::GraceWindow
+    }
+}
+
+impl fmt::Display for KittyImageFileLifetime {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::GraceWindow => "grace-window",
+            Self::Watermark => "watermark",
+            Self::AlwaysAck => "always-ack",
+        })
+    }
+}
+
+impl FromStr for KittyImageFileLifetime {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "grace-window" => Ok(Self::GraceWindow),
+            "watermark" => Ok(Self::Watermark),
+            "always-ack" => Ok(Self::AlwaysAck),
+            _ => Err(format!("Invalid Kitty image file lifetime: {}", s)),
         }
     }
 }
@@ -179,11 +254,16 @@ pub struct Options {
     #[serde(default)]
     pub support_kitty_keyboard_protocol: Option<bool>,
 
-    /// Whether to use regular files for outbound Kitty image data.
-    /// This is intended for local testing until per-client probing is available.
+    /// Ordered preference list for outbound Kitty image transport.
+    /// Unknown or unsupported transports are skipped at runtime; direct is the correctness fallback.
     #[clap(long, value_parser)]
     #[serde(default)]
-    pub kitty_file_output: Option<bool>,
+    pub kitty_image_output_transports: Option<Vec<KittyImageOutputTransport>>,
+
+    /// Lifetime policy for Zellij-managed regular-file Kitty image transports.
+    #[clap(long, value_parser)]
+    #[serde(default)]
+    pub kitty_image_file_lifetime: Option<KittyImageFileLifetime>,
 
     /// Whether to make sure a local web server is running when a new Zellij session starts.
     /// This web server will allow creating new sessions and attaching to existing ones that have
@@ -365,7 +445,12 @@ impl Options {
         let support_kitty_keyboard_protocol = other
             .support_kitty_keyboard_protocol
             .or(self.support_kitty_keyboard_protocol);
-        let kitty_file_output = other.kitty_file_output.or(self.kitty_file_output);
+        let kitty_image_output_transports = other
+            .kitty_image_output_transports
+            .or_else(|| self.kitty_image_output_transports.clone());
+        let kitty_image_file_lifetime = other
+            .kitty_image_file_lifetime
+            .or(self.kitty_image_file_lifetime);
         let web_server = other.web_server.or(self.web_server);
         let web_sharing = other.web_sharing.or(self.web_sharing);
         let stacked_resize = other.stacked_resize.or(self.stacked_resize);
@@ -423,7 +508,8 @@ impl Options {
             serialization_interval,
             disable_session_metadata,
             support_kitty_keyboard_protocol,
-            kitty_file_output,
+            kitty_image_output_transports,
+            kitty_image_file_lifetime,
             web_server,
             web_sharing,
             stacked_resize,
@@ -502,7 +588,12 @@ impl Options {
         let support_kitty_keyboard_protocol = other
             .support_kitty_keyboard_protocol
             .or(self.support_kitty_keyboard_protocol);
-        let kitty_file_output = other.kitty_file_output.or(self.kitty_file_output);
+        let kitty_image_output_transports = other
+            .kitty_image_output_transports
+            .or_else(|| self.kitty_image_output_transports.clone());
+        let kitty_image_file_lifetime = other
+            .kitty_image_file_lifetime
+            .or(self.kitty_image_file_lifetime);
         let web_server = other.web_server.or(self.web_server);
         let web_sharing = other.web_sharing.or(self.web_sharing);
         let stacked_resize = other.stacked_resize.or(self.stacked_resize);
@@ -560,7 +651,8 @@ impl Options {
             serialization_interval,
             disable_session_metadata,
             support_kitty_keyboard_protocol,
-            kitty_file_output,
+            kitty_image_output_transports,
+            kitty_image_file_lifetime,
             web_server,
             web_sharing,
             stacked_resize,

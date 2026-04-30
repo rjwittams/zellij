@@ -435,12 +435,19 @@ load_plugins {
 //
 // support_kitty_keyboard_protocol false
 
-// Use regular files for outbound Kitty image data instead of inline escape-code payloads.
-// This should only be enabled when the terminal emulator can read files from the Zellij server host.
+// Ordered preference list for outbound Kitty image transport.
+// Values: "direct", "file", "temp-file", "shm".
 // (Requires restart)
-// Default: false
+// Default: "direct"
 //
-// kitty_file_output false
+// kitty_image_output_transports "direct"
+
+// Lifetime policy for Zellij-managed regular-file Kitty image transports.
+// Values: "grace-window", "watermark", "always-ack".
+// (Requires restart)
+// Default: "grace-window"
+//
+// kitty_image_file_lifetime "grace-window"
 
 // Whether to make sure a local web server is running when a new Zellij session starts.
 // This web server will allow creating new sessions and attaching to existing ones that have

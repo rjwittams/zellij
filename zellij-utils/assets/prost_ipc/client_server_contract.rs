@@ -1949,8 +1949,11 @@ pub struct Options {
     pub theme_dark: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag="47")]
     pub theme_light: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(bool, optional, tag="48")]
-    pub kitty_file_output: ::core::option::Option<bool>,
+    #[prost(string, repeated, tag="48")]
+    pub kitty_image_output_transports:
+        ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(string, optional, tag="49")]
+    pub kitty_image_file_lifetime: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// Pane-targeting action messages
 #[allow(clippy::derive_partial_eq_without_eq)]

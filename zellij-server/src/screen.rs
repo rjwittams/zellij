@@ -90,7 +90,10 @@ use crate::{
 use zellij_utils::{
     data::{Event, InputMode, ModeInfo, Palette, PaletteColor, PluginCapabilities, Style},
     errors::{ContextType, ScreenContext},
-    input::get_mode_info,
+    input::{
+        get_mode_info,
+        options::{KittyImageFileLifetime, KittyImageOutputTransport},
+    },
     ipc::{ClientAttributes, PixelDimensions},
 };
 
@@ -1410,7 +1413,8 @@ pub(crate) struct Screen {
     #[cfg_attr(test, allow(dead_code))]
     default_layout_name: Option<String>,
     explicitly_disable_kitty_keyboard_protocol: bool,
-    kitty_file_output: bool,
+    kitty_image_output_transports: Vec<KittyImageOutputTransport>,
+    _kitty_image_file_lifetime: KittyImageFileLifetime,
     default_editor: Option<PathBuf>,
     web_clients_allowed: bool,
     web_sharing: WebSharing,
@@ -1541,7 +1545,8 @@ impl Screen {
         arrow_fonts: bool,
         layout_dir: Option<PathBuf>,
         explicitly_disable_kitty_keyboard_protocol: bool,
-        kitty_file_output: bool,
+        kitty_image_output_transports: Vec<KittyImageOutputTransport>,
+        kitty_image_file_lifetime: KittyImageFileLifetime,
         stacked_resize: bool,
         default_editor: Option<PathBuf>,
         web_clients_allowed: bool,
@@ -1603,7 +1608,8 @@ impl Screen {
             resurrectable_sessions_cache,
             layout_dir,
             explicitly_disable_kitty_keyboard_protocol,
-            kitty_file_output,
+            kitty_image_output_transports,
+            _kitty_image_file_lifetime: kitty_image_file_lifetime,
             default_editor,
             web_clients_allowed,
             web_sharing,
@@ -2530,7 +2536,10 @@ impl Screen {
     }
 
     fn configure_kitty_file_output_for_regular_clients(&self, output: &mut Output) {
-        if !self.kitty_file_output {
+        if !self
+            .kitty_image_output_transports
+            .contains(&KittyImageOutputTransport::File)
+        {
             return;
         }
         for (client_id, is_web_client) in self.connected_clients.borrow().iter() {
@@ -3269,6 +3278,14 @@ impl Screen {
             }
         }
 
+        self.remove_regular_client_state(client_id)?;
+        self.log_and_report_session_state()
+            .with_context(err_context)
+    }
+
+    fn remove_regular_client_state(&mut self, client_id: ClientId) -> Result<()> {
+        let err_context = || format!("failed to remove client {client_id}");
+
         for (_, tab) in self.tabs.iter_mut() {
             tab.remove_client(client_id);
             if tab.has_no_connected_clients() {
@@ -3293,11 +3310,11 @@ impl Screen {
             self.recompute_tab_size(prev_tab_id)
                 .with_context(err_context)?;
         }
-        self.log_and_report_session_state()
-            .with_context(err_context)
+        Ok(())
     }
 
     pub fn add_watcher_client(&mut self, client_id: ClientId) -> Result<()> {
+        self.remove_regular_client_state(client_id)?;
         // Initialize with a default size - will be updated when we receive the actual size
         let default_size = Size { rows: 24, cols: 80 }; // Reasonable default
         self.watcher_clients
@@ -3310,9 +3327,26 @@ impl Screen {
         Ok(())
     }
 
-    pub fn remove_watcher_client(&mut self, client_id: ClientId) {
+    pub fn remove_watcher_client(&mut self, client_id: ClientId) -> Result<()> {
+        if Some(client_id) == self.followed_client_id {
+            let next_regular_client_id = self
+                .connected_clients
+                .borrow()
+                .keys()
+                .copied()
+                .find(|id| !self.watcher_clients.contains_key(id) && id != &client_id);
+            self.followed_client_id = if next_regular_client_id.is_some() {
+                next_regular_client_id
+            } else if self.watcher_clients.keys().any(|id| id != &client_id) {
+                Some(client_id)
+            } else {
+                None
+            };
+        }
         self.watcher_clients.remove(&client_id);
         self.watcher_last_rendered_image_state.remove(&client_id);
+        self.remove_regular_client_state(client_id)?;
+        Ok(())
     }
 
     pub fn set_followed_client(&mut self, client_id: ClientId) -> Result<()> {
@@ -5828,7 +5862,10 @@ pub(crate) fn screen_thread_main(
         // explicitly_disable_kitty_keyboard_protocol is false and vice versa
         .unwrap_or(false); // by default, we try to support this if the terminal supports it and
                            // the program running inside a pane requests it
-    let kitty_file_output = config_options.kitty_file_output.unwrap_or(false);
+    let kitty_image_output_transports = config_options
+        .kitty_image_output_transports
+        .unwrap_or_else(|| vec![KittyImageOutputTransport::Direct]);
+    let kitty_image_file_lifetime = config_options.kitty_image_file_lifetime.unwrap_or_default();
     let stacked_resize = config_options.stacked_resize.unwrap_or(true);
     let web_clients_allowed = config_options
         .web_sharing
@@ -5872,7 +5909,8 @@ pub(crate) fn screen_thread_main(
         arrow_fonts,
         layout_dir,
         explicitly_disable_kitty_keyboard_protocol,
-        kitty_file_output,
+        kitty_image_output_transports,
+        kitty_image_file_lifetime,
         stacked_resize,
         default_editor,
         web_clients_allowed,
@@ -9515,7 +9553,9 @@ pub(crate) fn screen_thread_main(
                 screen.render(None)?;
             },
             ScreenInstruction::RemoveWatcherClient(client_id) => {
-                screen.remove_watcher_client(client_id);
+                screen
+                    .remove_watcher_client(client_id)
+                    .context("failed to remove watcher client")?;
             },
             ScreenInstruction::SetFollowedClient(client_id) => {
                 screen

@@ -707,7 +707,15 @@ impl From<crate::input::options::Options>
             serialization_interval: options.serialization_interval,
             disable_session_metadata: options.disable_session_metadata,
             support_kitty_keyboard_protocol: options.support_kitty_keyboard_protocol,
-            kitty_file_output: options.kitty_file_output,
+            kitty_image_output_transports: options
+                .kitty_image_output_transports
+                .unwrap_or_default()
+                .into_iter()
+                .map(|transport| transport.to_string())
+                .collect(),
+            kitty_image_file_lifetime: options
+                .kitty_image_file_lifetime
+                .map(|lifetime| lifetime.to_string()),
             web_server: options.web_server,
             web_sharing: options.web_sharing.map(|w| match w {
                 crate::data::WebSharing::On => ProtoWebSharing::On as i32,
@@ -801,7 +809,28 @@ impl TryFrom<crate::client_server_contract::client_server_contract::Options>
             serialization_interval: options.serialization_interval,
             disable_session_metadata: options.disable_session_metadata,
             support_kitty_keyboard_protocol: options.support_kitty_keyboard_protocol,
-            kitty_file_output: options.kitty_file_output,
+            kitty_image_output_transports: if options.kitty_image_output_transports.is_empty() {
+                None
+            } else {
+                Some(
+                    options
+                        .kitty_image_output_transports
+                        .into_iter()
+                        .map(|transport| {
+                            std::str::FromStr::from_str(&transport).map_err(|_| {
+                                anyhow!("Invalid Kitty image output transport: {}", transport)
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?,
+                )
+            },
+            kitty_image_file_lifetime: options
+                .kitty_image_file_lifetime
+                .map(|lifetime| {
+                    std::str::FromStr::from_str(&lifetime)
+                        .map_err(|_| anyhow!("Invalid Kitty image file lifetime: {}", lifetime))
+                })
+                .transpose()?,
             web_server: options.web_server,
             web_sharing: options
                 .web_sharing

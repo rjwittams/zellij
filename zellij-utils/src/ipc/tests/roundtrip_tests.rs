@@ -13,7 +13,9 @@ use crate::input::layout::{
     TiledPaneLayout,
 };
 use crate::input::mouse::{MouseEvent, MouseEventType};
-use crate::input::options::{Clipboard, OnForceClose, Options};
+use crate::input::options::{
+    Clipboard, KittyImageFileLifetime, KittyImageOutputTransport, OnForceClose, Options,
+};
 use crate::ipc::{
     ClientToServerMsg, ColorRegister, ExitReason, PaneReference, PixelDimensions, ServerToClientMsg,
 };
@@ -461,7 +463,12 @@ fn test_client_messages() {
                 serialization_interval: Some(1),
                 disable_session_metadata: Some(true),
                 support_kitty_keyboard_protocol: Some(true),
-                kitty_file_output: Some(true),
+                kitty_image_output_transports: Some(vec![
+                    KittyImageOutputTransport::SharedMemory,
+                    KittyImageOutputTransport::File,
+                    KittyImageOutputTransport::Direct,
+                ]),
+                kitty_image_file_lifetime: Some(KittyImageFileLifetime::Watermark),
                 web_server: Some(true),
                 web_sharing: Some(WebSharing::On),
                 stacked_resize: Some(true),
