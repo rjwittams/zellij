@@ -237,7 +237,7 @@ struct PendingKittyTransmit {
     height: u32,
     placement: Option<KittyPlacement>,
     reply_context: PendingKittyReplyContext,
-    payload: Vec<u8>,
+    media_source: KittyMediaSource,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -273,6 +273,73 @@ enum KittyTransmissionMedium {
     RegularFile,
     TemporaryFile,
     SharedMemory,
+}
+
+#[derive(Clone, Debug)]
+enum KittyMediaSource {
+    Direct(Vec<u8>),
+    RegularFile {
+        path: PathBuf,
+        size: Option<usize>,
+        offset: u64,
+    },
+}
+
+impl KittyMediaSource {
+    fn from_apc(apc: &KittyApc<'_>, medium: KittyTransmissionMedium) -> Option<Self> {
+        match medium {
+            KittyTransmissionMedium::Direct => Some(KittyMediaSource::Direct(
+                decode_kitty_transport_payload(apc.payload)?,
+            )),
+            KittyTransmissionMedium::RegularFile => {
+                let path_payload = decode_kitty_transport_payload(apc.payload)?;
+                let (size, offset) = parse_kitty_payload_byte_range(apc.size, apc.offset)?;
+                Some(KittyMediaSource::RegularFile {
+                    path: kitty_path_payload(&path_payload)?.to_path_buf(),
+                    size,
+                    offset,
+                })
+            },
+            KittyTransmissionMedium::TemporaryFile => {
+                Some(KittyMediaSource::Direct(read_kitty_transmission_payload(
+                    apc.payload,
+                    apc.medium,
+                    apc.size,
+                    apc.offset,
+                    apc.raw_payload_size(),
+                )?))
+            },
+            KittyTransmissionMedium::SharedMemory => {
+                Some(KittyMediaSource::Direct(read_kitty_transmission_payload(
+                    apc.payload,
+                    apc.medium,
+                    apc.size,
+                    apc.offset,
+                    apc.raw_payload_size(),
+                )?))
+            },
+        }
+    }
+
+    fn into_payload(self) -> Result<Vec<u8>, String> {
+        match self {
+            KittyMediaSource::Direct(payload) => Ok(payload),
+            KittyMediaSource::RegularFile { path, size, offset } => {
+                read_kitty_file_payload(&path, size, offset)
+                    .ok_or_else(|| "EINVAL:Invalid or unsupported kitty command".to_string())
+            },
+        }
+    }
+
+    fn append_direct_payload(&mut self, payload: Vec<u8>) -> bool {
+        match self {
+            KittyMediaSource::Direct(existing_payload) => {
+                existing_payload.extend(payload);
+                true
+            },
+            KittyMediaSource::RegularFile { .. } => false,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -592,6 +659,9 @@ impl KittyImageState {
         let image_data = match pending.into_image_data() {
             Ok(image_data) => image_data,
             Err(message) => {
+                if !replaced_existing_asset {
+                    self.remove_protocol_references_for_internal_image_id(image_id);
+                }
                 return KittyApcOutcome {
                     effect: None,
                     reply: build_non_query_reply(
@@ -728,7 +798,7 @@ impl KittyImageState {
                 height,
                 mut placement,
                 more,
-                payload,
+                media_source,
             } => {
                 let resolved_protocol_image_id =
                     self.protocol_image_id_for_create(protocol_image_id, image_number);
@@ -766,7 +836,7 @@ impl KittyImageState {
                     height,
                     placement,
                     reply_context,
-                    payload,
+                    media_source,
                 });
                 if more {
                     KittyApcOutcome {
@@ -953,7 +1023,17 @@ impl KittyImageState {
                 if apc.quiet.is_some() {
                     pending.reply_context.quiet = apc.quiet();
                 }
-                pending.payload.extend(payload);
+                if !pending.media_source.append_direct_payload(payload) {
+                    return KittyApcOutcome {
+                        effect: None,
+                        reply: build_non_query_reply(
+                            &pending.reply_context,
+                            pending.protocol_image_id,
+                            pending.image_number,
+                            Some(non_query_failure_message(pending.reply_context.kind).to_string()),
+                        ),
+                    };
+                }
                 if more {
                     KittyApcOutcome {
                         effect: None,
@@ -1899,7 +1979,7 @@ enum ParsedKittyCommand {
         height: u32,
         placement: Option<KittyPlacement>,
         more: bool,
-        payload: Vec<u8>,
+        media_source: KittyMediaSource,
     },
     DisplayPlacement {
         protocol_image_id: Option<u32>,
@@ -1996,9 +2076,11 @@ impl KittyPlacement {
 impl PendingKittyTransmit {
     fn into_image_data(self) -> Result<KittyImageData, String> {
         let payload = match self.compression {
-            Some(KittyTransportCompression::Zlib) => decompress_to_vec_zlib(&self.payload)
-                .map_err(|_| "EINVAL:Invalid image payload encoding".to_string())?,
-            None => self.payload,
+            Some(KittyTransportCompression::Zlib) => {
+                decompress_to_vec_zlib(&self.media_source.into_payload()?)
+                    .map_err(|_| "EINVAL:Invalid image payload encoding".to_string())?
+            },
+            None => self.media_source.into_payload()?,
         };
         Ok(match self.image_format {
             KittyImageFormat::Png => {
@@ -2463,12 +2545,12 @@ impl ParsedKittyCommand {
         if more && transmission_medium != KittyTransmissionMedium::Direct {
             return None;
         }
-        let payload = apc.read_payload()?;
 
         if let Some(action) = apc.action {
             let placement = apc.placement();
             match action {
                 "T" | "t" => {
+                    let media_source = KittyMediaSource::from_apc(apc, transmission_medium)?;
                     let image_format = match apc.format.unwrap_or("32") {
                         "100" => KittyImageFormat::Png,
                         "24" => KittyImageFormat::Rgb,
@@ -2505,7 +2587,7 @@ impl ParsedKittyCommand {
                             None
                         },
                         more,
-                        payload,
+                        media_source,
                     })
                 },
                 "p" => {
@@ -2523,6 +2605,12 @@ impl ParsedKittyCommand {
                 _ => None,
             }
         } else {
+            let payload = match transmission_medium {
+                KittyTransmissionMedium::Direct => decode_kitty_transport_payload(apc.payload)?,
+                KittyTransmissionMedium::RegularFile
+                | KittyTransmissionMedium::TemporaryFile
+                | KittyTransmissionMedium::SharedMemory => return None,
+            };
             Some(ParsedKittyCommand::TransmitChunk { more, payload })
         }
     }
@@ -3375,6 +3463,62 @@ mod tests {
     }
 
     #[test]
+    fn kitty_parser_defers_regular_file_reads_until_materialization() {
+        let path = std::env::temp_dir().join(format!(
+            "zellij-kitty-missing-file-media-{}",
+            std::process::id()
+        ));
+        std::fs::remove_file(&path).ok();
+        let apc = kitty_regular_file_transmit_apc(620, &path, None, None);
+
+        assert!(
+            matches!(
+                ParsedKittyCommand::parse(&KittyApc::parse(&apc).unwrap()),
+                Some(ParsedKittyCommand::ImmediateTransmit {
+                    protocol_image_id: Some(620),
+                    ..
+                })
+            ),
+            "regular-file transmit parsing should not read the referenced file"
+        );
+    }
+
+    #[test]
+    fn kitty_missing_regular_file_does_not_register_protocol_mapping() {
+        let path = std::env::temp_dir().join(format!(
+            "zellij-kitty-missing-file-media-{}",
+            std::process::id()
+        ));
+        std::fs::remove_file(&path).ok();
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_regular_file_transmit_apc(621, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("EINVAL:Invalid or unsupported kitty command"),
+            "missing regular file should preserve the previous parse-failure reply, got {reply:?}"
+        );
+        assert!(
+            !kitty_state
+                .protocol_image_id_to_internal_id
+                .contains_key(&621),
+            "failed materialization should not leave a protocol image mapping"
+        );
+        assert!(kitty_asset_store.borrow().image_data(621).is_none());
+    }
+
+    #[test]
     fn parsed_kitty_apc_matches_query_delete_and_transmit_parsing() {
         let query = KittyApc::parse(b"Gq=0,a=q,t=d,f=24,s=1,v=1,i=41;EjRW").unwrap();
         assert_eq!(
@@ -3397,7 +3541,7 @@ mod tests {
                 image_format: KittyImageFormat::Rgb,
                 width: 1,
                 height: 1,
-                ref payload,
+                media_source: KittyMediaSource::Direct(ref payload),
                 ..
             }) if payload == &[0x12, 0x34, 0x56]
         ));
@@ -3861,7 +4005,7 @@ mod tests {
             image_format,
             width,
             height,
-            payload: parsed_payload,
+            media_source: KittyMediaSource::Direct(parsed_payload),
             ..
         } = parsed
         else {
@@ -3889,7 +4033,7 @@ mod tests {
                 placement_id: None,
                 image_number: None,
             },
-            payload: payload.clone(),
+            media_source: KittyMediaSource::Direct(payload.clone()),
         }
         .into_image_data()
         .unwrap();
