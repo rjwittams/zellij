@@ -5672,10 +5672,7 @@ fn watcher_helper_round_trips_followed_client_image_state() {
         watcher_state.rendered_image_state().explicit_chunks,
         vec![current_chunk]
     );
-    assert_eq!(
-        watcher_state.resident_asset_generations().get(&91),
-        Some(&1),
-    );
+    assert_eq!(watcher_state.resident_asset_generations().get(&91), None,);
     assert_eq!(
         watcher_state.resident_asset_generations().get(&92),
         Some(&1),

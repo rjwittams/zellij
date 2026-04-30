@@ -275,7 +275,7 @@ enum KittyTransmissionMedium {
     SharedMemory,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct KittyImageState {
     kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     placements: Vec<KittyPlacement>,
@@ -285,6 +285,38 @@ pub struct KittyImageState {
     protocol_image_id_to_image_number: HashMap<u32, u32>,
     next_generated_protocol_image_id: u32,
     pending_transmit: Option<PendingKittyTransmit>,
+}
+
+impl Clone for KittyImageState {
+    fn clone(&self) -> Self {
+        for placement in &self.placements {
+            self.kitty_asset_store
+                .borrow_mut()
+                .add_placement_reference(placement.image_id);
+        }
+        Self {
+            kitty_asset_store: self.kitty_asset_store.clone(),
+            placements: self.placements.clone(),
+            protocol_image_id_to_internal_id: self.protocol_image_id_to_internal_id.clone(),
+            internal_image_id_to_protocol_image_ids: self
+                .internal_image_id_to_protocol_image_ids
+                .clone(),
+            image_number_to_protocol_image_ids: self.image_number_to_protocol_image_ids.clone(),
+            protocol_image_id_to_image_number: self.protocol_image_id_to_image_number.clone(),
+            next_generated_protocol_image_id: self.next_generated_protocol_image_id,
+            pending_transmit: self.pending_transmit.clone(),
+        }
+    }
+}
+
+impl Drop for KittyImageState {
+    fn drop(&mut self) {
+        for placement in &self.placements {
+            self.kitty_asset_store
+                .borrow_mut()
+                .remove_placement_reference(placement.image_id);
+        }
+    }
 }
 
 fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
@@ -485,6 +517,41 @@ impl KittyImageState {
         self.kitty_asset_store.clone()
     }
 
+    fn push_placement(&mut self, placement: KittyPlacement) {
+        self.kitty_asset_store
+            .borrow_mut()
+            .add_placement_reference(placement.image_id);
+        self.placements.push(placement);
+    }
+
+    fn retain_placements<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(&KittyPlacement) -> bool,
+    {
+        let mut removed_image_ids = Vec::new();
+        self.placements.retain(|placement| {
+            let should_keep = keep(placement);
+            if !should_keep {
+                removed_image_ids.push(placement.image_id);
+            }
+            should_keep
+        });
+        for image_id in removed_image_ids {
+            self.kitty_asset_store
+                .borrow_mut()
+                .remove_placement_reference(image_id);
+        }
+    }
+
+    fn clear_placements(&mut self) {
+        for placement in &self.placements {
+            self.kitty_asset_store
+                .borrow_mut()
+                .remove_placement_reference(placement.image_id);
+        }
+        self.placements.clear();
+    }
+
     pub fn image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {
         self.kitty_asset_store.borrow().image_dimensions(image_id)
     }
@@ -552,7 +619,7 @@ impl KittyImageState {
         }
         let asset_id = ImageAssetId(image_id as u64);
         if replaced_existing_asset {
-            self.placements.retain(|p| p.image_id != image_id);
+            self.retain_placements(|p| p.image_id != image_id);
         }
         let Some(placement) = placement else {
             let effect = if replaced_existing_asset {
@@ -572,7 +639,7 @@ impl KittyImageState {
                 reply: build_non_query_reply(&reply_context, protocol_image_id, image_number, None),
             };
         };
-        self.placements.retain(|p| {
+        self.retain_placements(|p| {
             if let Some(new_placement_id) = placement.placement_id {
                 !(p.image_id == placement.image_id && p.placement_id == Some(new_placement_id))
             } else {
@@ -593,7 +660,7 @@ impl KittyImageState {
             scrollback_row,
             character_cell_size,
         );
-        self.placements.push(placement.clone());
+        self.push_placement(placement.clone());
         KittyApcOutcome {
             effect: Some(KittyApcEffect::Placement(KittyImageInsertion {
                 asset_id,
@@ -831,7 +898,7 @@ impl KittyImageState {
                     }
                 }
                 placement.anchor = anchor;
-                self.placements.retain(|p| {
+                self.retain_placements(|p| {
                     if let Some(new_placement_id) = placement.placement_id {
                         !(p.image_id == placement.image_id
                             && p.placement_id == Some(new_placement_id))
@@ -853,7 +920,7 @@ impl KittyImageState {
                     placement.cursor_movement_policy
                 };
                 let placement_anchor = placement.anchor.clone();
-                self.placements.push(placement.clone());
+                self.push_placement(placement.clone());
                 KittyApcOutcome {
                     effect: Some(KittyApcEffect::Placement(KittyImageInsertion {
                         asset_id: ImageAssetId(image_id as u64),
@@ -1008,7 +1075,7 @@ impl KittyImageState {
     }
 
     pub fn clear(&mut self) {
-        self.placements.clear();
+        self.clear_placements();
         self.protocol_image_id_to_internal_id.clear();
         self.internal_image_id_to_protocol_image_ids.clear();
         self.image_number_to_protocol_image_ids.clear();
@@ -1113,14 +1180,19 @@ impl KittyImageState {
                 break;
             }
         }
-        let removed_internal_image_ids: std::collections::HashSet<u32> = removed_indices
+        let removed_placements: Vec<_> = removed_indices
             .iter()
-            .filter_map(|index| {
-                self.placements
-                    .get(*index)
-                    .map(|placement| placement.image_id)
-            })
+            .filter_map(|index| self.placements.get(*index).cloned())
             .collect();
+        let removed_internal_image_ids: std::collections::HashSet<u32> = removed_placements
+            .iter()
+            .map(|placement| placement.image_id)
+            .collect();
+        for placement in &removed_placements {
+            self.kitty_asset_store
+                .borrow_mut()
+                .remove_placement_reference(placement.image_id);
+        }
         self.placements = self
             .placements
             .iter()
@@ -1134,7 +1206,12 @@ impl KittyImageState {
                     .placements
                     .iter()
                     .any(|placement| placement.image_id == internal_image_id);
-                if has_remaining_references {
+                if has_remaining_references
+                    || self
+                        .kitty_asset_store
+                        .borrow()
+                        .has_placement_references(internal_image_id)
+                {
                     continue;
                 }
                 self.kitty_asset_store
@@ -3399,6 +3476,81 @@ mod tests {
         assert!(
             evicted_place_reply.contains("ENOENT"),
             "placing evicted image should fail, got {evicted_place_reply:?}"
+        );
+    }
+
+    #[test]
+    fn local_quota_eviction_keeps_assets_visible_in_other_panes() {
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::with_decoded_byte_quota(8)));
+        let mut first_pane_kitty_state = KittyImageState::new(kitty_asset_store.clone());
+        let mut second_pane_kitty_state = KittyImageState::new(kitty_asset_store.clone());
+        let anchor = FlowAnchor::LogicalRow {
+            logical_row: 0,
+            column: 0,
+        };
+        let cell_size = Some(SizeInPixels {
+            width: 1,
+            height: 1,
+        });
+
+        let visible_reply = first_pane_kitty_state.handle_apc(
+            b"Gq=0,a=T,C=1,f=24,s=1,v=1,i=141,p=1,c=1,r=1;EjRW",
+            anchor.clone(),
+            0,
+            0,
+            cell_size,
+        );
+        assert!(
+            visible_reply
+                .reply
+                .unwrap()
+                .to_apc_response()
+                .contains("OK"),
+            "first pane visible placement should succeed"
+        );
+        let visible_internal_image_id = *first_pane_kitty_state
+            .protocol_image_id_to_internal_id
+            .get(&141)
+            .expect("visible image should have an internal id");
+
+        let stored_first_reply = second_pane_kitty_state.handle_apc(
+            b"Gq=0,a=t,f=24,s=1,v=1,i=142;EjRW",
+            anchor.clone(),
+            0,
+            0,
+            cell_size,
+        );
+        assert!(
+            stored_first_reply
+                .reply
+                .unwrap()
+                .to_apc_response()
+                .contains("OK"),
+            "second pane first stored image should succeed"
+        );
+
+        let stored_second_reply = second_pane_kitty_state.handle_apc(
+            b"Gq=0,a=t,f=24,s=1,v=1,i=143;EjRW",
+            anchor,
+            0,
+            0,
+            cell_size,
+        );
+        assert!(
+            stored_second_reply
+                .reply
+                .unwrap()
+                .to_apc_response()
+                .contains("OK"),
+            "second pane second stored image should succeed"
+        );
+
+        assert!(
+            kitty_asset_store
+                .borrow()
+                .image_data(visible_internal_image_id)
+                .is_some(),
+            "quota eviction in one pane must not remove another pane's visible asset"
         );
     }
 

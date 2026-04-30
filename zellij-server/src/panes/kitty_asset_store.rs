@@ -30,6 +30,7 @@ pub struct KittyAssetStore {
     next_asset_id: u32,
     assets: HashMap<u32, KittyAsset>,
     asset_order: Vec<u32>,
+    placement_ref_counts: HashMap<u32, usize>,
     decoded_bytes_total: usize,
     decoded_byte_quota: usize,
 }
@@ -40,6 +41,7 @@ impl Default for KittyAssetStore {
             next_asset_id: 1,
             assets: HashMap::new(),
             asset_order: Vec::new(),
+            placement_ref_counts: HashMap::new(),
             decoded_bytes_total: 0,
             decoded_byte_quota: KITTY_DEFAULT_DECODED_BYTE_QUOTA,
         }
@@ -108,6 +110,7 @@ impl KittyAssetStore {
     pub fn remove_asset(&mut self, image_id: u32) -> Option<KittyAsset> {
         self.asset_order
             .retain(|existing_id| *existing_id != image_id);
+        self.placement_ref_counts.remove(&image_id);
         let removed_asset = self.assets.remove(&image_id);
         if let Some(asset) = removed_asset.as_ref() {
             self.decoded_bytes_total = self
@@ -129,6 +132,28 @@ impl KittyAssetStore {
             .map(|asset| kitty_image_dimensions(&asset.image_data))
     }
 
+    pub fn add_placement_reference(&mut self, image_id: u32) {
+        *self.placement_ref_counts.entry(image_id).or_default() += 1;
+    }
+
+    pub fn remove_placement_reference(&mut self, image_id: u32) {
+        let Some(ref_count) = self.placement_ref_counts.get_mut(&image_id) else {
+            return;
+        };
+        *ref_count = ref_count.saturating_sub(1);
+        if *ref_count == 0 {
+            self.placement_ref_counts.remove(&image_id);
+        }
+    }
+
+    pub fn has_placement_references(&self, image_id: u32) -> bool {
+        self.placement_ref_counts
+            .get(&image_id)
+            .copied()
+            .unwrap_or_default()
+            > 0
+    }
+
     fn evict_to_decoded_byte_quota(
         &mut self,
         newest_image_id: u32,
@@ -137,7 +162,9 @@ impl KittyAssetStore {
         let mut evicted_image_ids = Vec::new();
         while self.decoded_bytes_total > self.decoded_byte_quota {
             let Some(candidate_image_id) = self.asset_order.iter().copied().find(|image_id| {
-                *image_id != newest_image_id && !protected_image_ids.contains(image_id)
+                *image_id != newest_image_id
+                    && !protected_image_ids.contains(image_id)
+                    && !self.has_placement_references(*image_id)
             }) else {
                 break;
             };

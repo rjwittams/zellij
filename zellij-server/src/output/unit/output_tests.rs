@@ -1491,7 +1491,7 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
 }
 
 #[test]
-fn test_kitty_diff_serialization_places_resident_asset_without_retransmit() {
+fn test_kitty_diff_serialization_retransmits_asset_after_resident_retirement() {
     let client_ids = create_test_clients(1);
     let mut chunk = create_kitty_chunk(1, 2, 2);
     chunk.placement_id = Some(pid(10));
@@ -1517,8 +1517,8 @@ fn test_kitty_diff_serialization_places_resident_asset_without_retransmit() {
     let client_output = serialized.get(&1).unwrap();
 
     assert!(
-        !client_output.contains("a=t"),
-        "re-placing a resident asset should not retransmit image bytes"
+        client_output.contains("a=t"),
+        "re-placing a retired resident asset should retransmit image bytes"
     );
     assert!(
         client_output.contains("a=p"),
@@ -1879,6 +1879,36 @@ fn test_output_drops_resident_assets_that_are_no_longer_local() {
     assert!(
         output.last_rendered_image_state_for_client(1).is_none(),
         "resident asset generations without matching local assets should not persist"
+    );
+}
+
+#[test]
+fn test_output_drops_resident_assets_that_are_no_longer_desired() {
+    let client_ids = create_test_clients(1);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        RenderedImageState {
+            resident_asset_generations: HashMap::from([(250, 1)]),
+            ..Default::default()
+        },
+    )]));
+    output
+        .add_character_chunks_to_client(
+            1,
+            vec![create_character_chunk_from_str("TEXT-ONLY", 0, 0)],
+            None,
+        )
+        .unwrap();
+
+    output.serialize().unwrap();
+
+    assert!(
+        output.last_rendered_image_state_for_client(1).is_none(),
+        "resident asset generations with no desired placements should not persist"
     );
 }
 

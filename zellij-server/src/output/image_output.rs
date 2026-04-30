@@ -978,13 +978,21 @@ impl ImageOutput {
                     .clone()
             })
             .unwrap_or_default();
+        let desired_resident_assets = current_kitty_scene
+            .as_ref()
+            .map(|scene_state| scene_state.resident_asset_generations.clone())
+            .unwrap_or_default();
         let next_resident_assets = {
             let kitty_asset_store = self.kitty_asset_store.borrow();
-            Self::next_resident_assets_for_plan(
+            let mut next_resident_assets = Self::next_resident_assets_for_plan(
                 &kitty_asset_store,
                 previous_resident_assets,
                 kitty_plan,
-            )
+            );
+            next_resident_assets.retain(|image_id, generation| {
+                desired_resident_assets.get(image_id) == Some(generation)
+            });
+            next_resident_assets
         };
         let rendered_resident_assets = match current_kitty_scene.as_mut() {
             Some(scene_state) => {
