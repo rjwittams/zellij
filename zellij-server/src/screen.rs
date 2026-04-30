@@ -75,7 +75,7 @@ use crate::panes::terminal_pane::{BRACKETED_PASTE_BEGIN, BRACKETED_PASTE_END};
 use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
 
 use crate::{
-    output::{KittyOutputMediaCache, LastRenderedImageState, Output},
+    output::{KittyOutputMediaCache, KittyOutputMediaRetention, LastRenderedImageState, Output},
     panes::kitty_asset_store::KittyAssetStore,
     panes::sixel::SixelImageStore,
     panes::PaneId,
@@ -1414,7 +1414,7 @@ pub(crate) struct Screen {
     default_layout_name: Option<String>,
     explicitly_disable_kitty_keyboard_protocol: bool,
     kitty_image_output_transports: Vec<KittyImageOutputTransport>,
-    _kitty_image_file_lifetime: KittyImageFileLifetime,
+    kitty_image_file_lifetime: KittyImageFileLifetime,
     default_editor: Option<PathBuf>,
     web_clients_allowed: bool,
     web_sharing: WebSharing,
@@ -1609,7 +1609,7 @@ impl Screen {
             layout_dir,
             explicitly_disable_kitty_keyboard_protocol,
             kitty_image_output_transports,
-            _kitty_image_file_lifetime: kitty_image_file_lifetime,
+            kitty_image_file_lifetime,
             default_editor,
             web_clients_allowed,
             web_sharing,
@@ -2550,6 +2550,7 @@ impl Screen {
     }
 
     fn reap_stale_kitty_output_media_files(&mut self) {
+        let retention = self.kitty_output_media_retention();
         let live_resident_asset_generations = {
             let connected_clients = self.connected_clients.borrow();
             let kitty_asset_store = self.kitty_asset_store.borrow();
@@ -2578,11 +2579,22 @@ impl Screen {
             }
             keep
         };
-        self.kitty_output_media_cache
-            .borrow_mut()
-            .retain_files(|image_id, generation| {
+        self.kitty_output_media_cache.borrow_mut().retain_files(
+            retention,
+            |image_id, generation| {
                 live_resident_asset_generations.contains(&(image_id, generation))
-            });
+            },
+        );
+    }
+
+    fn kitty_output_media_retention(&self) -> KittyOutputMediaRetention {
+        match self.kitty_image_file_lifetime {
+            KittyImageFileLifetime::GraceWindow
+            | KittyImageFileLifetime::Watermark
+            | KittyImageFileLifetime::AlwaysAck => {
+                KittyOutputMediaRetention::KeepRecentlyReferenced
+            },
+        }
     }
 
     pub fn render_to_clients(&mut self) -> Result<()> {

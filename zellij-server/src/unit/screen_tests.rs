@@ -5848,6 +5848,59 @@ fn screen_keeps_recent_output_media_files_for_assets_that_are_no_longer_local() 
     );
 }
 
+fn screen_keeps_recent_output_media_files_for_lifetime(
+    kitty_image_file_lifetime: KittyImageFileLifetime,
+) {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    screen.kitty_image_file_lifetime = kitty_image_file_lifetime;
+    screen.kitty_output_media_cache = media_cache.clone();
+    screen.connected_clients.borrow_mut().insert(1, false);
+
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+    screen
+        .kitty_asset_store
+        .borrow_mut()
+        .insert_asset(250, image_data.clone());
+    let generation = screen.kitty_asset_store.borrow().generation(250).unwrap();
+    let media_path = media_cache
+        .borrow_mut()
+        .ensure_regular_file(250, generation, &image_data)
+        .unwrap();
+    screen.regular_last_rendered_image_state.insert(
+        1,
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
+            resident_asset_generations: HashMap::from([(250, generation)]),
+            ..Default::default()
+        })),
+    );
+
+    screen.kitty_asset_store.borrow_mut().remove_asset(250);
+    screen.reap_stale_kitty_output_media_files();
+
+    assert!(
+        media_path.exists(),
+        "reply-dependent lifetime modes should retain the grace behavior until terminal replies are wired"
+    );
+}
+
+#[test]
+fn screen_keeps_recent_output_media_files_for_watermark_lifetime_until_replies_are_wired() {
+    screen_keeps_recent_output_media_files_for_lifetime(KittyImageFileLifetime::Watermark);
+}
+
+#[test]
+fn screen_keeps_recent_output_media_files_for_always_ack_lifetime_until_replies_are_wired() {
+    screen_keeps_recent_output_media_files_for_lifetime(KittyImageFileLifetime::AlwaysAck);
+}
+
 #[test]
 fn screen_reaps_old_output_media_files_for_assets_that_are_no_longer_local() {
     let size = Size { cols: 80, rows: 20 };

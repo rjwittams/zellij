@@ -28,7 +28,7 @@ use zellij_utils::pane_size::SizeInPixels;
 
 use self::image_fragment::PreparedImageOutput;
 use self::image_output::ImageOutput;
-pub use self::kitty_output_media::KittyOutputMediaCache;
+pub use self::kitty_output_media::{KittyOutputMediaCache, KittyOutputMediaRetention};
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use zellij_utils::pane_size::{PaneGeom, Size};
 

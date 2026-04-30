@@ -5,8 +5,8 @@ use super::super::kitty_diff::{
 };
 use super::super::{
     CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, KittyOutputMediaCache,
-    KittyPlaceholderCellRender, LastRenderedImageState, Output, OutputBuffer,
-    PaneImageRenderOutput, PlacementId, RenderedImageState, SixelImageChunk,
+    KittyOutputMediaRetention, KittyPlaceholderCellRender, LastRenderedImageState, Output,
+    OutputBuffer, PaneImageRenderOutput, PlacementId, RenderedImageState, SixelImageChunk,
 };
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::pane_image_scene::KittyRenderBundle;
@@ -1207,6 +1207,52 @@ fn test_image_output_file_transport_is_per_client_and_reuses_published_files() {
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
     assert_eq!(files.len(), 1);
+}
+
+#[test]
+fn test_output_media_cache_grace_retention_keeps_recent_files() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+
+    let media_path = media_cache
+        .ensure_regular_file(1, 1, &image_data)
+        .expect("should write test media file");
+    media_cache.retain_files(KittyOutputMediaRetention::KeepRecentlyReferenced, |_, _| {
+        false
+    });
+
+    assert!(
+        media_path.exists(),
+        "grace retention should keep recently referenced media even when not explicitly live"
+    );
+}
+
+#[test]
+fn test_output_media_cache_explicit_retention_reaps_unkept_files() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+
+    let media_path = media_cache
+        .ensure_regular_file(1, 1, &image_data)
+        .expect("should write test media file");
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+
+    assert!(
+        !media_path.exists(),
+        "explicit-only retention should remove media that the caller does not keep"
+    );
 }
 
 #[test]

@@ -9,6 +9,12 @@ use zellij_utils::consts::ZELLIJ_SOCK_DIR;
 
 const RECENTLY_REFERENCED_RENDER_GENERATIONS: u64 = 240;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KittyOutputMediaRetention {
+    KeepRecentlyReferenced,
+    OnlyExplicitlyKept,
+}
+
 #[derive(Clone, Debug)]
 struct CachedKittyOutputFile {
     path: PathBuf,
@@ -83,7 +89,7 @@ impl KittyOutputMediaCache {
         Ok(path)
     }
 
-    pub fn retain_files<F>(&mut self, mut keep: F)
+    pub fn retain_files<F>(&mut self, retention: KittyOutputMediaRetention, mut keep: F)
     where
         F: FnMut(u32, u64) -> bool,
     {
@@ -91,8 +97,9 @@ impl KittyOutputMediaCache {
             .render_generation
             .saturating_sub(RECENTLY_REFERENCED_RENDER_GENERATIONS);
         self.files.retain(|(image_id, generation), cached_file| {
-            let was_recently_referenced =
-                cached_file.last_referenced_render_generation >= recently_referenced_cutoff;
+            let was_recently_referenced = retention
+                == KittyOutputMediaRetention::KeepRecentlyReferenced
+                && cached_file.last_referenced_render_generation >= recently_referenced_cutoff;
             let should_keep = keep(*image_id, *generation) || was_recently_referenced;
             if !should_keep {
                 let _ = fs::remove_file(&cached_file.path);
