@@ -5617,10 +5617,18 @@ fn watcher_helper_round_trips_followed_client_image_state() {
             height: 1,
         },
     );
+    screen.kitty_asset_store.borrow_mut().insert_asset(
+        91,
+        KittyImageData::Png {
+            data: vec![2],
+            width: 1,
+            height: 1,
+        },
+    );
     screen.watcher_last_rendered_image_state.insert(
         watcher_id,
         Rc::new(LastRenderedImageState::new(RenderedImageState {
-            resident_asset_generations: HashMap::from([(91, 3)]),
+            resident_asset_generations: HashMap::from([(91, 1)]),
             ..Default::default()
         })),
     );
@@ -5666,11 +5674,148 @@ fn watcher_helper_round_trips_followed_client_image_state() {
     );
     assert_eq!(
         watcher_state.resident_asset_generations().get(&91),
-        Some(&3),
+        Some(&1),
     );
     assert_eq!(
         watcher_state.resident_asset_generations().get(&92),
         Some(&1),
+    );
+}
+
+#[test]
+fn screen_keeps_recent_output_media_files_for_assets_that_are_no_longer_local() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    screen.kitty_output_media_cache = media_cache.clone();
+    screen.connected_clients.borrow_mut().insert(1, false);
+
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+    screen
+        .kitty_asset_store
+        .borrow_mut()
+        .insert_asset(250, image_data.clone());
+    let generation = screen.kitty_asset_store.borrow().generation(250).unwrap();
+    let media_path = media_cache
+        .borrow_mut()
+        .ensure_regular_file(250, generation, &image_data)
+        .unwrap();
+    screen.regular_last_rendered_image_state.insert(
+        1,
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
+            resident_asset_generations: HashMap::from([(250, generation)]),
+            ..Default::default()
+        })),
+    );
+
+    screen.kitty_asset_store.borrow_mut().remove_asset(250);
+    screen.reap_stale_kitty_output_media_files();
+
+    assert!(
+        media_path.exists(),
+        "recently referenced media files should survive long enough for the terminal to read them"
+    );
+}
+
+#[test]
+fn screen_reaps_old_output_media_files_for_assets_that_are_no_longer_local() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    screen.kitty_output_media_cache = media_cache.clone();
+    screen.connected_clients.borrow_mut().insert(1, false);
+
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+    screen
+        .kitty_asset_store
+        .borrow_mut()
+        .insert_asset(250, image_data.clone());
+    let generation = screen.kitty_asset_store.borrow().generation(250).unwrap();
+    let media_path = media_cache
+        .borrow_mut()
+        .ensure_regular_file(250, generation, &image_data)
+        .unwrap();
+    screen.regular_last_rendered_image_state.insert(
+        1,
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
+            resident_asset_generations: HashMap::from([(250, generation)]),
+            ..Default::default()
+        })),
+    );
+
+    for _ in 0..241 {
+        screen
+            .kitty_output_media_cache
+            .borrow_mut()
+            .advance_render_generation();
+    }
+    screen.kitty_asset_store.borrow_mut().remove_asset(250);
+    screen.reap_stale_kitty_output_media_files();
+
+    assert!(
+        !media_path.exists(),
+        "media files whose local asset is gone should be removed after the grace window"
+    );
+}
+
+#[test]
+fn screen_keeps_output_media_files_still_referenced_by_live_clients() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    screen.kitty_output_media_cache = media_cache.clone();
+    screen.connected_clients.borrow_mut().insert(1, false);
+    screen.connected_clients.borrow_mut().insert(2, false);
+
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+    screen
+        .kitty_asset_store
+        .borrow_mut()
+        .insert_asset(251, image_data.clone());
+    let generation = screen.kitty_asset_store.borrow().generation(251).unwrap();
+    let media_path = media_cache
+        .borrow_mut()
+        .ensure_regular_file(251, generation, &image_data)
+        .unwrap();
+    screen.regular_last_rendered_image_state.insert(
+        1,
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
+            resident_asset_generations: HashMap::from([(251, generation)]),
+            ..Default::default()
+        })),
+    );
+
+    screen.remove_client(1).unwrap();
+    screen.regular_last_rendered_image_state.insert(
+        2,
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
+            resident_asset_generations: HashMap::from([(251, generation)]),
+            ..Default::default()
+        })),
+    );
+    screen.reap_stale_kitty_output_media_files();
+
+    assert!(
+        media_path.exists(),
+        "media files referenced by a live client should be retained"
     );
 }
 

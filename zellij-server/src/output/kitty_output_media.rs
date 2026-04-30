@@ -7,16 +7,26 @@ use std::{
 };
 use zellij_utils::consts::ZELLIJ_SOCK_DIR;
 
+const RECENTLY_REFERENCED_RENDER_GENERATIONS: u64 = 240;
+
+#[derive(Clone, Debug)]
+struct CachedKittyOutputFile {
+    path: PathBuf,
+    last_referenced_render_generation: u64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct KittyOutputMediaCache {
     media_dir: Option<PathBuf>,
-    files: HashMap<(u32, u64), PathBuf>,
+    render_generation: u64,
+    files: HashMap<(u32, u64), CachedKittyOutputFile>,
 }
 
 impl KittyOutputMediaCache {
     pub fn disabled() -> Self {
         Self {
             media_dir: None,
+            render_generation: 0,
             files: HashMap::new(),
         }
     }
@@ -28,6 +38,7 @@ impl KittyOutputMediaCache {
     pub fn new(media_dir: PathBuf) -> Self {
         Self {
             media_dir: Some(media_dir),
+            render_generation: 0,
             files: HashMap::new(),
         }
     }
@@ -38,9 +49,10 @@ impl KittyOutputMediaCache {
         generation: u64,
         image_data: &KittyImageData,
     ) -> io::Result<PathBuf> {
-        if let Some(path) = self.files.get(&(image_id, generation)) {
-            if path.exists() {
-                return Ok(path.clone());
+        if let Some(cached_file) = self.files.get_mut(&(image_id, generation)) {
+            if cached_file.path.exists() {
+                cached_file.last_referenced_render_generation = self.render_generation;
+                return Ok(cached_file.path.clone());
             }
         }
 
@@ -61,8 +73,36 @@ impl KittyOutputMediaCache {
             let _ = fs::remove_file(&path);
             return Err(error);
         }
-        self.files.insert((image_id, generation), path.clone());
+        self.files.insert(
+            (image_id, generation),
+            CachedKittyOutputFile {
+                path: path.clone(),
+                last_referenced_render_generation: self.render_generation,
+            },
+        );
         Ok(path)
+    }
+
+    pub fn retain_files<F>(&mut self, mut keep: F)
+    where
+        F: FnMut(u32, u64) -> bool,
+    {
+        let recently_referenced_cutoff = self
+            .render_generation
+            .saturating_sub(RECENTLY_REFERENCED_RENDER_GENERATIONS);
+        self.files.retain(|(image_id, generation), cached_file| {
+            let was_recently_referenced =
+                cached_file.last_referenced_render_generation >= recently_referenced_cutoff;
+            let should_keep = keep(*image_id, *generation) || was_recently_referenced;
+            if !should_keep {
+                let _ = fs::remove_file(&cached_file.path);
+            }
+            should_keep
+        });
+    }
+
+    pub fn advance_render_generation(&mut self) {
+        self.render_generation = self.render_generation.saturating_add(1);
     }
 
     pub fn rename_session(&mut self, old_session_name: &str, new_session_name: &str) {

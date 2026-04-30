@@ -1852,6 +1852,37 @@ fn test_output_round_trips_cached_kitty_scene_snapshot() {
 }
 
 #[test]
+fn test_output_drops_resident_assets_that_are_no_longer_local() {
+    let client_ids = create_test_clients(1);
+    let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_test_output_with_state();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        RenderedImageState {
+            resident_asset_generations: HashMap::from([(250, 1)]),
+            ..Default::default()
+        },
+    )]));
+    kitty_asset_store.borrow_mut().remove_asset(250);
+    output
+        .add_character_chunks_to_client(
+            1,
+            vec![create_character_chunk_from_str("TEXT-ONLY", 0, 0)],
+            None,
+        )
+        .unwrap();
+
+    output.serialize().unwrap();
+
+    assert!(
+        output.last_rendered_image_state_for_client(1).is_none(),
+        "resident asset generations without matching local assets should not persist"
+    );
+}
+
+#[test]
 fn test_prepared_image_output_serializes_sixels_after_text() {
     let client_ids = create_test_clients(1);
     let (mut output, sixel_image_store, _kitty_asset_store, character_cell_size) =

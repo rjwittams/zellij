@@ -2540,6 +2540,42 @@ impl Screen {
         }
     }
 
+    fn reap_stale_kitty_output_media_files(&mut self) {
+        let live_resident_asset_generations = {
+            let connected_clients = self.connected_clients.borrow();
+            let kitty_asset_store = self.kitty_asset_store.borrow();
+            let mut keep = HashSet::new();
+            for (client_id, image_state) in &self.regular_last_rendered_image_state {
+                if !connected_clients.contains_key(client_id)
+                    || self.watcher_clients.contains_key(client_id)
+                {
+                    continue;
+                }
+                for (&image_id, &generation) in image_state.resident_asset_generations() {
+                    if kitty_asset_store.generation(image_id) == Some(generation) {
+                        keep.insert((image_id, generation));
+                    }
+                }
+            }
+            for (watcher_id, image_state) in &self.watcher_last_rendered_image_state {
+                if !self.watcher_clients.contains_key(watcher_id) {
+                    continue;
+                }
+                for (&image_id, &generation) in image_state.resident_asset_generations() {
+                    if kitty_asset_store.generation(image_id) == Some(generation) {
+                        keep.insert((image_id, generation));
+                    }
+                }
+            }
+            keep
+        };
+        self.kitty_output_media_cache
+            .borrow_mut()
+            .retain_files(|image_id, generation| {
+                live_resident_asset_generations.contains(&(image_id, generation))
+            });
+    }
+
     pub fn render_to_clients(&mut self) -> Result<()> {
         // this method does the actual rendering and is triggered by a debounced BackgroundJob (see
         // the render method for more details)
@@ -2755,6 +2791,10 @@ impl Screen {
                 }
             }
         }
+        self.reap_stale_kitty_output_media_files();
+        self.kitty_output_media_cache
+            .borrow_mut()
+            .advance_render_generation();
         for tab_index in tabs_to_close {
             self.close_tab_by_id(tab_index)
                 .context(err_context)
@@ -3245,6 +3285,7 @@ impl Screen {
         }
         self.connected_clients.borrow_mut().remove(&client_id);
         self.client_sizes.remove(&client_id);
+        self.regular_last_rendered_image_state.remove(&client_id);
         self.pane_render_subscribers.remove(&client_id);
         // The vacated tab may have lost its smallest viewer; recompute so it
         // can grow back to fit the remaining clients (no-op if none remain).
@@ -3271,6 +3312,7 @@ impl Screen {
 
     pub fn remove_watcher_client(&mut self, client_id: ClientId) {
         self.watcher_clients.remove(&client_id);
+        self.watcher_last_rendered_image_state.remove(&client_id);
     }
 
     pub fn set_followed_client(&mut self, client_id: ClientId) -> Result<()> {

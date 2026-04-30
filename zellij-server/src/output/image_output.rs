@@ -448,6 +448,9 @@ impl ImageOutput {
         mut previous_resident_assets: HashMap<u32, u64>,
         kitty_plan: &KittyScenePlan,
     ) -> HashMap<u32, u64> {
+        previous_resident_assets.retain(|image_id, generation| {
+            kitty_asset_store.generation(*image_id) == Some(*generation)
+        });
         match kitty_plan {
             KittyScenePlan::Diff {
                 asset_ops,
