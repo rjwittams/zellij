@@ -231,6 +231,7 @@ impl ClientImageRenderState {
 pub(crate) struct ImageOutput {
     client_image_states: HashMap<ClientId, ClientImageRenderState>,
     clients_with_kitty_file_output: HashSet<ClientId>,
+    clients_with_kitty_file_output_acknowledgements: HashSet<ClientId>,
     pub(crate) sixel_image_store: Rc<RefCell<SixelImageStore>>,
     pub(crate) kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     kitty_output_media_cache: Rc<RefCell<KittyOutputMediaCache>>,
@@ -339,6 +340,22 @@ impl ImageOutput {
             self.clients_with_kitty_file_output.insert(client_id);
         } else {
             self.clients_with_kitty_file_output.remove(&client_id);
+            self.clients_with_kitty_file_output_acknowledgements
+                .remove(&client_id);
+        }
+    }
+
+    pub fn set_kitty_file_output_acknowledgements_enabled_for_client(
+        &mut self,
+        client_id: ClientId,
+        enabled: bool,
+    ) {
+        if enabled {
+            self.clients_with_kitty_file_output_acknowledgements
+                .insert(client_id);
+        } else {
+            self.clients_with_kitty_file_output_acknowledgements
+                .remove(&client_id);
         }
     }
 
@@ -521,6 +538,7 @@ impl ImageOutput {
                             }
                             vte_output.push_str(&Self::serialize_kitty_image_data(
                                 &self.clients_with_kitty_file_output,
+                                &self.clients_with_kitty_file_output_acknowledgements,
                                 &self.kitty_output_media_cache,
                                 client_id,
                                 *image_id,
@@ -559,6 +577,7 @@ impl ImageOutput {
 
     fn serialize_kitty_image_data(
         clients_with_kitty_file_output: &HashSet<ClientId>,
+        clients_with_kitty_file_output_acknowledgements: &HashSet<ClientId>,
         kitty_output_media_cache: &Rc<RefCell<KittyOutputMediaCache>>,
         client_id: ClientId,
         image_id: u32,
@@ -566,12 +585,20 @@ impl ImageOutput {
         image_data: &crate::output::KittyImageData,
     ) -> String {
         if clients_with_kitty_file_output.contains(&client_id) {
-            if let Ok(path) = kitty_output_media_cache
-                .borrow_mut()
-                .ensure_regular_file(image_id, generation, image_data)
+            let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
+            if let Ok(path) =
+                kitty_output_media_cache.ensure_regular_file(image_id, generation, image_data)
             {
+                let quiet = if clients_with_kitty_file_output_acknowledgements.contains(&client_id)
+                {
+                    kitty_output_media_cache
+                        .mark_pending_regular_file_read(client_id, image_id, generation);
+                    0
+                } else {
+                    2
+                };
                 return KittyImageState::serialize_image_data_from_file(
-                    image_id, image_data, &path,
+                    image_id, image_data, &path, quiet,
                 );
             }
         }
@@ -604,6 +631,7 @@ impl ImageOutput {
                 };
                 raw_vte_output.push_str(&Self::serialize_kitty_image_data(
                     &self.clients_with_kitty_file_output,
+                    &self.clients_with_kitty_file_output_acknowledgements,
                     &self.kitty_output_media_cache,
                     client_id,
                     image_id,

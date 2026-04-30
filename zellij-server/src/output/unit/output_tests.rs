@@ -1210,6 +1210,33 @@ fn test_image_output_file_transport_is_per_client_and_reuses_published_files() {
 }
 
 #[test]
+fn test_image_output_can_request_acknowledgements_for_file_transport() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir.clone())));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(1, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_file_output_enabled_for_client(1, true);
+    output.set_kitty_file_output_acknowledgements_enabled_for_client(1, true);
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=1,q=0,f=100,t=f;"),
+        "ack-enabled file uploads should request a terminal reply"
+    );
+}
+
+#[test]
 fn test_output_media_cache_grace_retention_keeps_recent_files() {
     let tempdir = tempfile::tempdir().unwrap();
     let media_dir = tempdir.path().join("session-media/test/image");
@@ -1252,6 +1279,35 @@ fn test_output_media_cache_explicit_retention_reaps_unkept_files() {
     assert!(
         !media_path.exists(),
         "explicit-only retention should remove media that the caller does not keep"
+    );
+}
+
+#[test]
+fn test_output_media_cache_explicit_retention_keeps_pending_file_reads_until_acknowledged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+
+    let media_path = media_cache
+        .ensure_regular_file(1, 1, &image_data)
+        .expect("should write test media file");
+    media_cache.mark_pending_regular_file_read(1, 1, 1);
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+    assert!(
+        media_path.exists(),
+        "pending file reads should keep media alive without a grace window"
+    );
+
+    media_cache.acknowledge_regular_file_read(1, 1);
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+    assert!(
+        !media_path.exists(),
+        "acknowledged file reads should no longer retain media"
     );
 }
 

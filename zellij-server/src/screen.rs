@@ -2550,6 +2550,10 @@ impl Screen {
         for (client_id, is_web_client) in self.connected_clients.borrow().iter() {
             if !*is_web_client && !self.watcher_clients.contains_key(client_id) {
                 output.set_kitty_file_output_enabled_for_client(*client_id, true);
+                output.set_kitty_file_output_acknowledgements_enabled_for_client(
+                    *client_id,
+                    self.kitty_image_file_lifetime == KittyImageFileLifetime::AlwaysAck,
+                );
             }
         }
     }
@@ -2594,11 +2598,10 @@ impl Screen {
 
     fn kitty_output_media_retention(&self) -> KittyOutputMediaRetention {
         match self.kitty_image_file_lifetime {
-            KittyImageFileLifetime::GraceWindow
-            | KittyImageFileLifetime::Watermark
-            | KittyImageFileLifetime::AlwaysAck => {
+            KittyImageFileLifetime::GraceWindow | KittyImageFileLifetime::Watermark => {
                 KittyOutputMediaRetention::KeepRecentlyReferenced
             },
+            KittyImageFileLifetime::AlwaysAck => KittyOutputMediaRetention::OnlyExplicitlyKept,
         }
     }
 
@@ -2611,6 +2614,11 @@ impl Screen {
             );
             return;
         };
+        if let Some(image_id) = response.image_id {
+            self.kitty_output_media_cache
+                .borrow_mut()
+                .acknowledge_regular_file_read(client_id, image_id);
+        }
         log::trace!(
             target: "zellij::kitty_images",
             "client {client_id} kitty image terminal response: image_id={:?}, placement_id={:?}, image_number={:?}, ok={}, message={}",
@@ -3341,6 +3349,9 @@ impl Screen {
         self.client_sizes.remove(&client_id);
         self.regular_last_rendered_image_state.remove(&client_id);
         self.pane_render_subscribers.remove(&client_id);
+        self.kitty_output_media_cache
+            .borrow_mut()
+            .remove_client(client_id);
         // The vacated tab may have lost its smallest viewer; recompute so it
         // can grow back to fit the remaining clients (no-op if none remain).
         if let Some(prev_tab_id) = previously_active_tab_id {

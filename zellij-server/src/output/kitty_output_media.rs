@@ -1,6 +1,6 @@
-use crate::output::KittyImageData;
+use crate::{output::KittyImageData, ClientId};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     io::{self, Write},
     path::PathBuf,
@@ -26,6 +26,7 @@ pub struct KittyOutputMediaCache {
     media_dir: Option<PathBuf>,
     render_generation: u64,
     files: HashMap<(u32, u64), CachedKittyOutputFile>,
+    pending_regular_file_reads: HashMap<(ClientId, u32), VecDeque<u64>>,
 }
 
 impl KittyOutputMediaCache {
@@ -34,6 +35,7 @@ impl KittyOutputMediaCache {
             media_dir: None,
             render_generation: 0,
             files: HashMap::new(),
+            pending_regular_file_reads: HashMap::new(),
         }
     }
 
@@ -46,6 +48,7 @@ impl KittyOutputMediaCache {
             media_dir: Some(media_dir),
             render_generation: 0,
             files: HashMap::new(),
+            pending_regular_file_reads: HashMap::new(),
         }
     }
 
@@ -96,16 +99,56 @@ impl KittyOutputMediaCache {
         let recently_referenced_cutoff = self
             .render_generation
             .saturating_sub(RECENTLY_REFERENCED_RENDER_GENERATIONS);
+        let pending_regular_file_reads: HashSet<(u32, u64)> = self
+            .pending_regular_file_reads
+            .iter()
+            .flat_map(|((_, image_id), generations)| {
+                generations
+                    .iter()
+                    .map(move |generation| (*image_id, *generation))
+            })
+            .collect();
         self.files.retain(|(image_id, generation), cached_file| {
             let was_recently_referenced = retention
                 == KittyOutputMediaRetention::KeepRecentlyReferenced
                 && cached_file.last_referenced_render_generation >= recently_referenced_cutoff;
-            let should_keep = keep(*image_id, *generation) || was_recently_referenced;
+            let has_pending_read = pending_regular_file_reads.contains(&(*image_id, *generation));
+            let should_keep =
+                keep(*image_id, *generation) || was_recently_referenced || has_pending_read;
             if !should_keep {
                 let _ = fs::remove_file(&cached_file.path);
             }
             should_keep
         });
+    }
+
+    pub fn mark_pending_regular_file_read(
+        &mut self,
+        client_id: ClientId,
+        image_id: u32,
+        generation: u64,
+    ) {
+        self.pending_regular_file_reads
+            .entry((client_id, image_id))
+            .or_default()
+            .push_back(generation);
+    }
+
+    pub fn acknowledge_regular_file_read(&mut self, client_id: ClientId, image_id: u32) {
+        match self.pending_regular_file_reads.entry((client_id, image_id)) {
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                entry.get_mut().pop_front();
+                if entry.get().is_empty() {
+                    entry.remove();
+                }
+            },
+            std::collections::hash_map::Entry::Vacant(_) => {},
+        }
+    }
+
+    pub fn remove_client(&mut self, client_id: ClientId) {
+        self.pending_regular_file_reads
+            .retain(|(pending_client_id, _), _| *pending_client_id != client_id);
     }
 
     pub fn advance_render_generation(&mut self) {

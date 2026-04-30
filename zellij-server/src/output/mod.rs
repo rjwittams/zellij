@@ -479,6 +479,15 @@ impl Output {
             .set_kitty_file_output_enabled_for_client(client_id, enabled);
     }
 
+    pub fn set_kitty_file_output_acknowledgements_enabled_for_client(
+        &mut self,
+        client_id: ClientId,
+        enabled: bool,
+    ) {
+        self.image_output
+            .set_kitty_file_output_acknowledgements_enabled_for_client(client_id, enabled);
+    }
+
     pub fn last_rendered_image_states(&self) -> HashMap<ClientId, Rc<LastRenderedImageState>> {
         self.image_output.last_rendered_image_states()
     }

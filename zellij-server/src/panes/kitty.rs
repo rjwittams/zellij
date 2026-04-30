@@ -1368,10 +1368,11 @@ impl KittyImageState {
         image_id: u32,
         image_data: &KittyImageData,
         path: &Path,
+        quiet: u8,
     ) -> String {
         let mut raw_vte_output = String::new();
         raw_vte_output.push_str("\u{1b}_G");
-        raw_vte_output.push_str(&serialize_transmit_file(image_id, image_data, path));
+        raw_vte_output.push_str(&serialize_transmit_file(image_id, image_data, path, quiet));
         raw_vte_output.push_str("\u{1b}\\");
         raw_vte_output
     }
@@ -2599,9 +2600,14 @@ fn serialize_transmit(image_id: u32, image_data: &KittyImageData) -> Vec<String>
         .collect()
 }
 
-fn serialize_transmit_file(image_id: u32, image_data: &KittyImageData, path: &Path) -> String {
+fn serialize_transmit_file(
+    image_id: u32,
+    image_data: &KittyImageData,
+    path: &Path,
+    quiet: u8,
+) -> String {
     let mut command = String::new();
-    let _ = write!(command, "a=t,i={image_id},q=2,");
+    let _ = write!(command, "a=t,i={image_id},q={quiet},");
     match image_data {
         KittyImageData::Png { .. } => {
             command.push_str("f=100,");
