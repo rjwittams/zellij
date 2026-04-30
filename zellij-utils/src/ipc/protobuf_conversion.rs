@@ -8,13 +8,13 @@ use crate::{
         ForegroundColorMsg, ForwardQueryToHostMsg, ForwardedReplyFromHostMsg,
         HostTerminalThemeChangedMsg,
         HostTerminalThemeIndication as ProtoHostTerminalThemeIndication,
-        InputMode as ProtoInputMode, KeyMsg, KillSessionMsg, LayoutMetadata as ProtoLayoutMetadata,
-        LogErrorMsg, LogMsg, PaneMetadata as ProtoPaneMetadata, PaneRenderUpdateMsg,
-        QueryTerminalSizeMsg, RenamedSessionMsg, RenderMsg,
-        ServerToClientMsg as ProtoServerToClientMsg, StartWebServerMsg, SubscribeToPaneRendersMsg,
-        SubscribedPaneClosedMsg, SwitchSessionMsg, TabMetadata as ProtoTabMetadata,
-        TerminalPixelDimensionsMsg, TerminalResizeMsg, UnblockCliPipeInputMsg,
-        UnblockInputThreadMsg, WebServerStartedMsg,
+        InputMode as ProtoInputMode, KeyMsg, KillSessionMsg, KittyImageTerminalResponseMsg,
+        LayoutMetadata as ProtoLayoutMetadata, LogErrorMsg, LogMsg,
+        PaneMetadata as ProtoPaneMetadata, PaneRenderUpdateMsg, QueryTerminalSizeMsg,
+        RenamedSessionMsg, RenderMsg, ServerToClientMsg as ProtoServerToClientMsg,
+        StartWebServerMsg, SubscribeToPaneRendersMsg, SubscribedPaneClosedMsg, SwitchSessionMsg,
+        TabMetadata as ProtoTabMetadata, TerminalPixelDimensionsMsg, TerminalResizeMsg,
+        UnblockCliPipeInputMsg, UnblockInputThreadMsg, WebServerStartedMsg,
     },
     data::{HostTerminalThemeMode, InputMode, PaneId},
     errors::prelude::*,
@@ -144,6 +144,11 @@ impl From<ClientToServerMsg> for ProtoClientToServerMsg {
                     HostTerminalThemeChangedMsg {
                         mode: proto_mode as i32,
                     },
+                )
+            },
+            ClientToServerMsg::KittyImageTerminalResponse { raw_bytes } => {
+                client_to_server_msg::Message::KittyImageTerminalResponse(
+                    KittyImageTerminalResponseMsg { raw_bytes },
                 )
             },
         };
@@ -285,6 +290,11 @@ impl TryFrom<ProtoClientToServerMsg> for ClientToServerMsg {
                     .ok_or_else(|| anyhow!("Unknown HostTerminalThemeIndication: {}", msg.mode))?;
                 Ok(ClientToServerMsg::HostTerminalThemeChanged {
                     mode: proto_mode.into(),
+                })
+            },
+            Some(client_to_server_msg::Message::KittyImageTerminalResponse(msg)) => {
+                Ok(ClientToServerMsg::KittyImageTerminalResponse {
+                    raw_bytes: msg.raw_bytes,
                 })
             },
             None => Err(anyhow!("Empty ClientToServerMsg message")),

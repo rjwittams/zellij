@@ -25,6 +25,7 @@ message ClientToServerMsg {
     DesktopNotificationResponseMsg desktop_notification_response = 18;
     ForwardedReplyFromHostMsg forwarded_reply_from_host = 19;
     HostTerminalThemeChangedMsg host_terminal_theme_changed = 20;
+    KittyImageTerminalResponseMsg kitty_image_terminal_response = 21;
   }
 }
 
@@ -124,4 +125,8 @@ message HostTerminalThemeChangedMsg {
 enum HostTerminalThemeIndication {
   HOST_TERMINAL_THEME_INDICATION_DARK = 0;
   HOST_TERMINAL_THEME_INDICATION_LIGHT = 1;
+}
+
+message KittyImageTerminalResponseMsg {
+  bytes raw_bytes = 1;
 }

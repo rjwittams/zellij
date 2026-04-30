@@ -11,6 +11,119 @@ use zellij_utils::{
     vendored::termwiz::input::{InputEvent, InputParser},
 };
 
+struct TerminalApcParser {
+    pending: Vec<u8>,
+}
+
+impl TerminalApcParser {
+    fn new() -> Self {
+        Self { pending: vec![] }
+    }
+
+    fn parse(&mut self, bytes: &[u8]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        self.pending.extend_from_slice(bytes);
+        let mut passthrough = vec![];
+        let mut apcs = vec![];
+        loop {
+            if self.pending.is_empty() {
+                break;
+            }
+            let apc_start = self
+                .pending
+                .windows(2)
+                .position(|window| window == b"\x1b_");
+            let Some(apc_start) = apc_start else {
+                if self.pending.last() == Some(&b'\x1b') {
+                    if self.pending.len() > 1 {
+                        passthrough.push(self.pending.drain(..self.pending.len() - 1).collect());
+                    }
+                } else {
+                    passthrough.push(self.pending.drain(..).collect());
+                }
+                break;
+            };
+            if apc_start > 0 {
+                passthrough.push(self.pending.drain(..apc_start).collect());
+                continue;
+            }
+            let apc_end = self
+                .pending
+                .windows(2)
+                .enumerate()
+                .skip(2)
+                .find_map(|(index, window)| (window == b"\x1b\\").then_some(index));
+            let Some(apc_end) = apc_end else {
+                break;
+            };
+            let payload = self.pending[2..apc_end].to_vec();
+            self.pending.drain(..apc_end + 2);
+            if payload.first() == Some(&b'G') {
+                apcs.push(payload);
+            }
+        }
+        (passthrough, apcs)
+    }
+
+    fn finalize(&mut self) -> Vec<u8> {
+        self.pending.drain(..).collect()
+    }
+}
+
+fn send_done_parsing_after_query_timeout(
+    send_input_instructions: SenderWithContext<InputInstruction>,
+    query_duration: u64,
+) {
+    std::thread::spawn({
+        move || {
+            std::thread::sleep(Duration::from_millis(query_duration));
+            send_input_instructions
+                .send(InputInstruction::DoneParsing)
+                .unwrap();
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TerminalApcParser;
+
+    #[test]
+    fn terminal_apc_parser_extracts_complete_kitty_apc_and_passes_other_bytes_through() {
+        let mut parser = TerminalApcParser::new();
+
+        let (passthrough, apcs) = parser.parse(b"abc\x1b_Gi=1;OK\x1b\\def");
+
+        assert_eq!(passthrough, vec![b"abc".to_vec(), b"def".to_vec()]);
+        assert_eq!(apcs, vec![b"Gi=1;OK".to_vec()]);
+    }
+
+    #[test]
+    fn terminal_apc_parser_handles_split_kitty_apc() {
+        let mut parser = TerminalApcParser::new();
+
+        let (passthrough, apcs) = parser.parse(b"abc\x1b_Gi=1");
+        assert_eq!(passthrough, vec![b"abc".to_vec()]);
+        assert!(apcs.is_empty());
+
+        let (passthrough, apcs) = parser.parse(b";OK\x1b\\def");
+        assert_eq!(passthrough, vec![b"def".to_vec()]);
+        assert_eq!(apcs, vec![b"Gi=1;OK".to_vec()]);
+    }
+
+    #[test]
+    fn terminal_apc_parser_does_not_swallow_split_escape_keys() {
+        let mut parser = TerminalApcParser::new();
+
+        let (passthrough, apcs) = parser.parse(b"\x1b");
+        assert!(passthrough.is_empty());
+        assert!(apcs.is_empty());
+
+        let (passthrough, apcs) = parser.parse(b"[A");
+        assert_eq!(passthrough, vec![b"\x1b[A".to_vec()]);
+        assert!(apcs.is_empty());
+    }
+}
+
 pub(crate) fn stdin_loop(
     mut os_input: Box<dyn ClientOsApi>,
     send_input_instructions: SenderWithContext<InputInstruction>,
@@ -79,6 +192,7 @@ pub(crate) fn stdin_loop(
     // silently degrading to a legacy CSI form (and losing modifier
     // metadata).
     let mut kitty_parser = KittyKeyboardParser::new();
+    let mut terminal_apc_parser = TerminalApcParser::new();
     let mut current_buffer = vec![];
     let (stdin_tx, stdin_rx) = mpsc::sync_channel(32);
     let _stdin_pump = std::thread::Builder::new()
@@ -150,58 +264,81 @@ pub(crate) fn stdin_loop(
                             }
                             continue;
                         }
-                        current_buffer.append(&mut residue.clone());
+                        let (passthrough_chunks, kitty_apcs) =
+                            terminal_apc_parser.parse(&residue);
+                        for kitty_apc in kitty_apcs {
+                            let _ = send_input_instructions
+                                .send(InputInstruction::KittyImageTerminalResponse(kitty_apc));
+                        }
+                        if passthrough_chunks.is_empty() && !residue.is_empty() {
+                            needs_finalization = true;
+                            continue;
+                        }
+                        for buf in passthrough_chunks {
+                            current_buffer.append(&mut buf.to_vec());
 
-                        if !explicitly_disable_kitty_keyboard_protocol {
-                            // first we try to parse with the KittyKeyboardParser
-                            // if we fail, we try to parse normally.
-                            // Incomplete and NoMatch both fall through to the
-                            // termwiz parser below; on Incomplete the Kitty
-                            // parser keeps its state so the next chunk's
-                            // continuation completes the sequence.
-                            match kitty_parser.feed(&residue) {
-                                KittyParseOutcome::Complete(key_with_modifier) => {
-                                    send_input_instructions
-                                        .send(InputInstruction::KeyWithModifierEvent(
-                                            key_with_modifier,
-                                            current_buffer.drain(..).collect(),
-                                            true,
-                                        ))
-                                        .unwrap();
-                                    continue;
-                                },
-                                KittyParseOutcome::Incomplete | KittyParseOutcome::NoMatch => {},
+                            if !explicitly_disable_kitty_keyboard_protocol {
+                                // first we try to parse with the KittyKeyboardParser
+                                // if we fail, we try to parse normally.
+                                // Incomplete and NoMatch both fall through to the
+                                // termwiz parser below; on Incomplete the Kitty
+                                // parser keeps its state so the next chunk's
+                                // continuation completes the sequence.
+                                match kitty_parser.feed(&buf) {
+                                    KittyParseOutcome::Complete(key_with_modifier) => {
+                                        send_input_instructions
+                                            .send(InputInstruction::KeyWithModifierEvent(
+                                                key_with_modifier,
+                                                current_buffer.drain(..).collect(),
+                                                true,
+                                            ))
+                                            .unwrap();
+                                        continue;
+                                    },
+                                    KittyParseOutcome::Incomplete | KittyParseOutcome::NoMatch => {},
+                                }
                             }
+
+                            // Parse with maybe_more = true - complete events sent immediately
+                            //
+                            // Ambiguous events (if any) will be finalized later only if 50ms
+                            // passes with no new input
+                            let maybe_more = true;
+                            let mut events = vec![];
+                            input_parser.parse(
+                                &buf,
+                                |input_event: InputEvent| {
+                                    events.push(input_event);
+                                },
+                                maybe_more,
+                            );
+
+                            for input_event in events.into_iter() {
+                                match input_event {
+                                    InputEvent::OperatingSystemCommand(ref payload) => {
+                                        if payload.starts_with(b"99;") {
+                                            let notification_payload =
+                                                payload.get(3..).unwrap_or_default().to_vec();
+                                            let _ = send_input_instructions.send(
+                                                InputInstruction::DesktopNotificationResponse(
+                                                    notification_payload,
+                                                ),
+                                            );
+                                        }
+                                        // Other OSC types at runtime: silently drop.
+                                    },
+                                    other => {
+                                        send_input_instructions
+                                            .send(InputInstruction::KeyEvent(
+                                                other,
+                                                current_buffer.drain(..).collect(),
+                                            ))
+                                            .unwrap();
+                                    },
+                                }
+                            }
+                            needs_finalization = true;
                         }
-
-                        // Parse with maybe_more = true - complete events sent immediately
-                        //
-                        // Ambiguous events (if any) will be finalized later only if 50ms
-                        // passes with no new input
-                        let maybe_more = true;
-                        let mut events = vec![];
-                        input_parser.parse(
-                            &residue,
-                            |input_event: InputEvent| {
-                                events.push(input_event);
-                            },
-                            maybe_more,
-                        );
-
-                        // Residue contains no OSC or whitelisted CSI
-                        // reports — `StdinAnsiParser::feed` strips both
-                        // before the keyboard parser sees the bytes.
-                        // Every termwiz event is a key/mouse/paste/etc.
-                        for input_event in events.into_iter() {
-                            send_input_instructions
-                                .send(InputInstruction::KeyEvent(
-                                    input_event,
-                                    current_buffer.drain(..).collect(),
-                                ))
-                                .unwrap();
-                        }
-
-                        needs_finalization = true;
                     },
                     Err(e) => {
                         if e == "Session ended" {
@@ -217,6 +354,7 @@ pub(crate) fn stdin_loop(
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 finalize_events(
                     &mut input_parser,
+                    &mut terminal_apc_parser,
                     &mut current_buffer,
                     send_input_instructions.clone(),
                     &stdin_ansi_parser,
@@ -234,6 +372,7 @@ pub(crate) fn stdin_loop(
 
 fn finalize_events(
     input_parser: &mut InputParser,
+    terminal_apc_parser: &mut TerminalApcParser,
     current_buffer: &mut Vec<u8>,
     send_input_instructions: SenderWithContext<InputInstruction>,
     stdin_ansi_parser: &Arc<Mutex<StdinAnsiParser>>,
@@ -243,7 +382,16 @@ fn finalize_events(
     // follow-up never arrived). They become keyboard residue — same
     // path real keypress bytes take. Without this drain, a real Esc
     // press whose byte was parked under partial_osc would be lost.
-    let drained = stdin_ansi_parser.lock().unwrap().finalize();
+    let mut drained = stdin_ansi_parser.lock().unwrap().finalize();
+    if !drained.is_empty() {
+        let (passthrough_chunks, kitty_apcs) = terminal_apc_parser.parse(&drained);
+        for kitty_apc in kitty_apcs {
+            let _ =
+                send_input_instructions.send(InputInstruction::KittyImageTerminalResponse(kitty_apc));
+        }
+        drained = passthrough_chunks.into_iter().flatten().collect();
+    }
+    drained.extend(terminal_apc_parser.finalize());
     if !drained.is_empty() {
         current_buffer.extend_from_slice(&drained);
     }

@@ -3288,6 +3288,9 @@ fn test_client_messages() {
         scrollback: Some(0),
         ansi: true,
     });
+    test_client_roundtrip!(ClientToServerMsg::KittyImageTerminalResponse {
+        raw_bytes: b"Gi=1;OK".to_vec(),
+    });
     // Pane-targeting roundtrips
     test_client_roundtrip!(ClientToServerMsg::Action {
         action: Action::ScrollUpByPaneId {

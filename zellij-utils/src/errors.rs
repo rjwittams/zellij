@@ -430,6 +430,7 @@ pub enum ScreenContext {
     SetPluginRegexHighlights,
     ClearPluginHighlights,
     DesktopNotificationResponse,
+    KittyImageTerminalResponse,
     SubscribeToPaneRenders,
     NotifyPaneClosedToSubscribers,
     // Pane-targeting CLI variants

@@ -1414,6 +1414,15 @@ pub enum KittyQueryResponse {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KittyTerminalImageResponse {
+    pub image_id: Option<u32>,
+    pub placement_id: Option<u32>,
+    pub image_number: Option<u32>,
+    pub is_ok: bool,
+    pub message: String,
+}
+
 impl KittyQueryResponse {
     pub fn to_apc_response(&self) -> String {
         match self {
@@ -2387,6 +2396,21 @@ pub fn kitty_non_query_response(
         resolved_image_number.or(reply_context.image_number),
         error,
     )
+}
+
+pub fn kitty_terminal_image_response(apc_bytes: &[u8]) -> Option<KittyTerminalImageResponse> {
+    let apc = KittyApc::parse(apc_bytes)?;
+    let message = String::from_utf8_lossy(apc.payload).to_string();
+    if message.is_empty() {
+        return None;
+    }
+    Some(KittyTerminalImageResponse {
+        image_id: apc.parsed_image_id(),
+        placement_id: apc.placement_id_u32(),
+        image_number: apc.image_number(),
+        is_ok: message == "OK",
+        message,
+    })
 }
 
 fn non_query_failure_message(kind: PendingKittyReplyKind) -> &'static str {
@@ -3787,6 +3811,30 @@ mod tests {
         assert!(
             !path.exists(),
             "query action should delete safe temporary file even if image data is invalid"
+        );
+    }
+
+    #[test]
+    fn kitty_terminal_image_response_parses_ok_and_error_replies() {
+        assert_eq!(
+            kitty_terminal_image_response(b"Gi=7,p=3;OK"),
+            Some(KittyTerminalImageResponse {
+                image_id: Some(7),
+                placement_id: Some(3),
+                image_number: None,
+                is_ok: true,
+                message: "OK".to_string(),
+            })
+        );
+        assert_eq!(
+            kitty_terminal_image_response(b"GI=9;ENOENT:missing image"),
+            Some(KittyTerminalImageResponse {
+                image_id: None,
+                placement_id: None,
+                image_number: Some(9),
+                is_ok: false,
+                message: "ENOENT:missing image".to_string(),
+            })
         );
     }
 

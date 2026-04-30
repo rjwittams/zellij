@@ -70,6 +70,7 @@ use crate::background_jobs::BackgroundJob;
 use crate::os_input_output::ResizeCache;
 use crate::pane_groups::PaneGroups;
 use crate::panes::alacritty_functions::xparse_color;
+use crate::panes::kitty::kitty_terminal_image_response;
 use crate::panes::terminal_character::AnsiCode;
 use crate::panes::terminal_pane::{BRACKETED_PASTE_BEGIN, BRACKETED_PASTE_END};
 use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
@@ -845,6 +846,7 @@ pub enum ScreenInstruction {
         pane_id: zellij_utils::data::PaneId,
     },
     DesktopNotificationResponse(Vec<u8>, ClientId),
+    KittyImageTerminalResponse(Vec<u8>, ClientId),
     PluginSubscribedToAnsiPaneContents(bool), // true = at least one plugin needs ANSI content
     UpdateBackgroundPluginSubscriptions(PluginId, ClientId, HashSet<EventType>),
     BroadcastModeUpdate(ModeInfo, Option<ClientId>), // ModeInfo, optional specific client_id (None = all clients)
@@ -1163,6 +1165,9 @@ impl From<&ScreenInstruction> for ScreenContext {
             ScreenInstruction::ClearAllPluginHighlights(..) => ScreenContext::ClearPluginHighlights,
             ScreenInstruction::DesktopNotificationResponse(..) => {
                 ScreenContext::DesktopNotificationResponse
+            },
+            ScreenInstruction::KittyImageTerminalResponse(..) => {
+                ScreenContext::KittyImageTerminalResponse
             },
             ScreenInstruction::SubscribeToPaneRenders { .. } => {
                 ScreenContext::SubscribeToPaneRenders
@@ -2595,6 +2600,26 @@ impl Screen {
                 KittyOutputMediaRetention::KeepRecentlyReferenced
             },
         }
+    }
+
+    fn handle_kitty_image_terminal_response(&mut self, raw_bytes: &[u8], client_id: ClientId) {
+        let Some(response) = kitty_terminal_image_response(raw_bytes) else {
+            log::debug!(
+                target: "zellij::kitty_images",
+                "client {client_id} sent invalid kitty image terminal response: {:?}",
+                String::from_utf8_lossy(raw_bytes),
+            );
+            return;
+        };
+        log::trace!(
+            target: "zellij::kitty_images",
+            "client {client_id} kitty image terminal response: image_id={:?}, placement_id={:?}, image_number={:?}, ok={}, message={}",
+            response.image_id,
+            response.placement_id,
+            response.image_number,
+            response.is_ok,
+            response.message,
+        );
     }
 
     pub fn render_to_clients(&mut self) -> Result<()> {
@@ -9651,6 +9676,9 @@ pub(crate) fn screen_thread_main(
                     screen.render(None)?;
                     screen.log_and_report_session_state()?;
                 }
+            },
+            ScreenInstruction::KittyImageTerminalResponse(raw_bytes, client_id) => {
+                screen.handle_kitty_image_terminal_response(&raw_bytes, client_id);
             },
             ScreenInstruction::SubscribeToPaneRenders {
                 client_id,

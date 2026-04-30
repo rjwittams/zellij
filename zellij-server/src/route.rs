@@ -2589,6 +2589,17 @@ pub(crate) fn route_thread_main(
                                 retry_queue
                             );
                         },
+                        ClientToServerMsg::KittyImageTerminalResponse { ref raw_bytes } => {
+                            let _ = send_to_screen_or_retry_queue!(
+                                senders,
+                                ScreenInstruction::KittyImageTerminalResponse(
+                                    raw_bytes.clone(),
+                                    client_id,
+                                ),
+                                instruction,
+                                retry_queue
+                            );
+                        },
                         ClientToServerMsg::SubscribeToPaneRenders {
                             ref pane_ids,
                             ref scrollback,

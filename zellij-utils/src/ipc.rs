@@ -171,6 +171,9 @@ pub enum ClientToServerMsg {
     HostTerminalThemeChanged {
         mode: HostTerminalThemeMode,
     },
+    KittyImageTerminalResponse {
+        raw_bytes: Vec<u8>,
+    },
 }
 
 // Types of messages sent from the server to the client
