@@ -1,8 +1,12 @@
-use crate::{output::KittyImageData, ClientId};
+use crate::{
+    output::KittyImageData,
+    panes::kitty_asset_store::{KittyAssetData, KittyRegularFileSource},
+    ClientId,
+};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs,
-    io::{self, Write},
+    io::{self, Read, Seek, SeekFrom, Write},
     path::PathBuf,
 };
 use zellij_utils::consts::ZELLIJ_SOCK_DIR;
@@ -65,6 +69,19 @@ impl KittyOutputMediaCache {
         generation: u64,
         image_data: &KittyImageData,
     ) -> io::Result<PathBuf> {
+        self.ensure_regular_file_for_asset(
+            image_id,
+            generation,
+            &KittyAssetData::Image(image_data.clone()),
+        )
+    }
+
+    pub fn ensure_regular_file_for_asset(
+        &mut self,
+        image_id: u32,
+        generation: u64,
+        asset_data: &KittyAssetData,
+    ) -> io::Result<PathBuf> {
         if let Some(cached_file) = self.files.get_mut(&(image_id, generation)) {
             if cached_file.path.exists() {
                 cached_file.last_referenced_render_generation = self.render_generation;
@@ -79,10 +96,9 @@ impl KittyOutputMediaCache {
         set_private_media_permissions(media_dir);
 
         let path = media_dir.join(format!("i{}-g{}.kitty-image", image_id, generation));
-        let bytes = kitty_image_bytes(image_data);
         let write_result = (|| -> io::Result<()> {
             let mut file = fs::File::create(&path)?;
-            file.write_all(bytes)?;
+            write_kitty_asset_data(&mut file, asset_data)?;
             Ok(())
         })();
         if let Err(error) = write_result {
@@ -207,6 +223,33 @@ fn kitty_image_bytes(image_data: &KittyImageData) -> &[u8] {
         | KittyImageData::Rgb { data, .. }
         | KittyImageData::Rgba { data, .. } => data,
     }
+}
+
+fn write_kitty_asset_data(mut writer: impl Write, asset_data: &KittyAssetData) -> io::Result<()> {
+    match asset_data {
+        KittyAssetData::Image(image_data) => writer.write_all(kitty_image_bytes(image_data)),
+        KittyAssetData::RegularFile { source, .. } => write_regular_file_source(writer, source),
+    }
+}
+
+fn write_regular_file_source(
+    mut writer: impl Write,
+    source: &KittyRegularFileSource,
+) -> io::Result<()> {
+    let mut file = fs::File::open(&source.path)?;
+    if source.offset > 0 {
+        file.seek(SeekFrom::Start(source.offset))?;
+    }
+    match source.size {
+        Some(size) => {
+            let mut reader = file.take(size as u64);
+            io::copy(&mut reader, &mut writer)?;
+        },
+        None => {
+            io::copy(&mut file, &mut writer)?;
+        },
+    }
+    Ok(())
 }
 
 fn set_private_media_permissions(media_dir: &std::path::Path) {

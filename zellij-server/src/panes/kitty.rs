@@ -5,7 +5,10 @@ use zellij_utils::pane_size::SizeInPixels;
 use crate::output::{
     KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyPlaceholderRender, PlacementId,
 };
-use crate::panes::kitty_asset_store::KittyAssetStore;
+use crate::panes::kitty_asset_store::{
+    regular_file_source_len, KittyAssetData, KittyAssetFormat, KittyAssetStore,
+    KittyRegularFileSource,
+};
 use crate::panes::kitty_placeholder::{
     kitty_diacritic_to_index, KITTY_ROWCOL_DIACRITICS, KITTY_UNICODE_PLACEHOLDER_CHAR,
 };
@@ -331,6 +334,17 @@ impl KittyMediaSource {
         }
     }
 
+    fn regular_file_source(&self) -> Option<KittyRegularFileSource> {
+        match self {
+            KittyMediaSource::RegularFile { path, size, offset } => Some(KittyRegularFileSource {
+                path: path.clone(),
+                offset: *offset,
+                size: *size,
+            }),
+            KittyMediaSource::Direct(_) => None,
+        }
+    }
+
     fn append_direct_payload(&mut self, payload: Vec<u8>) -> bool {
         match self {
             KittyMediaSource::Direct(existing_payload) => {
@@ -651,13 +665,9 @@ impl KittyImageState {
         let mut placement = pending.placement.clone();
         let image_id = pending.image_id;
         let reply_context = pending.reply_context.clone();
-        let replaced_existing_asset = self
-            .kitty_asset_store
-            .borrow()
-            .image_data(image_id)
-            .is_some();
-        let image_data = match pending.into_image_data() {
-            Ok(image_data) => image_data,
+        let replaced_existing_asset = self.kitty_asset_store.borrow().asset(image_id).is_some();
+        let asset_data = match pending.into_asset_data() {
+            Ok(asset_data) => asset_data,
             Err(message) => {
                 if !replaced_existing_asset {
                     self.remove_protocol_references_for_internal_image_id(image_id);
@@ -673,17 +683,16 @@ impl KittyImageState {
                 };
             },
         };
-        let image_dimensions = kitty_image_dimensions(&image_data);
+        let image_dimensions = asset_data.dimensions();
         if let Some(placement) = placement.as_mut() {
             placement.anchor = anchor.clone();
             placement.protocol_image_id = protocol_image_id;
         }
         let protected_image_ids = self.referenced_image_ids();
-        let evicted_image_ids = self.kitty_asset_store.borrow_mut().insert_asset_protecting(
-            image_id,
-            image_data,
-            &protected_image_ids,
-        );
+        let evicted_image_ids = self
+            .kitty_asset_store
+            .borrow_mut()
+            .insert_asset_data_protecting(image_id, asset_data, &protected_image_ids);
         for evicted_image_id in evicted_image_ids {
             self.remove_protocol_references_for_internal_image_id(evicted_image_id);
         }
@@ -1450,9 +1459,34 @@ impl KittyImageState {
         path: &Path,
         quiet: u8,
     ) -> String {
+        let format = KittyAssetFormat::from(image_data);
+        let (width, height) = kitty_image_dimensions(image_data);
+        Self::serialize_image_file(image_id, format, width, height, path, quiet)
+    }
+
+    pub fn serialize_asset_data_from_file(
+        image_id: u32,
+        asset_data: &KittyAssetData,
+        path: &Path,
+        quiet: u8,
+    ) -> String {
+        let (width, height) = asset_data.dimensions();
+        Self::serialize_image_file(image_id, asset_data.format(), width, height, path, quiet)
+    }
+
+    fn serialize_image_file(
+        image_id: u32,
+        format: KittyAssetFormat,
+        width: u32,
+        height: u32,
+        path: &Path,
+        quiet: u8,
+    ) -> String {
         let mut raw_vte_output = String::new();
         raw_vte_output.push_str("\u{1b}_G");
-        raw_vte_output.push_str(&serialize_transmit_file(image_id, image_data, path, quiet));
+        raw_vte_output.push_str(&serialize_transmit_file(
+            image_id, format, width, height, path, quiet,
+        ));
         raw_vte_output.push_str("\u{1b}\\");
         raw_vte_output
     }
@@ -2074,6 +2108,52 @@ impl KittyPlacement {
 }
 
 impl PendingKittyTransmit {
+    fn into_asset_data(self) -> Result<KittyAssetData, String> {
+        if self.compression.is_none() {
+            let image_format = self.image_format;
+            if matches!(image_format, KittyImageFormat::Rgb | KittyImageFormat::Rgba) {
+                if let Some(source) = self.media_source.regular_file_source() {
+                    let bytes_per_pixel = match image_format {
+                        KittyImageFormat::Rgb => 3,
+                        KittyImageFormat::Rgba => 4,
+                        KittyImageFormat::Png => unreachable!(),
+                    };
+                    let expected_len =
+                        expected_raw_payload_size(self.width, self.height, bytes_per_pixel)?;
+                    match regular_file_source_len(&source) {
+                        Some(payload_len) if payload_len == expected_len => {
+                            let format = match image_format {
+                                KittyImageFormat::Rgb => KittyAssetFormat::Rgb,
+                                KittyImageFormat::Rgba => KittyAssetFormat::Rgba,
+                                KittyImageFormat::Png => unreachable!(),
+                            };
+                            return Ok(KittyAssetData::RegularFile {
+                                source,
+                                format,
+                                width: self.width,
+                                height: self.height,
+                            });
+                        },
+                        Some(payload_len) if payload_len < expected_len => {
+                            return Err(format!(
+                                "ENODATA:Insufficient image data: {payload_len} < {expected_len}"
+                            ));
+                        },
+                        Some(_) => {
+                            return Err(
+                                "EINVAL:Invalid image payload for requested format".to_string()
+                            );
+                        },
+                        None => {
+                            return Err("EINVAL:Invalid or unsupported kitty command".to_string());
+                        },
+                    }
+                }
+            }
+        }
+        self.into_image_data().map(KittyAssetData::Image)
+    }
+
     fn into_image_data(self) -> Result<KittyImageData, String> {
         let payload = match self.compression {
             Some(KittyTransportCompression::Zlib) => {
@@ -2119,10 +2199,7 @@ fn validate_raw_payload_size(
     height: u32,
     bytes_per_pixel: usize,
 ) -> Result<(), String> {
-    let expected_len = (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
-        .ok_or_else(|| "EINVAL:Invalid image payload for requested format".to_string())?;
+    let expected_len = expected_raw_payload_size(width, height, bytes_per_pixel)?;
     if payload_len < expected_len {
         Err(format!(
             "ENODATA:Insufficient image data: {payload_len} < {expected_len}"
@@ -2132,6 +2209,17 @@ fn validate_raw_payload_size(
     } else {
         Ok(())
     }
+}
+
+fn expected_raw_payload_size(
+    width: u32,
+    height: u32,
+    bytes_per_pixel: usize,
+) -> Result<usize, String> {
+    (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
+        .ok_or_else(|| "EINVAL:Invalid image payload for requested format".to_string())
 }
 
 fn kitty_image_dimensions(image_data: &KittyImageData) -> (u32, u32) {
@@ -2690,20 +2778,22 @@ fn serialize_transmit(image_id: u32, image_data: &KittyImageData) -> Vec<String>
 
 fn serialize_transmit_file(
     image_id: u32,
-    image_data: &KittyImageData,
+    format: KittyAssetFormat,
+    width: u32,
+    height: u32,
     path: &Path,
     quiet: u8,
 ) -> String {
     let mut command = String::new();
     let _ = write!(command, "a=t,i={image_id},q={quiet},");
-    match image_data {
-        KittyImageData::Png { .. } => {
+    match format {
+        KittyAssetFormat::Png => {
             command.push_str("f=100,");
         },
-        KittyImageData::Rgb { width, height, .. } => {
+        KittyAssetFormat::Rgb => {
             let _ = write!(command, "f=24,s={width},v={height},");
         },
-        KittyImageData::Rgba { width, height, .. } => {
+        KittyAssetFormat::Rgba => {
             let _ = write!(command, "f=32,s={width},v={height},");
         },
     };
@@ -3103,13 +3193,13 @@ mod tests {
             None,
         );
 
-        std::fs::remove_file(path).ok();
         let reply = reply.reply.unwrap().to_apc_response();
         assert!(
             reply.contains("OK"),
             "regular file upload should succeed, got {reply:?}"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 601, &payload);
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
@@ -3135,13 +3225,13 @@ mod tests {
             None,
         );
 
-        std::fs::remove_file(path).ok();
         let reply = reply.reply.unwrap().to_apc_response();
         assert!(
             reply.contains("OK"),
             "regular file upload with unaligned O should succeed, got {reply:?}"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 602, &payload);
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
@@ -3480,6 +3570,52 @@ mod tests {
                 })
             ),
             "regular-file transmit parsing should not read the referenced file"
+        );
+    }
+
+    #[test]
+    fn kitty_regular_file_rgba_upload_stores_file_backed_asset_without_materializing() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let path = write_kitty_file_media_fixture("file-backed", &payload);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_regular_file_transmit_apc(622, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "regular file upload should succeed, got {reply:?}"
+        );
+        let internal_image_id = *kitty_state
+            .protocol_image_id_to_internal_id
+            .get(&622)
+            .expect("protocol id should be mapped to an internal asset");
+        assert_eq!(
+            kitty_asset_store
+                .borrow()
+                .image_dimensions(internal_image_id),
+            Some((2, 2))
+        );
+
+        std::fs::remove_file(path).ok();
+        assert!(
+            kitty_asset_store
+                .borrow()
+                .image_data(internal_image_id)
+                .is_none(),
+            "file-backed raw uploads should not keep a materialized in-memory payload"
         );
     }
 

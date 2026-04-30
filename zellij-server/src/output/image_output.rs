@@ -599,7 +599,7 @@ impl ImageOutput {
                                 client_id,
                                 *image_id,
                                 *generation,
-                                &asset.image_data,
+                                &asset.data,
                                 KittyFileOutputAcknowledgement::for_upload(
                                     acknowledgement_policy,
                                     upload_index,
@@ -642,13 +642,13 @@ impl ImageOutput {
         client_id: ClientId,
         image_id: u32,
         generation: u64,
-        image_data: &crate::output::KittyImageData,
+        asset_data: &crate::panes::kitty_asset_store::KittyAssetData,
         acknowledgement: KittyFileOutputAcknowledgement,
     ) -> String {
         if clients_with_kitty_file_output.contains(&client_id) {
             let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
-            if let Ok(path) =
-                kitty_output_media_cache.ensure_regular_file(image_id, generation, image_data)
+            if let Ok(path) = kitty_output_media_cache
+                .ensure_regular_file_for_asset(image_id, generation, asset_data)
             {
                 let quiet = match acknowledgement {
                     KittyFileOutputAcknowledgement::None => 2,
@@ -663,12 +663,15 @@ impl ImageOutput {
                         0
                     },
                 };
-                return KittyImageState::serialize_image_data_from_file(
-                    image_id, image_data, &path, quiet,
+                return KittyImageState::serialize_asset_data_from_file(
+                    image_id, asset_data, &path, quiet,
                 );
             }
         }
-        KittyImageState::serialize_image_data(image_id, image_data)
+        asset_data
+            .image_data()
+            .map(|image_data| KittyImageState::serialize_image_data(image_id, &image_data))
+            .unwrap_or_default()
     }
 
     fn kitty_file_upload_count_for_diff(
@@ -760,7 +763,7 @@ impl ImageOutput {
                     client_id,
                     image_id,
                     asset.generation,
-                    &asset.image_data,
+                    &asset.data,
                     KittyFileOutputAcknowledgement::for_upload(
                         acknowledgement_policy,
                         upload_index,

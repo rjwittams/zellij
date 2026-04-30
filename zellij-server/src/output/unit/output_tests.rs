@@ -9,7 +9,9 @@ use super::super::{
     LastRenderedImageState, Output, OutputBuffer, PaneImageRenderOutput, PlacementId,
     RenderedImageState, SixelImageChunk,
 };
-use crate::panes::kitty_asset_store::KittyAssetStore;
+use crate::panes::kitty_asset_store::{
+    KittyAssetData, KittyAssetFormat, KittyAssetStore, KittyRegularFileSource,
+};
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::{SixelGrid, SixelImageStore};
 use crate::panes::terminal_character::AnsiCode;
@@ -413,6 +415,23 @@ fn seed_test_kitty_asset(
     kitty_asset_store
         .borrow_mut()
         .insert_asset(image_id, image_data);
+}
+
+fn seed_test_file_backed_kitty_asset(
+    kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+    image_id: u32,
+    source: KittyRegularFileSource,
+) {
+    kitty_asset_store.borrow_mut().insert_asset_data_protecting(
+        image_id,
+        KittyAssetData::RegularFile {
+            source,
+            format: KittyAssetFormat::Rgba,
+            width: 2,
+            height: 2,
+        },
+        &HashSet::new(),
+    );
 }
 
 fn pane_image_output_with_sixels(sixel_chunks: Vec<SixelImageChunk>) -> PaneImageRenderOutput {
@@ -1173,6 +1192,57 @@ fn test_image_output_can_publish_resident_assets_as_regular_files() {
 }
 
 #[test]
+fn test_image_output_publishes_file_backed_raw_assets_as_regular_files() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let source_path = tempdir.path().join("source-rgba.bin");
+    let payload = vec![
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+    ];
+    std::fs::write(&source_path, &payload).unwrap();
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir.clone())));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(88, 2, 2);
+    let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    seed_test_file_backed_kitty_asset(
+        kitty_asset_store,
+        88,
+        KittyRegularFileSource {
+            path: source_path,
+            offset: 0,
+            size: Some(payload.len()),
+        },
+    );
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_file_output_enabled_for_client(1, true);
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=88,q=2,f=32,s=2,v=2,t=f;"),
+        "file-backed raw assets should be sent through kitty file transport"
+    );
+    assert!(
+        !client_output.contains(&base64::encode(&payload)),
+        "file-backed raw assets should not be serialized as direct base64 payloads"
+    );
+
+    let files = std::fs::read_dir(&media_dir)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(std::fs::read(files[0].path()).unwrap(), payload);
+}
+
+#[test]
 fn test_image_output_file_transport_is_per_client_and_reuses_published_files() {
     let tempdir = tempfile::tempdir().unwrap();
     let media_dir = tempdir.path().join("session-media/test/image");
@@ -1265,13 +1335,15 @@ fn test_image_output_watermark_requests_acknowledgement_only_for_last_file_uploa
 
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
+    let tracked_uploads = client_output.matches("q=2,f=100,t=f;").count();
+    let requested_uploads = client_output.matches("q=0,f=100,t=f;").count();
     assert!(
-        client_output.contains("a=t,i=1,q=2,f=100,t=f;"),
-        "watermark should track earlier file uploads without requesting replies"
+        tracked_uploads == 1,
+        "watermark should track exactly one earlier file upload without requesting replies, got {client_output:?}"
     );
     assert!(
-        client_output.contains("a=t,i=2,q=0,f=100,t=f;"),
-        "watermark should request a reply for the last file upload"
+        requested_uploads == 1,
+        "watermark should request exactly one reply for the last file upload, got {client_output:?}"
     );
 }
 
