@@ -8389,6 +8389,7 @@ fn new_grid_for_forwarding_test() -> Grid {
             height: 16,
         }))),
         Rc::new(RefCell::new(SixelImageStore::default())),
+        Rc::new(RefCell::new(KittyAssetStore::default())),
         Style::default(),
         false,
         true,
@@ -8406,7 +8407,7 @@ fn csi_14t_forwards_to_host_not_local() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b[14t" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_messages_to_pty.is_empty(),
@@ -8425,7 +8426,7 @@ fn csi_16t_forwards_to_host_not_local() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b[16t" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(grid.pending_messages_to_pty.is_empty());
     assert_eq!(grid.pending_forwarded_queries.len(), 1);
@@ -8442,7 +8443,7 @@ fn csi_18t_still_answered_locally() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b[18t" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert_eq!(grid.pending_messages_to_pty.len(), 1);
     assert!(grid.pending_forwarded_queries.is_empty());
@@ -8455,7 +8456,7 @@ fn osc_11_set_stays_local() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b]11;rgb:ffff/ffff/ffff\x07" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(grid.pending_messages_to_pty.is_empty());
     assert!(
@@ -8473,7 +8474,7 @@ fn osc_11_query_without_override_forwards_to_host() {
     let mut grid = new_grid_for_forwarding_test();
     assert!(grid.pane_default_bg.is_none());
     for byte in b"\x1b]11;?\x07" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_messages_to_pty.is_empty(),
@@ -8492,7 +8493,7 @@ fn osc_10_query_without_override_forwards_to_host() {
     let mut grid = new_grid_for_forwarding_test();
     assert!(grid.pane_default_fg.is_none());
     for byte in b"\x1b]10;?\x07" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(grid.pending_messages_to_pty.is_empty());
     assert_eq!(grid.pending_forwarded_queries.len(), 1);
@@ -8514,10 +8515,10 @@ fn set_pane_default_colors_short_circuits_osc_queries() {
     grid.set_pane_default_colors(Some("#ff8040".to_string()), Some("#102030".to_string()));
 
     for byte in b"\x1b]10;?\x07" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     for byte in b"\x1b]11;?\x07" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
 
     assert!(
@@ -8539,13 +8540,13 @@ fn osc_11_override_short_circuits_only_the_overridden_channel() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b]11;rgb:1010/2020/3030\x07" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(grid.pane_default_bg.is_some());
     assert!(grid.pane_default_fg.is_none());
 
     for byte in b"\x1b]10;?\x07" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_messages_to_pty.is_empty(),
@@ -8563,7 +8564,7 @@ fn csi_2026_dollar_p_stays_local() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b[?2026$p" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_forwarded_queries.is_empty(),
@@ -8584,7 +8585,7 @@ fn csi_2031_dollar_p_when_disabled_replies_reset() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b[?2031$p" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_forwarded_queries.is_empty(),
@@ -8604,7 +8605,7 @@ fn csi_2031_dollar_p_when_enabled_replies_set() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b[?2031h\x1b[?2031$p" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_forwarded_queries.is_empty(),
@@ -8628,7 +8629,7 @@ fn csi_22t_and_23t_stay_local() {
     grid.set_title("hello".to_string());
 
     for byte in b"\x1b[22;0t" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_forwarded_queries.is_empty(),
@@ -8642,7 +8643,7 @@ fn csi_22t_and_23t_stay_local() {
     // The push actually landed on Zellij's per-pane stack: restore it.
     grid.set_title("different".to_string());
     for byte in b"\x1b[23;0t" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_forwarded_queries.is_empty(),
@@ -8666,7 +8667,7 @@ fn osc_4_set_stays_local() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b]4;5;rgb:ffff/0000/0000\x07" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_forwarded_queries.is_empty(),
@@ -8691,14 +8692,14 @@ fn decset_2031_enables_color_palette_notification() {
         "default state must be disabled"
     );
     for byte in b"\x1b[?2031h" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.color_palette_notification_enabled,
         "DECSET 2031 must enable the flag"
     );
     for byte in b"\x1b[?2031l" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         !grid.color_palette_notification_enabled,
@@ -8743,7 +8744,7 @@ fn csi_996n_pushes_color_palette_mode_query_to_forwarded_queries() {
     let mut parser = vte::Parser::new();
     let mut grid = new_grid_for_forwarding_test();
     for byte in b"\x1b[?996n" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert_eq!(
         grid.pending_forwarded_queries,
@@ -8763,7 +8764,7 @@ fn csi_5n_status_query_still_handled_locally() {
     // Plain DSR 5 (no `?` intermediate) is not the new theme query and
     // must continue to receive its `\e[0n` "all good" reply locally.
     for byte in b"\x1b[5n" {
-        parser.advance(&mut grid, *byte);
+        parser.advance(&mut grid, &[*byte]);
     }
     assert!(
         grid.pending_forwarded_queries.is_empty(),

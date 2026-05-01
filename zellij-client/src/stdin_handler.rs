@@ -69,20 +69,6 @@ impl TerminalApcParser {
     }
 }
 
-fn send_done_parsing_after_query_timeout(
-    send_input_instructions: SenderWithContext<InputInstruction>,
-    query_duration: u64,
-) {
-    std::thread::spawn({
-        move || {
-            std::thread::sleep(Duration::from_millis(query_duration));
-            send_input_instructions
-                .send(InputInstruction::DoneParsing)
-                .unwrap();
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::TerminalApcParser;
@@ -264,8 +250,7 @@ pub(crate) fn stdin_loop(
                             }
                             continue;
                         }
-                        let (passthrough_chunks, kitty_apcs) =
-                            terminal_apc_parser.parse(&residue);
+                        let (passthrough_chunks, kitty_apcs) = terminal_apc_parser.parse(&residue);
                         for kitty_apc in kitty_apcs {
                             let _ = send_input_instructions
                                 .send(InputInstruction::KittyImageTerminalResponse(kitty_apc));
@@ -295,7 +280,8 @@ pub(crate) fn stdin_loop(
                                             .unwrap();
                                         continue;
                                     },
-                                    KittyParseOutcome::Incomplete | KittyParseOutcome::NoMatch => {},
+                                    KittyParseOutcome::Incomplete | KittyParseOutcome::NoMatch => {
+                                    },
                                 }
                             }
 
@@ -386,8 +372,8 @@ fn finalize_events(
     if !drained.is_empty() {
         let (passthrough_chunks, kitty_apcs) = terminal_apc_parser.parse(&drained);
         for kitty_apc in kitty_apcs {
-            let _ =
-                send_input_instructions.send(InputInstruction::KittyImageTerminalResponse(kitty_apc));
+            let _ = send_input_instructions
+                .send(InputInstruction::KittyImageTerminalResponse(kitty_apc));
         }
         drained = passthrough_chunks.into_iter().flatten().collect();
     }

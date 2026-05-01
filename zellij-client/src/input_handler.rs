@@ -269,16 +269,6 @@ impl InputHandler {
                             raw_bytes,
                         });
                 },
-                Ok((InputInstruction::StartedParsing, _error_context)) => {
-                    self.send_client_instructions
-                        .send(ClientInstruction::StartedParsingStdinQuery)
-                        .unwrap();
-                },
-                Ok((InputInstruction::DoneParsing, _error_context)) => {
-                    self.send_client_instructions
-                        .send(ClientInstruction::DoneParsingStdinQuery)
-                        .unwrap();
-                },
                 Ok((InputInstruction::Exit, _error_context)) => {
                     self.should_exit = true;
                 },

@@ -439,8 +439,6 @@ pub(crate) enum InputInstruction {
         reply_bytes: Vec<u8>,
     },
     KittyImageTerminalResponse(Vec<u8>),
-    StartedParsing,
-    DoneParsing,
     Exit,
 }
 
