@@ -120,6 +120,8 @@ Config {
         serialization_interval: None,
         disable_session_metadata: None,
         support_kitty_keyboard_protocol: None,
+        kitty_image_output_transports: None,
+        kitty_image_file_lifetime: None,
         web_server: None,
         web_sharing: None,
         stacked_resize: None,
