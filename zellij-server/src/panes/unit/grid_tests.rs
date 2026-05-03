@@ -6613,7 +6613,7 @@ fn kitty_compressed_rgba_payload_is_decompressed_before_storage() {
         .map(|chunk| chunk.image_id)
         .expect("expected compressed RGBA placement to remain visible");
     let stored_image = kitty_asset_store
-        .borrow()
+        .borrow_mut()
         .image_data(stored_image_id)
         .expect("expected compressed RGBA payload to be stored");
     match stored_image {
@@ -6648,7 +6648,7 @@ fn kitty_compressed_rgb_payload_is_decompressed_before_storage() {
         .map(|chunk| chunk.image_id)
         .expect("expected compressed RGB placement to remain visible");
     let stored_image = kitty_asset_store
-        .borrow()
+        .borrow_mut()
         .image_data(stored_image_id)
         .expect("expected compressed RGB payload to be stored");
     match stored_image {
@@ -6683,7 +6683,7 @@ fn kitty_chunked_compressed_rgb_payload_is_decompressed_after_full_assembly() {
         .map(|chunk| chunk.image_id)
         .expect("expected chunked compressed RGB placement to remain visible");
     let stored_image = kitty_asset_store
-        .borrow()
+        .borrow_mut()
         .image_data(stored_image_id)
         .expect("expected chunked compressed RGB payload to be stored");
     match stored_image {

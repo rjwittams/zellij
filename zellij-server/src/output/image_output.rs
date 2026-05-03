@@ -594,8 +594,8 @@ impl ImageOutput {
                             image_id,
                             generation,
                         } => {
-                            let kitty_asset_store = self.kitty_asset_store.borrow();
-                            let asset = kitty_asset_store.asset(*image_id);
+                            let mut kitty_asset_store = self.kitty_asset_store.borrow_mut();
+                            let asset = kitty_asset_store.asset_mut(*image_id);
                             let Some(asset) = asset else {
                                 continue;
                             };
@@ -609,7 +609,7 @@ impl ImageOutput {
                                 client_id,
                                 *image_id,
                                 *generation,
-                                &asset.data,
+                                &mut asset.data,
                                 KittyFileOutputAcknowledgement::for_upload(
                                     acknowledgement_policy,
                                     upload_index,
@@ -652,7 +652,7 @@ impl ImageOutput {
         client_id: ClientId,
         image_id: u32,
         generation: u64,
-        asset_data: &crate::panes::kitty_asset_store::KittyAssetData,
+        asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
         acknowledgement: KittyFileOutputAcknowledgement,
     ) -> String {
         if clients_with_kitty_file_output.contains(&client_id) {
@@ -761,8 +761,8 @@ impl ImageOutput {
             .chain(renders.iter().map(|render| render.image_id))
         {
             if transmitted_image_ids.insert(image_id) {
-                let kitty_asset_store = self.kitty_asset_store.borrow();
-                let asset = kitty_asset_store.asset(image_id);
+                let mut kitty_asset_store = self.kitty_asset_store.borrow_mut();
+                let asset = kitty_asset_store.asset_mut(image_id);
                 let Some(asset) = asset else {
                     continue;
                 };
@@ -773,7 +773,7 @@ impl ImageOutput {
                     client_id,
                     image_id,
                     asset.generation,
-                    &asset.data,
+                    &mut asset.data,
                     KittyFileOutputAcknowledgement::for_upload(
                         acknowledgement_policy,
                         upload_index,

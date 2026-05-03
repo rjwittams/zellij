@@ -1,11 +1,14 @@
 use std::{
     collections::{HashMap, HashSet},
+    ffi::CString,
     fs,
     io::{Read, Seek, SeekFrom},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use crate::output::KittyImageData;
+
+const KITTY_TEMP_FILE_MARKER: &str = "tty-graphics-protocol";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KittyAssetFormat {
@@ -25,17 +28,91 @@ impl KittyAssetFormat {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KittyRegularFileSource {
-    pub path: PathBuf,
+pub struct KittyByteRange {
     pub offset: u64,
     pub size: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KittyExternalMediaLocation {
+    RegularFile(PathBuf),
+    TemporaryFile(PathBuf),
+    SharedMemory(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KittyExternalMedia {
+    pub location: KittyExternalMediaLocation,
+    pub range: KittyByteRange,
+    cached_payload: Option<Box<[u8]>>,
+}
+
+impl KittyExternalMedia {
+    pub fn new(location: KittyExternalMediaLocation, range: KittyByteRange) -> Self {
+        Self {
+            location,
+            range,
+            cached_payload: None,
+        }
+    }
+
+    pub fn materialized_payload(&mut self) -> Option<&[u8]> {
+        if self.cached_payload.is_none() {
+            let payload = self.read_payload()?;
+            self.cleanup_after_successful_read();
+            self.cached_payload = Some(payload.into_boxed_slice());
+        }
+        self.cached_payload.as_deref()
+    }
+
+    pub fn into_payload(self) -> Option<Vec<u8>> {
+        let payload = self.read_payload()?;
+        self.cleanup_after_successful_read();
+        Some(payload)
+    }
+
+    pub fn payload_len(&self) -> Option<usize> {
+        match &self.location {
+            KittyExternalMediaLocation::RegularFile(path)
+            | KittyExternalMediaLocation::TemporaryFile(path) => {
+                external_file_payload_len(path, &self.range)
+            },
+            KittyExternalMediaLocation::SharedMemory(name) => {
+                shared_memory_payload_len(name, &self.range)
+            },
+        }
+    }
+
+    fn read_payload(&self) -> Option<Vec<u8>> {
+        match &self.location {
+            KittyExternalMediaLocation::RegularFile(path)
+            | KittyExternalMediaLocation::TemporaryFile(path) => {
+                read_external_file_payload(path, &self.range)
+            },
+            KittyExternalMediaLocation::SharedMemory(name) => {
+                read_shared_memory_payload(name, &self.range)
+            },
+        }
+    }
+
+    fn cleanup_after_successful_read(&self) {
+        match &self.location {
+            KittyExternalMediaLocation::TemporaryFile(path) => {
+                if is_safe_kitty_temporary_file_path(path) {
+                    fs::remove_file(path).ok();
+                }
+            },
+            KittyExternalMediaLocation::SharedMemory(name) => unlink_shared_memory(name),
+            KittyExternalMediaLocation::RegularFile(_) => {},
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KittyAssetData {
     Image(KittyImageData),
-    RegularFile {
-        source: KittyRegularFileSource,
+    External {
+        media: KittyExternalMedia,
         format: KittyAssetFormat,
         width: u32,
         height: u32,
@@ -43,22 +120,23 @@ pub enum KittyAssetData {
 }
 
 impl KittyAssetData {
-    pub fn image_data(&self) -> Option<KittyImageData> {
+    pub fn image_data(&mut self) -> Option<KittyImageData> {
         match self {
             KittyAssetData::Image(image_data) => Some(image_data.clone()),
-            KittyAssetData::RegularFile {
-                source,
+            KittyAssetData::External {
+                media,
                 format,
                 width,
                 height,
             } => {
-                let payload = read_regular_file_source(source)?;
+                let payload = media.materialized_payload()?;
                 if let Some(bytes_per_pixel) = format.bytes_per_pixel() {
                     let expected_len = expected_raw_payload_size(*width, *height, bytes_per_pixel)?;
                     if payload.len() != expected_len {
                         return None;
                     }
                 }
+                let payload = payload.to_vec();
                 match format {
                     KittyAssetFormat::Png => Some(KittyImageData::Png {
                         data: payload,
@@ -83,7 +161,7 @@ impl KittyAssetData {
     pub fn dimensions(&self) -> (u32, u32) {
         match self {
             KittyAssetData::Image(image_data) => kitty_image_dimensions(image_data),
-            KittyAssetData::RegularFile { width, height, .. } => (*width, *height),
+            KittyAssetData::External { width, height, .. } => (*width, *height),
         }
     }
 
@@ -97,7 +175,7 @@ impl KittyAssetData {
     pub fn format(&self) -> KittyAssetFormat {
         match self {
             KittyAssetData::Image(image_data) => KittyAssetFormat::from(image_data),
-            KittyAssetData::RegularFile { format, .. } => *format,
+            KittyAssetData::External { format, .. } => *format,
         }
     }
 }
@@ -112,28 +190,28 @@ impl From<&KittyImageData> for KittyAssetFormat {
     }
 }
 
-pub fn regular_file_source_len(source: &KittyRegularFileSource) -> Option<usize> {
-    let metadata = fs::metadata(&source.path).ok()?;
+pub fn external_file_payload_len(path: &Path, range: &KittyByteRange) -> Option<usize> {
+    let metadata = fs::metadata(path).ok()?;
     if !metadata.file_type().is_file() {
         return None;
     }
     let total_len = metadata.len();
-    let available_len = total_len.saturating_sub(source.offset);
-    let payload_len = source.size.map(|size| size as u64).unwrap_or(available_len);
+    let available_len = total_len.saturating_sub(range.offset);
+    let payload_len = range.size.map(|size| size as u64).unwrap_or(available_len);
     usize::try_from(payload_len.min(available_len)).ok()
 }
 
-pub fn read_regular_file_source(source: &KittyRegularFileSource) -> Option<Vec<u8>> {
-    let metadata = fs::metadata(&source.path).ok()?;
+pub fn read_external_file_payload(path: &Path, range: &KittyByteRange) -> Option<Vec<u8>> {
+    let metadata = fs::metadata(path).ok()?;
     if !metadata.file_type().is_file() {
         return None;
     }
-    let mut file = fs::File::open(&source.path).ok()?;
-    if source.offset > 0 {
-        file.seek(SeekFrom::Start(source.offset)).ok()?;
+    let mut file = fs::File::open(path).ok()?;
+    if range.offset > 0 {
+        file.seek(SeekFrom::Start(range.offset)).ok()?;
     }
     let mut payload = Vec::new();
-    match source.size {
+    match range.size {
         Some(size) => {
             let mut reader = file.take(size as u64);
             reader.read_to_end(&mut payload).ok()?;
@@ -144,6 +222,125 @@ pub fn read_regular_file_source(source: &KittyRegularFileSource) -> Option<Vec<u
     }
     Some(payload)
 }
+
+fn known_kitty_temp_dirs() -> Vec<PathBuf> {
+    let mut temp_dirs = vec![std::env::temp_dir()];
+    temp_dirs.push(PathBuf::from("/tmp"));
+    temp_dirs.push(PathBuf::from("/dev/shm"));
+    temp_dirs
+        .into_iter()
+        .filter_map(|path| path.canonicalize().ok())
+        .collect()
+}
+
+fn is_safe_kitty_temporary_file_path(path: &Path) -> bool {
+    if !path.to_string_lossy().contains(KITTY_TEMP_FILE_MARKER) {
+        return false;
+    }
+    let Some(parent) = path.parent().and_then(|parent| parent.canonicalize().ok()) else {
+        return false;
+    };
+    known_kitty_temp_dirs()
+        .iter()
+        .any(|temp_dir| parent.starts_with(temp_dir))
+}
+
+#[cfg(unix)]
+fn shared_memory_payload_len(name: &str, range: &KittyByteRange) -> Option<usize> {
+    let c_name = CString::new(name).ok()?;
+    unsafe {
+        let fd = libc::shm_open(c_name.as_ptr(), libc::O_RDONLY, 0o600);
+        if fd < 0 {
+            return None;
+        }
+        let len = shared_memory_payload_len_from_fd(fd, range);
+        libc::close(fd);
+        len
+    }
+}
+
+#[cfg(not(unix))]
+fn shared_memory_payload_len(_name: &str, _range: &KittyByteRange) -> Option<usize> {
+    None
+}
+
+#[cfg(unix)]
+fn shared_memory_payload_len_from_fd(fd: libc::c_int, range: &KittyByteRange) -> Option<usize> {
+    unsafe {
+        let mut stat: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut stat) != 0 || stat.st_size < 0 {
+            return None;
+        }
+        let total_len = usize::try_from(stat.st_size).ok()?;
+        let offset = usize::try_from(range.offset).ok()?;
+        let available_len = total_len.saturating_sub(offset);
+        Some(range.size.unwrap_or(available_len).min(available_len))
+    }
+}
+
+#[cfg(unix)]
+fn read_shared_memory_payload(name: &str, range: &KittyByteRange) -> Option<Vec<u8>> {
+    let c_name = CString::new(name).ok()?;
+    unsafe {
+        let fd = libc::shm_open(c_name.as_ptr(), libc::O_RDONLY, 0o600);
+        if fd < 0 {
+            return None;
+        }
+        let payload = read_shared_memory_payload_from_fd(fd, range);
+        libc::close(fd);
+        payload
+    }
+}
+
+#[cfg(not(unix))]
+fn read_shared_memory_payload(_name: &str, _range: &KittyByteRange) -> Option<Vec<u8>> {
+    None
+}
+
+#[cfg(unix)]
+fn read_shared_memory_payload_from_fd(fd: libc::c_int, range: &KittyByteRange) -> Option<Vec<u8>> {
+    unsafe {
+        let mut stat: libc::stat = std::mem::zeroed();
+        if libc::fstat(fd, &mut stat) != 0 || stat.st_size < 0 {
+            return None;
+        }
+        let total_len = usize::try_from(stat.st_size).ok()?;
+        let offset = usize::try_from(range.offset).ok()?;
+        let copy_len = shared_memory_payload_len_from_fd(fd, range)?;
+
+        if copy_len == 0 || total_len == 0 {
+            return Some(Vec::new());
+        }
+        let mapping = libc::mmap(
+            std::ptr::null_mut(),
+            total_len,
+            libc::PROT_READ,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        );
+        if mapping == libc::MAP_FAILED {
+            return None;
+        }
+        let bytes =
+            std::slice::from_raw_parts((mapping as *const u8).add(offset), copy_len).to_vec();
+        libc::munmap(mapping, total_len);
+        Some(bytes)
+    }
+}
+
+#[cfg(unix)]
+fn unlink_shared_memory(name: &str) {
+    let Some(c_name) = CString::new(name).ok() else {
+        return;
+    };
+    unsafe {
+        libc::shm_unlink(c_name.as_ptr());
+    }
+}
+
+#[cfg(not(unix))]
+fn unlink_shared_memory(_name: &str) {}
 
 fn expected_raw_payload_size(width: u32, height: u32, bytes_per_pixel: usize) -> Option<usize> {
     (width as usize)
@@ -275,6 +472,10 @@ impl KittyAssetStore {
         self.assets.get(&image_id)
     }
 
+    pub fn asset_mut(&mut self, image_id: u32) -> Option<&mut KittyAsset> {
+        self.assets.get_mut(&image_id)
+    }
+
     pub fn remove_asset(&mut self, image_id: u32) -> Option<KittyAsset> {
         self.asset_order
             .retain(|existing_id| *existing_id != image_id);
@@ -288,8 +489,8 @@ impl KittyAssetStore {
         removed_asset
     }
 
-    pub fn image_data(&self, image_id: u32) -> Option<KittyImageData> {
-        self.assets.get(&image_id)?.data.image_data()
+    pub fn image_data(&mut self, image_id: u32) -> Option<KittyImageData> {
+        self.assets.get_mut(&image_id)?.data.image_data()
     }
 
     pub fn image_dimensions(&self, image_id: u32) -> Option<(u32, u32)> {

@@ -6,8 +6,8 @@ use crate::output::{
     KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyPlaceholderRender, PlacementId,
 };
 use crate::panes::kitty_asset_store::{
-    regular_file_source_len, KittyAssetData, KittyAssetFormat, KittyAssetStore,
-    KittyRegularFileSource,
+    KittyAssetData, KittyAssetFormat, KittyAssetStore, KittyByteRange, KittyExternalMedia,
+    KittyExternalMediaLocation,
 };
 use crate::panes::kitty_placeholder::{
     kitty_diacritic_to_index, KITTY_ROWCOL_DIACRITICS, KITTY_UNICODE_PLACEHOLDER_CHAR,
@@ -21,11 +21,8 @@ use crate::panes::pane_image_scene::{
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::rc::Rc;
-
-const KITTY_TEMP_FILE_MARKER: &str = "tty-graphics-protocol";
 
 #[derive(Clone, Debug, Default)]
 pub struct PendingKittyPlaceholder {
@@ -280,11 +277,7 @@ const KITTY_COMPRESSED_RAW_DIRECT_TRANSMIT_PADDING_BYTES: usize = 1024;
 #[derive(Clone, Debug)]
 enum KittyMediaSource {
     Direct(Vec<u8>),
-    RegularFile {
-        path: PathBuf,
-        size: Option<usize>,
-        offset: u64,
-    },
+    External(KittyExternalMedia),
 }
 
 impl KittyMediaSource {
@@ -296,29 +289,35 @@ impl KittyMediaSource {
             KittyTransmissionMedium::RegularFile => {
                 let path_payload = decode_kitty_transport_payload(apc.payload)?;
                 let (size, offset) = parse_kitty_payload_byte_range(apc.size, apc.offset)?;
-                Some(KittyMediaSource::RegularFile {
-                    path: kitty_path_payload(&path_payload)?.to_path_buf(),
-                    size,
-                    offset,
-                })
+                Some(KittyMediaSource::External(KittyExternalMedia::new(
+                    KittyExternalMediaLocation::RegularFile(
+                        kitty_path_payload(&path_payload)?.to_path_buf(),
+                    ),
+                    KittyByteRange { offset, size },
+                )))
             },
             KittyTransmissionMedium::TemporaryFile => {
-                Some(KittyMediaSource::Direct(read_kitty_transmission_payload(
-                    apc.payload,
-                    apc.medium,
-                    apc.size,
-                    apc.offset,
-                    apc.raw_payload_size(),
-                )?))
+                let path_payload = decode_kitty_transport_payload(apc.payload)?;
+                let (size, offset) = parse_kitty_payload_byte_range(apc.size, apc.offset)?;
+                Some(KittyMediaSource::External(KittyExternalMedia::new(
+                    KittyExternalMediaLocation::TemporaryFile(
+                        kitty_path_payload(&path_payload)?.to_path_buf(),
+                    ),
+                    KittyByteRange { offset, size },
+                )))
             },
             KittyTransmissionMedium::SharedMemory => {
-                Some(KittyMediaSource::Direct(read_kitty_transmission_payload(
-                    apc.payload,
-                    apc.medium,
-                    apc.size,
-                    apc.offset,
-                    apc.raw_payload_size(),
-                )?))
+                let name_payload = decode_kitty_transport_payload(apc.payload)?;
+                let (size, offset) = parse_kitty_payload_byte_range(apc.size, apc.offset)?;
+                Some(KittyMediaSource::External(KittyExternalMedia::new(
+                    KittyExternalMediaLocation::SharedMemory(
+                        std::str::from_utf8(&name_payload).ok()?.to_string(),
+                    ),
+                    KittyByteRange {
+                        offset,
+                        size: size.or(apc.raw_payload_size()),
+                    },
+                )))
             },
         }
     }
@@ -326,20 +325,15 @@ impl KittyMediaSource {
     fn into_payload(self) -> Result<Vec<u8>, String> {
         match self {
             KittyMediaSource::Direct(payload) => Ok(payload),
-            KittyMediaSource::RegularFile { path, size, offset } => {
-                read_kitty_file_payload(&path, size, offset)
-                    .ok_or_else(|| "EINVAL:Invalid or unsupported kitty command".to_string())
-            },
+            KittyMediaSource::External(media) => media
+                .into_payload()
+                .ok_or_else(|| "EINVAL:Invalid or unsupported kitty command".to_string()),
         }
     }
 
-    fn regular_file_source(&self) -> Option<KittyRegularFileSource> {
+    fn external_media(&self) -> Option<KittyExternalMedia> {
         match self {
-            KittyMediaSource::RegularFile { path, size, offset } => Some(KittyRegularFileSource {
-                path: path.clone(),
-                offset: *offset,
-                size: *size,
-            }),
+            KittyMediaSource::External(media) => Some(media.clone()),
             KittyMediaSource::Direct(_) => None,
         }
     }
@@ -1370,7 +1364,7 @@ impl KittyImageState {
 
     pub fn serialize_chunks_with_asset_store(
         chunks: &[KittyImageChunk],
-        kitty_asset_store: &KittyAssetStore,
+        kitty_asset_store: &mut KittyAssetStore,
     ) -> String {
         if chunks.is_empty() {
             return String::new();
@@ -1407,7 +1401,7 @@ impl KittyImageState {
 
     pub fn serialize_placeholder_renders_with_asset_store(
         renders: &[KittyPlaceholderRender],
-        kitty_asset_store: &KittyAssetStore,
+        kitty_asset_store: &mut KittyAssetStore,
     ) -> String {
         if renders.is_empty() {
             return String::new();
@@ -1445,7 +1439,7 @@ impl KittyImageState {
     pub fn serialize_full_scene_with_asset_store(
         chunks: &[KittyImageChunk],
         renders: &[KittyPlaceholderRender],
-        kitty_asset_store: &KittyAssetStore,
+        kitty_asset_store: &mut KittyAssetStore,
     ) -> String {
         if chunks.is_empty() && renders.is_empty() {
             return String::new();
@@ -2182,7 +2176,7 @@ impl PendingKittyTransmit {
                 existing_payload.extend(payload);
                 Ok(())
             },
-            KittyMediaSource::RegularFile { .. } => {
+            KittyMediaSource::External(_) => {
                 Err(non_query_failure_message(self.reply_context.kind).to_string())
             },
         }
@@ -2221,7 +2215,7 @@ impl PendingKittyTransmit {
         if self.compression.is_none() {
             let image_format = self.image_format;
             if matches!(image_format, KittyImageFormat::Rgb | KittyImageFormat::Rgba) {
-                if let Some(source) = self.media_source.regular_file_source() {
+                if let Some(media) = self.media_source.external_media() {
                     let bytes_per_pixel = match image_format {
                         KittyImageFormat::Rgb => 3,
                         KittyImageFormat::Rgba => 4,
@@ -2232,15 +2226,15 @@ impl PendingKittyTransmit {
                         self.height,
                         bytes_per_pixel,
                     )?;
-                    match regular_file_source_len(&source) {
+                    match media.payload_len() {
                         Some(payload_len) if payload_len == expected_len => {
                             let format = match image_format {
                                 KittyImageFormat::Rgb => KittyAssetFormat::Rgb,
                                 KittyImageFormat::Rgba => KittyAssetFormat::Rgba,
                                 KittyImageFormat::Png => unreachable!(),
                             };
-                            return Ok(KittyAssetData::RegularFile {
-                                source,
+                            return Ok(KittyAssetData::External {
+                                media,
                                 format,
                                 width: self.width,
                                 height: self.height,
@@ -2410,51 +2404,11 @@ fn read_kitty_regular_file_payload(
     size: Option<usize>,
     offset: u64,
 ) -> Option<Vec<u8>> {
-    read_kitty_file_payload(kitty_path_payload(path_payload)?, size, offset)
-}
-
-fn read_kitty_file_payload(path: &Path, size: Option<usize>, offset: u64) -> Option<Vec<u8>> {
-    let metadata = std::fs::metadata(path).ok()?;
-    if !metadata.file_type().is_file() {
-        return None;
-    }
-    let mut file = std::fs::File::open(path).ok()?;
-    if offset > 0 {
-        file.seek(SeekFrom::Start(offset)).ok()?;
-    }
-    let mut payload = Vec::new();
-    match size {
-        Some(size) => {
-            let mut reader = file.take(size as u64);
-            reader.read_to_end(&mut payload).ok()?;
-        },
-        None => {
-            file.read_to_end(&mut payload).ok()?;
-        },
-    }
-    Some(payload)
-}
-
-fn known_kitty_temp_dirs() -> Vec<PathBuf> {
-    let mut temp_dirs = vec![std::env::temp_dir()];
-    temp_dirs.push(PathBuf::from("/tmp"));
-    temp_dirs.push(PathBuf::from("/dev/shm"));
-    temp_dirs
-        .into_iter()
-        .filter_map(|path| path.canonicalize().ok())
-        .collect()
-}
-
-fn is_safe_kitty_temporary_file_path(path: &Path) -> bool {
-    if !path.to_string_lossy().contains(KITTY_TEMP_FILE_MARKER) {
-        return false;
-    }
-    let Some(parent) = path.parent().and_then(|parent| parent.canonicalize().ok()) else {
-        return false;
-    };
-    known_kitty_temp_dirs()
-        .iter()
-        .any(|temp_dir| parent.starts_with(temp_dir))
+    KittyExternalMedia::new(
+        KittyExternalMediaLocation::RegularFile(kitty_path_payload(path_payload)?.to_path_buf()),
+        KittyByteRange { offset, size },
+    )
+    .into_payload()
 }
 
 fn read_kitty_temporary_file_payload(
@@ -2462,91 +2416,25 @@ fn read_kitty_temporary_file_payload(
     size: Option<usize>,
     offset: u64,
 ) -> Option<Vec<u8>> {
-    let path = kitty_path_payload(path_payload)?;
-    let payload = read_kitty_file_payload(path, size, offset)?;
-    if is_safe_kitty_temporary_file_path(path) {
-        std::fs::remove_file(path).ok();
-    }
-    Some(payload)
+    KittyExternalMedia::new(
+        KittyExternalMediaLocation::TemporaryFile(kitty_path_payload(path_payload)?.to_path_buf()),
+        KittyByteRange { offset, size },
+    )
+    .into_payload()
 }
 
-#[cfg(unix)]
 fn read_kitty_shared_memory_payload(
     name_payload: &[u8],
     size: Option<usize>,
     offset: u64,
 ) -> Option<Vec<u8>> {
-    use std::ffi::CString;
-
-    let name = std::str::from_utf8(name_payload).ok()?;
-    let c_name = CString::new(name).ok()?;
-    unsafe {
-        let fd = libc::shm_open(c_name.as_ptr(), libc::O_RDONLY, 0o600);
-        if fd < 0 {
-            return None;
-        }
-
-        let mut stat: libc::stat = std::mem::zeroed();
-        if libc::fstat(fd, &mut stat) != 0 || stat.st_size < 0 {
-            libc::shm_unlink(c_name.as_ptr());
-            libc::close(fd);
-            return None;
-        }
-
-        let total_len = match usize::try_from(stat.st_size) {
-            Ok(total_len) => total_len,
-            Err(_) => {
-                libc::shm_unlink(c_name.as_ptr());
-                libc::close(fd);
-                return None;
-            },
-        };
-        let offset = match usize::try_from(offset) {
-            Ok(offset) => offset,
-            Err(_) => {
-                libc::shm_unlink(c_name.as_ptr());
-                libc::close(fd);
-                return None;
-            },
-        };
-        let available_len = total_len.saturating_sub(offset);
-        let copy_len = size.unwrap_or(available_len).min(available_len);
-
-        let payload = if copy_len == 0 || total_len == 0 {
-            Vec::new()
-        } else {
-            let mapping = libc::mmap(
-                std::ptr::null_mut(),
-                total_len,
-                libc::PROT_READ,
-                libc::MAP_SHARED,
-                fd,
-                0,
-            );
-            if mapping == libc::MAP_FAILED {
-                libc::shm_unlink(c_name.as_ptr());
-                libc::close(fd);
-                return None;
-            }
-            let bytes =
-                std::slice::from_raw_parts((mapping as *const u8).add(offset), copy_len).to_vec();
-            libc::munmap(mapping, total_len);
-            bytes
-        };
-
-        libc::shm_unlink(c_name.as_ptr());
-        libc::close(fd);
-        Some(payload)
-    }
-}
-
-#[cfg(not(unix))]
-fn read_kitty_shared_memory_payload(
-    _name_payload: &[u8],
-    _size: Option<usize>,
-    _offset: u64,
-) -> Option<Vec<u8>> {
-    None
+    KittyExternalMedia::new(
+        KittyExternalMediaLocation::SharedMemory(
+            std::str::from_utf8(name_payload).ok()?.to_string(),
+        ),
+        KittyByteRange { offset, size },
+    )
+    .into_payload()
 }
 
 fn read_kitty_transmission_payload(
@@ -3071,7 +2959,7 @@ mod tests {
             .expect("system time should be after epoch")
             .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "{KITTY_TEMP_FILE_MARKER}-zellij-{name}-{}-{unique}.bin",
+            "tty-graphics-protocol-zellij-{name}-{}-{unique}.bin",
             std::process::id()
         ));
         std::fs::write(&path, bytes).expect("fixture file should be writable");
@@ -3287,7 +3175,7 @@ mod tests {
             .get(&protocol_image_id)
             .expect("protocol id should be mapped to an internal asset");
         match kitty_asset_store
-            .borrow()
+            .borrow_mut()
             .image_data(internal_image_id)
             .expect("image should be stored")
         {
@@ -3366,7 +3254,7 @@ mod tests {
     }
 
     #[test]
-    fn kitty_temporary_file_rgba_upload_deletes_safe_temp_file() {
+    fn kitty_temporary_file_rgba_upload_deletes_safe_temp_file_after_materialization() {
         let payload = vec![
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
         ];
@@ -3391,10 +3279,14 @@ mod tests {
             "temporary file upload should succeed, got {reply:?}"
         );
         assert!(
-            !path.exists(),
-            "safe temporary file should be deleted after read"
+            path.exists(),
+            "safe temporary file should not be read or deleted until materialization"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 605, &payload);
+        assert!(
+            !path.exists(),
+            "safe temporary file should be deleted after materialization"
+        );
     }
 
     #[test]
@@ -3423,8 +3315,9 @@ mod tests {
             "temporary file upload without magic name should still read, got {reply:?}"
         );
         assert!(path.exists(), "unsafe temporary file name should be kept");
-        std::fs::remove_file(path).ok();
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 606, &payload);
+        assert!(path.exists(), "unsafe temporary file name should be kept");
+        std::fs::remove_file(path).ok();
     }
 
     #[test]
@@ -3456,10 +3349,14 @@ mod tests {
             "temporary file upload with S/O should succeed, got {reply:?}"
         );
         assert!(
-            !path.exists(),
-            "safe temporary file with S/O should be deleted after read"
+            path.exists(),
+            "safe temporary file with S/O should not be deleted until materialization"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 607, &payload);
+        assert!(
+            !path.exists(),
+            "safe temporary file with S/O should be deleted after materialization"
+        );
     }
 
     #[test]
@@ -3492,7 +3389,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn kitty_shared_memory_rgba_upload_reads_and_unlinks() {
+    fn kitty_shared_memory_rgba_upload_unlinks_after_materialization() {
         let payload = vec![
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
         ];
@@ -3517,10 +3414,14 @@ mod tests {
             "shared memory upload should succeed, got {reply:?}"
         );
         assert!(
-            !kitty_shared_memory_exists(&name),
-            "shared memory object should be unlinked after read"
+            kitty_shared_memory_exists(&name),
+            "shared memory object should not be read or unlinked until materialization"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 611, &payload);
+        assert!(
+            !kitty_shared_memory_exists(&name),
+            "shared memory object should be unlinked after materialization"
+        );
     }
 
     #[cfg(unix)]
@@ -3565,10 +3466,14 @@ mod tests {
                 "shared memory upload with offset {offset} should succeed, got {reply:?}"
             );
             assert!(
-                !kitty_shared_memory_exists(&name),
-                "shared memory object should be unlinked after offset read"
+                kitty_shared_memory_exists(&name),
+                "shared memory object should not be unlinked before materialization"
             );
             assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, image_id, &payload);
+            assert!(
+                !kitty_shared_memory_exists(&name),
+                "shared memory object should be unlinked after materialization"
+            );
         }
     }
 
@@ -3631,7 +3536,7 @@ mod tests {
                 .contains_key(&616),
             "missing shared memory should not create a protocol image mapping"
         );
-        assert!(kitty_asset_store.borrow().image_data(616).is_none());
+        assert!(kitty_asset_store.borrow_mut().image_data(616).is_none());
     }
 
     #[cfg(unix)]
@@ -3705,7 +3610,7 @@ mod tests {
     }
 
     #[test]
-    fn kitty_regular_file_rgba_upload_stores_file_backed_asset_without_materializing() {
+    fn kitty_regular_file_rgba_upload_caches_after_first_materialization() {
         let payload = vec![
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
         ];
@@ -3740,14 +3645,9 @@ mod tests {
             Some((2, 2))
         );
 
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 622, &payload);
         std::fs::remove_file(path).ok();
-        assert!(
-            kitty_asset_store
-                .borrow()
-                .image_data(internal_image_id)
-                .is_none(),
-            "file-backed raw uploads should not keep a materialized in-memory payload"
-        );
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 622, &payload);
     }
 
     #[test]
@@ -3782,7 +3682,7 @@ mod tests {
                 .contains_key(&621),
             "failed materialization should not leave a protocol image mapping"
         );
-        assert!(kitty_asset_store.borrow().image_data(621).is_none());
+        assert!(kitty_asset_store.borrow_mut().image_data(621).is_none());
     }
 
     #[test]
@@ -4097,14 +3997,14 @@ mod tests {
 
         assert!(
             kitty_asset_store
-                .borrow()
+                .borrow_mut()
                 .image_data(anchor_internal_image_id)
                 .is_some(),
             "visible anchor image should be protected from quota eviction"
         );
         assert!(
             kitty_asset_store
-                .borrow()
+                .borrow_mut()
                 .image_data(first_stored_internal_image_id)
                 .is_none(),
             "oldest unplaced image should be evicted under quota pressure"
@@ -4121,7 +4021,7 @@ mod tests {
             .expect("second stored image should have an internal image id");
         assert!(
             kitty_asset_store
-                .borrow()
+                .borrow_mut()
                 .image_data(second_stored_internal_image_id)
                 .is_some(),
             "newly uploaded stored-only image should remain available"
@@ -4204,7 +4104,7 @@ mod tests {
 
         assert!(
             kitty_asset_store
-                .borrow()
+                .borrow_mut()
                 .image_data(visible_internal_image_id)
                 .is_some(),
             "quota eviction in one pane must not remove another pane's visible asset"

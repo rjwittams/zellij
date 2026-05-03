@@ -10,7 +10,8 @@ use super::super::{
     RenderedImageState, SixelImageChunk,
 };
 use crate::panes::kitty_asset_store::{
-    KittyAssetData, KittyAssetFormat, KittyAssetStore, KittyRegularFileSource,
+    KittyAssetData, KittyAssetFormat, KittyAssetStore, KittyByteRange, KittyExternalMedia,
+    KittyExternalMediaLocation,
 };
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::{SixelGrid, SixelImageStore};
@@ -427,12 +428,12 @@ fn seed_test_kitty_asset(
 fn seed_test_file_backed_kitty_asset(
     kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     image_id: u32,
-    source: KittyRegularFileSource,
+    media: KittyExternalMedia,
 ) {
     kitty_asset_store.borrow_mut().insert_asset_data_protecting(
         image_id,
-        KittyAssetData::RegularFile {
-            source,
+        KittyAssetData::External {
+            media,
             format: KittyAssetFormat::Rgba,
             width: 2,
             height: 2,
@@ -1215,11 +1216,13 @@ fn test_image_output_publishes_file_backed_raw_assets_as_regular_files() {
     seed_test_file_backed_kitty_asset(
         kitty_asset_store,
         88,
-        KittyRegularFileSource {
-            path: source_path,
-            offset: 0,
-            size: Some(payload.len()),
-        },
+        KittyExternalMedia::new(
+            KittyExternalMediaLocation::RegularFile(source_path),
+            KittyByteRange {
+                offset: 0,
+                size: Some(payload.len()),
+            },
+        ),
     );
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
