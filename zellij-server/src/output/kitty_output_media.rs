@@ -50,7 +50,7 @@ impl KittyOutputMediaCache {
         }
     }
 
-    pub fn for_session(session_name: &str) -> Self {
+    pub fn new_for_session(session_name: &str) -> Self {
         Self::new(session_image_media_dir(session_name))
     }
 
@@ -194,11 +194,32 @@ impl KittyOutputMediaCache {
 
         let old_path = session_media_dir(old_session_name);
         let new_path = session_media_dir(new_session_name);
-        if old_path.exists() {
-            let _ = fs::rename(old_path, new_path);
+        if !old_path.exists() {
+            self.media_dir = Some(session_image_media_dir(new_session_name));
+            self.files.clear();
+            self.pending_regular_file_reads.clear();
+            return;
+        }
+
+        match fs::rename(&old_path, &new_path) {
+            Ok(()) => {
+                for cached_file in self.files.values_mut() {
+                    if let Ok(relative_path) = cached_file.path.strip_prefix(&old_path) {
+                        cached_file.path = new_path.join(relative_path);
+                    }
+                }
+                self.pending_regular_file_reads.clear();
+            },
+            Err(error) => {
+                log::warn!(
+                    "failed to rename kitty media dir from {:?} to {:?}: {:?}",
+                    old_path,
+                    new_path,
+                    error
+                );
+            },
         }
         self.media_dir = Some(session_image_media_dir(new_session_name));
-        self.files.clear();
     }
 
     pub fn cleanup_session_media(session_name: &str) {

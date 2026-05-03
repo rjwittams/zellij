@@ -1582,9 +1582,9 @@ impl Screen {
             stacked_resize: Rc::new(RefCell::new(stacked_resize)),
             sixel_image_store: Rc::new(RefCell::new(SixelImageStore::default())),
             kitty_asset_store: Rc::new(RefCell::new(KittyAssetStore::default())),
-            kitty_output_media_cache: Rc::new(RefCell::new(KittyOutputMediaCache::for_session(
-                &session_name,
-            ))),
+            kitty_output_media_cache: Rc::new(RefCell::new(
+                KittyOutputMediaCache::new_for_session(&session_name),
+            )),
             style: client_attributes.style,
             connected_clients: Rc::new(RefCell::new(HashMap::new())),
             active_tab_ids: BTreeMap::new(),

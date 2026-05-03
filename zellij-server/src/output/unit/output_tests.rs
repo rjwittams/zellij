@@ -1461,6 +1461,88 @@ fn test_output_media_cache_watermark_acknowledgement_releases_earlier_pending_re
 }
 
 #[test]
+fn test_output_media_cache_rename_failure_keeps_old_files_tracked_for_cleanup() {
+    let old_session_name = format!("zellij-test-kitty-rename-fail-old-{}", std::process::id());
+    let new_session_name = format!("zellij-test-kitty-rename-fail-new-{}", std::process::id());
+    KittyOutputMediaCache::cleanup_session_media(&old_session_name);
+    KittyOutputMediaCache::cleanup_session_media(&new_session_name);
+
+    let mut media_cache = KittyOutputMediaCache::new_for_session(&old_session_name);
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+    let media_path = media_cache
+        .ensure_regular_file(1, 1, &image_data)
+        .expect("should write test media file");
+    let old_session_dir = media_path
+        .parent()
+        .and_then(|path| path.parent())
+        .expect("media path should be inside the session image dir")
+        .to_path_buf();
+    let new_session_dir = old_session_dir
+        .parent()
+        .expect("old session dir should have a parent")
+        .join(&new_session_name);
+    std::fs::create_dir_all(&new_session_dir).expect("should create conflicting session dir");
+    std::fs::write(new_session_dir.join("conflict"), b"conflict")
+        .expect("should make conflicting session dir non-empty");
+
+    media_cache.mark_pending_regular_file_read(1, 1, 1, true);
+    media_cache.rename_session(&old_session_name, &new_session_name);
+    media_cache.acknowledge_regular_file_read(1, 1);
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+
+    assert!(
+        !media_path.exists(),
+        "failed rename should keep old media files tracked so later retention can clean them up"
+    );
+
+    KittyOutputMediaCache::cleanup_session_media(&old_session_name);
+    KittyOutputMediaCache::cleanup_session_media(&new_session_name);
+}
+
+#[test]
+fn test_output_media_cache_successful_rename_drops_stale_pending_file_reads() {
+    let old_session_name = format!(
+        "zellij-test-kitty-rename-success-old-{}",
+        std::process::id()
+    );
+    let new_session_name = format!(
+        "zellij-test-kitty-rename-success-new-{}",
+        std::process::id()
+    );
+    KittyOutputMediaCache::cleanup_session_media(&old_session_name);
+    KittyOutputMediaCache::cleanup_session_media(&new_session_name);
+
+    let mut media_cache = KittyOutputMediaCache::new_for_session(&old_session_name);
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+    media_cache
+        .ensure_regular_file(1, 1, &image_data)
+        .expect("should write old test media file");
+    media_cache.mark_pending_regular_file_read(1, 1, 1, true);
+
+    media_cache.rename_session(&old_session_name, &new_session_name);
+    let new_media_path = media_cache
+        .ensure_regular_file(1, 1, &image_data)
+        .expect("should write new test media file");
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+
+    assert!(
+        !new_media_path.exists(),
+        "stale pending reads from before a successful rename should not pin new media files"
+    );
+
+    KittyOutputMediaCache::cleanup_session_media(&old_session_name);
+    KittyOutputMediaCache::cleanup_session_media(&new_session_name);
+}
+
+#[test]
 fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_placements() {
     let client_ids = create_test_clients(1);
     let mut explicit_chunk = create_kitty_chunk(1, 2, 2);
