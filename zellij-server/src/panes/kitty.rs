@@ -274,6 +274,9 @@ enum KittyTransmissionMedium {
     SharedMemory,
 }
 
+const KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES: usize = 80 * 1024 * 1024;
+const KITTY_COMPRESSED_RAW_DIRECT_TRANSMIT_PADDING_BYTES: usize = 1024;
+
 #[derive(Clone, Debug)]
 enum KittyMediaSource {
     Direct(Vec<u8>),
@@ -338,16 +341,6 @@ impl KittyMediaSource {
                 size: *size,
             }),
             KittyMediaSource::Direct(_) => None,
-        }
-    }
-
-    fn append_direct_payload(&mut self, payload: Vec<u8>) -> bool {
-        match self {
-            KittyMediaSource::Direct(existing_payload) => {
-                existing_payload.extend(payload);
-                true
-            },
-            KittyMediaSource::RegularFile { .. } => false,
         }
     }
 }
@@ -846,7 +839,7 @@ impl KittyImageState {
                         reply: None,
                     };
                 };
-                self.pending_transmit = Some(PendingKittyTransmit {
+                let pending = PendingKittyTransmit {
                     protocol_image_id: resolved_protocol_image_id,
                     image_number,
                     image_id,
@@ -857,7 +850,24 @@ impl KittyImageState {
                     placement,
                     reply_context,
                     media_source,
-                });
+                };
+                if let Err(message) = pending.validate_current_direct_payload_size() {
+                    let replaced_existing_asset =
+                        self.kitty_asset_store.borrow().asset(image_id).is_some();
+                    if !replaced_existing_asset {
+                        self.remove_protocol_references_for_internal_image_id(image_id);
+                    }
+                    return KittyApcOutcome {
+                        effect: None,
+                        reply: build_non_query_reply(
+                            &pending.reply_context,
+                            pending.protocol_image_id,
+                            pending.image_number,
+                            Some(message),
+                        ),
+                    };
+                }
+                self.pending_transmit = Some(pending);
                 if more {
                     KittyApcOutcome {
                         effect: None,
@@ -1043,14 +1053,24 @@ impl KittyImageState {
                 if apc.quiet.is_some() {
                     pending.reply_context.quiet = apc.quiet();
                 }
-                if !pending.media_source.append_direct_payload(payload) {
+                let append_result = pending.append_direct_payload(payload);
+                if let Err(message) = append_result {
+                    let pending = self.pending_transmit.take().expect("pending checked above");
+                    let replaced_existing_asset = self
+                        .kitty_asset_store
+                        .borrow()
+                        .asset(pending.image_id)
+                        .is_some();
+                    if !replaced_existing_asset {
+                        self.remove_protocol_references_for_internal_image_id(pending.image_id);
+                    }
                     return KittyApcOutcome {
                         effect: None,
                         reply: build_non_query_reply(
                             &pending.reply_context,
                             pending.protocol_image_id,
                             pending.image_number,
-                            Some(non_query_failure_message(pending.reply_context.kind).to_string()),
+                            Some(message),
                         ),
                     };
                 }
@@ -2120,6 +2140,62 @@ impl KittyPlacement {
 }
 
 impl PendingKittyTransmit {
+    fn validate_current_direct_payload_size(&self) -> Result<(), String> {
+        let KittyMediaSource::Direct(payload) = &self.media_source else {
+            return Ok(());
+        };
+        self.validate_direct_payload_size(payload.len())
+    }
+
+    fn append_direct_payload(&mut self, payload: Vec<u8>) -> Result<(), String> {
+        let limit = self.direct_payload_limit()?;
+        match &mut self.media_source {
+            KittyMediaSource::Direct(existing_payload) => {
+                let new_len = existing_payload
+                    .len()
+                    .checked_add(payload.len())
+                    .ok_or_else(kitty_payload_too_large_message)?;
+                if new_len > limit {
+                    return Err(kitty_payload_too_large_message());
+                }
+                existing_payload.extend(payload);
+                Ok(())
+            },
+            KittyMediaSource::RegularFile { .. } => {
+                Err(non_query_failure_message(self.reply_context.kind).to_string())
+            },
+        }
+    }
+
+    fn validate_direct_payload_size(&self, payload_len: usize) -> Result<(), String> {
+        let limit = self.direct_payload_limit()?;
+        if payload_len > limit {
+            Err(kitty_payload_too_large_message())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn direct_payload_limit(&self) -> Result<usize, String> {
+        match self.image_format {
+            KittyImageFormat::Png => Ok(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES),
+            KittyImageFormat::Rgb => self.raw_direct_payload_limit(3),
+            KittyImageFormat::Rgba => self.raw_direct_payload_limit(4),
+        }
+    }
+
+    fn raw_direct_payload_limit(&self, bytes_per_pixel: usize) -> Result<usize, String> {
+        let expected_len =
+            expected_nonzero_raw_payload_size(self.width, self.height, bytes_per_pixel)?;
+        if self.compression.is_some() {
+            Ok(expected_len
+                .saturating_add(KITTY_COMPRESSED_RAW_DIRECT_TRANSMIT_PADDING_BYTES)
+                .min(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES))
+        } else {
+            Ok(expected_len)
+        }
+    }
+
     fn into_asset_data(self) -> Result<KittyAssetData, String> {
         if self.compression.is_none() {
             let image_format = self.image_format;
@@ -2130,8 +2206,11 @@ impl PendingKittyTransmit {
                         KittyImageFormat::Rgba => 4,
                         KittyImageFormat::Png => unreachable!(),
                     };
-                    let expected_len =
-                        expected_raw_payload_size(self.width, self.height, bytes_per_pixel)?;
+                    let expected_len = expected_nonzero_raw_payload_size(
+                        self.width,
+                        self.height,
+                        bytes_per_pixel,
+                    )?;
                     match regular_file_source_len(&source) {
                         Some(payload_len) if payload_len == expected_len => {
                             let format = match image_format {
@@ -2211,7 +2290,7 @@ fn validate_raw_payload_size(
     height: u32,
     bytes_per_pixel: usize,
 ) -> Result<(), String> {
-    let expected_len = expected_raw_payload_size(width, height, bytes_per_pixel)?;
+    let expected_len = expected_nonzero_raw_payload_size(width, height, bytes_per_pixel)?;
     if payload_len < expected_len {
         Err(format!(
             "ENODATA:Insufficient image data: {payload_len} < {expected_len}"
@@ -2223,6 +2302,17 @@ fn validate_raw_payload_size(
     }
 }
 
+fn expected_nonzero_raw_payload_size(
+    width: u32,
+    height: u32,
+    bytes_per_pixel: usize,
+) -> Result<usize, String> {
+    if width == 0 || height == 0 {
+        return Err("EINVAL:Zero width/height not allowed".to_string());
+    }
+    expected_raw_payload_size(width, height, bytes_per_pixel)
+}
+
 fn expected_raw_payload_size(
     width: u32,
     height: u32,
@@ -2232,6 +2322,10 @@ fn expected_raw_payload_size(
         .checked_mul(height as usize)
         .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
         .ok_or_else(|| "EINVAL:Invalid image payload for requested format".to_string())
+}
+
+fn kitty_payload_too_large_message() -> String {
+    "EFBIG:Too much data".to_string()
 }
 
 fn kitty_image_dimensions(image_data: &KittyImageData) -> (u32, u32) {
@@ -3739,6 +3833,115 @@ mod tests {
         assert!(
             kitty_state.protocol_image_id_to_internal_id.contains_key(&622),
             "completed upload should keep the protocol mapping after replacing an abandoned pending upload with the same id"
+        );
+    }
+
+    #[test]
+    fn chunked_raw_upload_with_zero_dimensions_is_rejected_without_pending_transmit() {
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store);
+        let anchor = FlowAnchor::LogicalRow {
+            logical_row: 0,
+            column: 0,
+        };
+
+        let reply = kitty_state.handle_apc(b"Gq=0,a=t,f=24,i=623,m=1;AA==", anchor, 0, 0, None);
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("EINVAL:Zero width/height not allowed"),
+            "zero-sized raw chunked upload should fail immediately, got {reply:?}"
+        );
+        assert!(
+            kitty_state.pending_transmit.is_none(),
+            "failed zero-sized upload should not leave a pending transmit"
+        );
+        assert!(
+            !kitty_state
+                .protocol_image_id_to_internal_id
+                .contains_key(&623),
+            "failed zero-sized upload should not leave a protocol mapping"
+        );
+    }
+
+    #[test]
+    fn chunked_raw_upload_rejects_payload_beyond_declared_size_and_clears_pending() {
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store);
+        let anchor = FlowAnchor::LogicalRow {
+            logical_row: 0,
+            column: 0,
+        };
+
+        let first_reply = kitty_state.handle_apc(
+            b"Gq=0,a=t,f=24,s=1,v=1,i=624,m=1;AAA=",
+            anchor.clone(),
+            0,
+            0,
+            None,
+        );
+        assert!(first_reply.reply.is_none());
+        assert!(
+            kitty_state.pending_transmit.is_some(),
+            "opening chunk should remain pending while within the declared raw size"
+        );
+
+        let overflow_reply = kitty_state.handle_apc(b"Gq=0,m=1;AAA=", anchor.clone(), 0, 0, None);
+        let overflow_reply = overflow_reply.reply.unwrap().to_apc_response();
+        assert!(
+            overflow_reply.contains("EFBIG:Too much data"),
+            "oversized chunked upload should report EFBIG, got {overflow_reply:?}"
+        );
+        assert!(
+            kitty_state.pending_transmit.is_none(),
+            "oversized chunked upload should be dropped immediately"
+        );
+        assert!(
+            !kitty_state
+                .protocol_image_id_to_internal_id
+                .contains_key(&624),
+            "oversized chunked upload should not leave a protocol mapping"
+        );
+
+        let stale_final_reply = kitty_state.handle_apc(b"Gq=0,m=0;AA==", anchor, 0, 0, None);
+        assert!(
+            stale_final_reply.reply.is_none(),
+            "final chunk after an overflowed upload should be ignored"
+        );
+    }
+
+    #[test]
+    fn pending_png_direct_upload_has_a_hard_payload_cap() {
+        let pending = PendingKittyTransmit {
+            protocol_image_id: Some(625),
+            image_number: None,
+            image_id: 1,
+            image_format: KittyImageFormat::Png,
+            compression: None,
+            width: 0,
+            height: 0,
+            placement: None,
+            reply_context: PendingKittyReplyContext {
+                kind: PendingKittyReplyKind::Transmit,
+                quiet: 0,
+                parsed_image_id: Some(625),
+                placement_id: None,
+                image_number: None,
+            },
+            media_source: KittyMediaSource::Direct(Vec::new()),
+        };
+
+        assert!(
+            pending
+                .validate_direct_payload_size(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES)
+                .is_ok(),
+            "PNG direct upload should accept payloads at the hard cap"
+        );
+        assert_eq!(
+            pending
+                .validate_direct_payload_size(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES + 1)
+                .unwrap_err(),
+            "EFBIG:Too much data"
         );
     }
 
