@@ -20,6 +20,10 @@ fn pid(value: u32) -> PlacementId {
     PlacementId::Protocol(value)
 }
 
+fn synthetic_wire_placement_id(stable_render_id: u64) -> u32 {
+    PlacementId::synthetic_wire_value(stable_render_id as u32)
+}
+
 fn read_fixture(fixture_name: &str) -> Vec<u8> {
     let mut path_to_file = std::path::PathBuf::new();
     path_to_file.push("../src");
@@ -7856,6 +7860,20 @@ fn kitty_retransmit_then_recreate_emits_both_recreated_placements_to_output() {
                 .map(|render| render.image_id)
         })
         .expect("expected recreated kitty scene to contain an internal image id");
+    let placeholder_wire_placement_id = second_render
+        .image_output
+        .kitty_scene
+        .placeholder_renders
+        .first()
+        .map(|render| synthetic_wire_placement_id(render.stable_render_id))
+        .expect("expected recreated placeholder render");
+    let explicit_wire_placement_id = second_render
+        .image_output
+        .kitty_scene
+        .explicit_chunks
+        .first()
+        .map(|chunk| synthetic_wire_placement_id(chunk.stable_render_id))
+        .expect("expected recreated explicit chunk");
     output
         .add_character_chunks_to_client(1, second_render.character_chunks, None)
         .unwrap();
@@ -7868,11 +7886,15 @@ fn kitty_retransmit_then_recreate_emits_both_recreated_placements_to_output() {
         "recreate path should retransmit the kitty asset bytes"
     );
     assert!(
-        client_output.contains(&format!("\x1b_Ga=p,U=1,i={recreated_image_id},p=1")),
+        client_output.contains(&format!(
+            "\x1b_Ga=p,U=1,i={recreated_image_id},p={placeholder_wire_placement_id}"
+        )),
         "recreate path should emit the placeholder placement again"
     );
     assert!(
-        client_output.contains(&format!("\x1b_Ga=p,i={recreated_image_id},p=2")),
+        client_output.contains(&format!(
+            "\x1b_Ga=p,i={recreated_image_id},p={explicit_wire_placement_id}"
+        )),
         "recreate path should emit the explicit placement again"
     );
 }

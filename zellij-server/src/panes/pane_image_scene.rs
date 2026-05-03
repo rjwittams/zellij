@@ -268,6 +268,10 @@ impl ImagePlacement {
     }
 
     pub fn kitty_internal_image_id(&self) -> u32 {
+        // Host-terminal image IDs are Zellij asset IDs. The app's protocol image
+        // ID stays in protocol_identity for deletes, replies, relatives, and
+        // placeholder lookup, so client-supplied IDs cannot collide with IDs we
+        // serialize to the host terminal.
         self.asset_id.0 as u32
     }
 

@@ -27,6 +27,14 @@ fn pid(value: u32) -> PlacementId {
     PlacementId::Protocol(value)
 }
 
+fn synthetic_pid(value: u32) -> PlacementId {
+    PlacementId::Synthetic(PlacementId::synthetic_wire_value(value))
+}
+
+fn wire_pid_for_stable_render_id(stable_render_id: u64) -> PlacementId {
+    synthetic_pid(stable_render_id as u32)
+}
+
 /// Helper to create a simple Output instance for testing
 fn create_test_output() -> Output {
     let (output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
@@ -1460,6 +1468,8 @@ fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_plac
     explicit_chunk.cell_x = 5;
     let mut placeholder_render = create_kitty_placeholder_render(1);
     placeholder_render.placement_id = Some(pid(20));
+    let explicit_wire_pid = wire_pid_for_stable_render_id(explicit_chunk.stable_render_id);
+    let placeholder_wire_pid = wire_pid_for_stable_render_id(placeholder_render.stable_render_id);
 
     let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
         create_test_output_with_state();
@@ -1502,19 +1512,31 @@ fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_plac
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
     assert!(
-        client_output.contains("\u{1b}_Ga=d,d=i,i=1,p=10\u{1b}\\"),
+        client_output.contains(&format!(
+            "\u{1b}_Ga=d,d=i,i=1,p={}\u{1b}\\",
+            explicit_wire_pid.wire_value()
+        )),
         "shared asset replacement should delete the explicit placement before recreating it"
     );
     assert!(
-        client_output.contains("\u{1b}_Ga=d,d=i,i=1,p=20\u{1b}\\"),
+        client_output.contains(&format!(
+            "\u{1b}_Ga=d,d=i,i=1,p={}\u{1b}\\",
+            placeholder_wire_pid.wire_value()
+        )),
         "shared asset replacement should delete the placeholder placement before recreating it"
     );
     assert!(
-        client_output.contains("\u{1b}_Ga=p,i=1,p=10"),
+        client_output.contains(&format!(
+            "\u{1b}_Ga=p,i=1,p={}",
+            explicit_wire_pid.wire_value()
+        )),
         "shared asset replacement should recreate the explicit placement"
     );
     assert!(
-        client_output.contains("\u{1b}_Ga=p,U=1,i=1,p=20"),
+        client_output.contains(&format!(
+            "\u{1b}_Ga=p,U=1,i=1,p={}",
+            placeholder_wire_pid.wire_value()
+        )),
         "shared asset replacement should recreate the placeholder placement"
     );
 }
@@ -1604,6 +1626,7 @@ fn test_kitty_diff_serialization_deletes_single_placement_without_delete_all() {
     first_chunk.placement_id = Some(pid(10));
     let mut second_chunk = create_kitty_chunk(2, 2, 2);
     second_chunk.placement_id = Some(pid(20));
+    let removed_wire_pid = wire_pid_for_stable_render_id(second_chunk.stable_render_id);
 
     let mut output = create_test_output();
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
@@ -1625,7 +1648,10 @@ fn test_kitty_diff_serialization_deletes_single_placement_without_delete_all() {
         "single-placement delete should not use kitty delete-all"
     );
     assert!(
-        client_output.contains("\u{1b}_Ga=d,d=i,i=2,p=20\u{1b}\\"),
+        client_output.contains(&format!(
+            "\u{1b}_Ga=d,d=i,i=2,p={}\u{1b}\\",
+            removed_wire_pid.wire_value()
+        )),
         "single-placement delete should target only the removed placement"
     );
 }
@@ -1691,9 +1717,13 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
     );
     let frame2_serialized = output2.serialize().unwrap();
     let frame2_client_output = frame2_serialized.get(&1).unwrap();
+    let top_right_wire_pid = wire_pid_for_stable_render_id(top_right.stable_render_id);
     assert!(
-        frame2_client_output.contains("\u{1b}_Ga=d,d=i,i=202,p=1\u{1b}\\"),
-        "frame 2 should delete the removed top-right placement using its original protocol placement id, got: {frame2_client_output:?}"
+        frame2_client_output.contains(&format!(
+            "\u{1b}_Ga=d,d=i,i=202,p={}\u{1b}\\",
+            top_right_wire_pid.wire_value()
+        )),
+        "frame 2 should delete the removed top-right placement using its stable host placement id, got: {frame2_client_output:?}"
     );
     let state2 = output2.last_rendered_image_states();
 
@@ -1723,13 +1753,17 @@ fn test_kitty_diff_serialization_preserves_targeted_deletes_across_output_state_
 
     let frame4_serialized = output4.serialize().unwrap();
     let frame4_client_output = frame4_serialized.get(&1).unwrap();
+    let top_left_wire_pid = wire_pid_for_stable_render_id(top_left.stable_render_id);
     assert!(
         !frame4_client_output.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
         "later targeted deletes should not fall back to delete-all after state handoff"
     );
     assert!(
-        frame4_client_output.contains("\u{1b}_Ga=d,d=i,i=201,p=1\u{1b}\\"),
-        "frame 4 should still emit a targeted delete for the removed top-left placement using its original protocol placement id, got: {frame4_client_output:?}"
+        frame4_client_output.contains(&format!(
+            "\u{1b}_Ga=d,d=i,i=201,p={}\u{1b}\\",
+            top_left_wire_pid.wire_value()
+        )),
+        "frame 4 should still emit a targeted delete for the removed top-left placement using its stable host placement id, got: {frame4_client_output:?}"
     );
 }
 
@@ -1854,13 +1888,18 @@ fn test_kitty_diff_assigns_distinct_stable_synthesized_ids_across_modes() {
 
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
+    let explicit_wire_pid = wire_pid_for_stable_render_id(1);
+    let placeholder_wire_pid = wire_pid_for_stable_render_id(2);
 
     assert!(
-        client_output.contains("a=p,i=1,p=1"),
+        client_output.contains(&format!("a=p,i=1,p={}", explicit_wire_pid.wire_value())),
         "expected synthesized placement id for the explicit placement"
     );
     assert!(
-        client_output.contains("a=p,U=1,i=1,p=2"),
+        client_output.contains(&format!(
+            "a=p,U=1,i=1,p={}",
+            placeholder_wire_pid.wire_value()
+        )),
         "expected the placeholder placement to receive a distinct synthesized id"
     );
 }
@@ -1972,6 +2011,7 @@ fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes(
     let client_ids = create_test_clients(1);
     let mut base_chunk = create_kitty_chunk(77, 2, 2);
     base_chunk.placement_id = Some(pid(10));
+    let base_wire_pid = wire_pid_for_stable_render_id(base_chunk.stable_render_id);
     let mut changed_chunk = base_chunk.clone();
     changed_chunk.columns = 3;
     let mut output = create_test_output();
@@ -1994,7 +2034,9 @@ fn test_prepared_image_output_emits_kitty_delete_before_text_when_scene_changes(
 
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
-    let delete_pos = client_output.find("a=d,d=i,i=77,p=10").unwrap();
+    let delete_pos = client_output
+        .find(&format!("a=d,d=i,i=77,p={}", base_wire_pid.wire_value()))
+        .unwrap();
     let text_pos = client_output.find("TEXT-PHASE").unwrap();
 
     assert!(
@@ -2288,7 +2330,10 @@ fn test_prepare_render_body_derives_kitty_explicit_fragments() {
             match &placement_ops[0] {
                 KittyPlacementOp::PlaceExplicit { key, chunk } => {
                     assert_eq!(key.image_id, 91);
-                    assert_eq!(key.wire_placement_id, PlacementId::Protocol(91));
+                    assert_eq!(
+                        key.wire_placement_id,
+                        wire_pid_for_stable_render_id(chunk.stable_render_id)
+                    );
                     assert_eq!(chunk.placement_id, Some(PlacementId::Protocol(91)));
                     assert_eq!(*chunk, create_kitty_chunk(91, 2, 2));
                 },
@@ -2600,7 +2645,7 @@ fn test_prepare_render_body_derives_kitty_placeholder_fragments() {
                 key: KittyPlacementKey {
                     stable_render_id: 184,
                     image_id: 92,
-                    wire_placement_id: pid(92),
+                    wire_placement_id: wire_pid_for_stable_render_id(184),
                 },
                 render: create_kitty_placeholder_render(92),
             }],

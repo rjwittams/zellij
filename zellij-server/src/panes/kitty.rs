@@ -583,6 +583,20 @@ impl KittyImageState {
         }
     }
 
+    fn cleanup_abandoned_pending_transmit(&mut self) {
+        let Some(pending) = self.pending_transmit.take() else {
+            return;
+        };
+        if self
+            .kitty_asset_store
+            .borrow()
+            .asset(pending.image_id)
+            .is_none()
+        {
+            self.remove_protocol_references_for_internal_image_id(pending.image_id);
+        }
+    }
+
     fn referenced_image_ids(&self) -> HashSet<u32> {
         self.placements
             .iter()
@@ -805,6 +819,7 @@ impl KittyImageState {
                 more,
                 media_source,
             } => {
+                self.cleanup_abandoned_pending_transmit();
                 let resolved_protocol_image_id =
                     self.protocol_image_id_for_create(protocol_image_id, image_number);
                 let image_id = if let Some(protocol_image_id) = resolved_protocol_image_id {
@@ -1168,7 +1183,7 @@ impl KittyImageState {
     }
 
     pub fn abort_pending_transmit(&mut self) {
-        self.pending_transmit = None;
+        self.cleanup_abandoned_pending_transmit();
     }
 
     fn remove_protocol_image_references(&mut self, protocol_image_id: u32) {
@@ -1339,7 +1354,9 @@ impl KittyImageState {
         for (placement_index, chunk) in chunks.iter().enumerate() {
             let placement_id = chunk
                 .placement_id
-                .unwrap_or(PlacementId::Synthetic(placement_index as u32 + 1))
+                .unwrap_or(PlacementId::Synthetic(PlacementId::synthetic_wire_value(
+                    placement_index as u32 + 1,
+                )))
                 .wire_value();
             raw_vte_output.push_str(&Self::serialize_explicit_placement(chunk, placement_id));
         }
@@ -1374,7 +1391,9 @@ impl KittyImageState {
         for (placement_index, render) in renders.iter().enumerate() {
             let placement_id = render
                 .placement_id
-                .unwrap_or(PlacementId::Synthetic(placement_index as u32 + 1))
+                .unwrap_or(PlacementId::Synthetic(PlacementId::synthetic_wire_value(
+                    placement_index as u32 + 1,
+                )))
                 .wire_value();
             raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
         }
@@ -1416,7 +1435,7 @@ impl KittyImageState {
             let placement_id = chunk.placement_id.unwrap_or_else(|| {
                 let placement_id = next_synthesized_placement_id;
                 next_synthesized_placement_id += 1;
-                PlacementId::Synthetic(placement_id)
+                PlacementId::Synthetic(PlacementId::synthetic_wire_value(placement_id))
             });
             raw_vte_output.push_str(&Self::serialize_explicit_placement(
                 chunk,
@@ -1427,7 +1446,7 @@ impl KittyImageState {
             let placement_id = render.placement_id.unwrap_or_else(|| {
                 let placement_id = next_synthesized_placement_id;
                 next_synthesized_placement_id += 1;
-                PlacementId::Synthetic(placement_id)
+                PlacementId::Synthetic(PlacementId::synthetic_wire_value(placement_id))
             });
             raw_vte_output.push_str(&Self::serialize_placeholder_render(
                 render,
@@ -3645,6 +3664,82 @@ mod tests {
             "failed materialization should not leave a protocol image mapping"
         );
         assert!(kitty_asset_store.borrow().image_data(621).is_none());
+    }
+
+    #[test]
+    fn interrupted_image_number_transmit_removes_orphan_synthetic_mapping() {
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store);
+        let anchor = FlowAnchor::LogicalRow {
+            logical_row: 0,
+            column: 0,
+        };
+
+        let first_reply = kitty_state.handle_apc(
+            b"Gq=0,a=t,f=24,s=1,v=1,I=77,m=1;EjRW",
+            anchor.clone(),
+            0,
+            0,
+            None,
+        );
+        assert!(first_reply.reply.is_none());
+        let first_protocol_id = kitty_state
+            .protocol_image_id_for_image_number(77)
+            .expect("chunked image-number upload should allocate a protocol id");
+
+        let second_reply =
+            kitty_state.handle_apc(b"Gq=0,a=t,f=24,s=1,v=1,I=77;EjRW", anchor, 0, 0, None);
+        assert!(matches!(
+            second_reply.reply,
+            Some(KittyQueryResponse::Ok { .. })
+        ));
+        let second_protocol_id = kitty_state
+            .protocol_image_id_for_image_number(77)
+            .expect("completed image-number upload should keep its protocol id");
+
+        assert_eq!(
+            kitty_state
+                .image_number_to_protocol_image_ids
+                .get(&77)
+                .map(Vec::as_slice),
+            Some(&[second_protocol_id][..])
+        );
+        assert!(
+            !kitty_state
+                .protocol_image_id_to_internal_id
+                .contains_key(&first_protocol_id),
+            "abandoned chunked upload should not leave a protocol id mapped to a missing asset"
+        );
+    }
+
+    #[test]
+    fn interrupted_same_id_transmit_keeps_completed_replacement_mapping() {
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store);
+        let anchor = FlowAnchor::LogicalRow {
+            logical_row: 0,
+            column: 0,
+        };
+
+        let first_reply = kitty_state.handle_apc(
+            b"Gq=0,a=t,f=24,s=1,v=1,i=622,m=1;EjRW",
+            anchor.clone(),
+            0,
+            0,
+            None,
+        );
+        assert!(first_reply.reply.is_none());
+
+        let second_reply =
+            kitty_state.handle_apc(b"Gq=0,a=t,f=24,s=1,v=1,i=622;EjRW", anchor, 0, 0, None);
+        assert!(matches!(
+            second_reply.reply,
+            Some(KittyQueryResponse::Ok { .. })
+        ));
+        assert!(
+            kitty_state.protocol_image_id_to_internal_id.contains_key(&622),
+            "completed upload should keep the protocol mapping after replacing an abandoned pending upload with the same id"
+        );
     }
 
     #[test]

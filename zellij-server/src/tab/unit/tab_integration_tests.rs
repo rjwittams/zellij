@@ -1,5 +1,5 @@
 use super::{Output, Tab};
-use crate::output::{KittyOutputMediaCache, RenderedImageState};
+use crate::output::{KittyOutputMediaCache, PlacementId, RenderedImageState};
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::sixel::SixelImageStore;
 use crate::screen::CopyOptions;
@@ -3929,6 +3929,10 @@ fn render_tab_with_last_state(
     (rendered, next_state)
 }
 
+fn synthetic_wire_placement_id(stable_render_id: u64) -> u32 {
+    PlacementId::synthetic_wire_value(stable_render_id as u32)
+}
+
 #[test]
 fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
     let size = Size {
@@ -3954,6 +3958,12 @@ fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
 
     tab.handle_pty_bytes(1, b"\x1b_Ga=d,d=p,x=24,y=11\x1b\\".to_vec())
         .unwrap();
+    let top_right_wire_placement_id = state1
+        .explicit_chunks
+        .iter()
+        .find(|chunk| chunk.image_id == 2)
+        .map(|chunk| synthetic_wire_placement_id(chunk.stable_render_id))
+        .expect("expected top-right placement in first frame");
     let (frame2_output, state2) = render_tab_with_last_state(
         &mut tab,
         sixel_image_store.clone(),
@@ -3961,8 +3971,10 @@ fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
         Some(state1),
     );
     assert!(
-        frame2_output.contains("\u{1b}_Ga=d,d=i,i=2,p=1\u{1b}\\"),
-        "smoke-style p delete should remove the top-right placement using its original protocol placement id, got: {frame2_output:?}"
+        frame2_output.contains(&format!(
+            "\u{1b}_Ga=d,d=i,i=2,p={top_right_wire_placement_id}\u{1b}\\"
+        )),
+        "smoke-style p delete should remove the top-right placement using its stable host placement id, got: {frame2_output:?}"
     );
 
     tab.handle_pty_bytes(1, smoke_geometry_delete_scene_bytes())
@@ -3982,6 +3994,12 @@ fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
 
     tab.handle_pty_bytes(1, b"\x1b_Ga=d,d=q,x=24,y=19,z=-1\x1b\\".to_vec())
         .unwrap();
+    let bottom_right_wire_placement_id = state3
+        .explicit_chunks
+        .iter()
+        .find(|chunk| chunk.image_id == 8)
+        .map(|chunk| synthetic_wire_placement_id(chunk.stable_render_id))
+        .expect("expected bottom-right placement in redrawn frame");
     let (frame4_output, _state4) =
         render_tab_with_last_state(&mut tab, sixel_image_store, kitty_asset_store, Some(state3));
     assert!(
@@ -3989,8 +4007,10 @@ fn kitty_geometry_delete_smoke_sequence_reconciles_recreated_scene() {
         "later smoke-style geometry deletes should not fall back to delete-all"
     );
     assert!(
-        frame4_output.contains("\u{1b}_Ga=d,d=i,i=8,p=1\u{1b}\\"),
-        "smoke-style q delete should target the recreated bottom-right placement with its original protocol placement id after the redraw, got: {frame4_output:?}"
+        frame4_output.contains(&format!(
+            "\u{1b}_Ga=d,d=i,i=8,p={bottom_right_wire_placement_id}\u{1b}\\"
+        )),
+        "smoke-style q delete should target the recreated bottom-right placement with its stable host placement id after the redraw, got: {frame4_output:?}"
     );
 }
 
@@ -11278,6 +11298,23 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
     tab.render(&mut output, None).unwrap();
     let second_render = output.serialize().unwrap();
     let second_render = second_render.get(&client_id).unwrap();
+    let second_state = output
+        .last_rendered_image_state_for_client(client_id)
+        .expect("expected image state after replacement render");
+    let placeholder_wire_placement_id = second_state
+        .rendered_image_state()
+        .placeholder_renders
+        .iter()
+        .find(|render| render.image_id == internal_image_id)
+        .map(|render| synthetic_wire_placement_id(render.stable_render_id))
+        .expect("expected replacement placeholder render");
+    let explicit_wire_placement_id = second_state
+        .rendered_image_state()
+        .explicit_chunks
+        .iter()
+        .find(|chunk| chunk.image_id == internal_image_id)
+        .map(|chunk| synthetic_wire_placement_id(chunk.stable_render_id))
+        .expect("expected replacement explicit chunk");
     assert!(
         second_render.contains(&updated_payload),
         "replace frame should transmit the updated payload"
@@ -11287,11 +11324,15 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
         "replace frame should retransmit the asset; second render was: {second_render:?}"
     );
     assert!(
-        second_render.contains(&format!("\u{1b}_Ga=p,U=1,i={internal_image_id},p=1")),
+        second_render.contains(&format!(
+            "\u{1b}_Ga=p,U=1,i={internal_image_id},p={placeholder_wire_placement_id}"
+        )),
         "replace frame should recreate the placeholder placement"
     );
     assert!(
-        second_render.contains(&format!("\u{1b}_Ga=p,i={internal_image_id},p=2")),
+        second_render.contains(&format!(
+            "\u{1b}_Ga=p,i={internal_image_id},p={explicit_wire_placement_id}"
+        )),
         "replace frame should recreate the explicit placement"
     );
 }

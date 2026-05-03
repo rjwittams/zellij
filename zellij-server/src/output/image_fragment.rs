@@ -75,7 +75,9 @@ fn synthesize_split_fragment_placement_id(chunk: &KittyImageChunk) -> Option<Pla
             .wrapping_add(hash << 6)
             .wrapping_add(hash >> 2);
     }
-    Some(PlacementId::Synthetic((hash & 0xffff_ffff) as u32))
+    Some(PlacementId::Synthetic(PlacementId::synthetic_wire_value(
+        (hash & 0xffff_ffff) as u32,
+    )))
 }
 
 fn promote_split_explicit_chunk_to_bounded_geometry(chunk: KittyImageChunk) -> KittyImageChunk {
