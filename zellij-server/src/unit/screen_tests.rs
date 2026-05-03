@@ -48,8 +48,8 @@ use zellij_utils::{
 };
 
 use crate::output::{
-    KittyImageChunk, KittyImageData, KittyImagePlacementMode, KittyOutputMediaCache,
-    LastRenderedImageState, Output, PaneImageRenderOutput, PlacementId, RenderedImageState,
+    KittyImageChunk, KittyImageData, KittyOutputMediaCache, LastRenderedImageState, Output,
+    PaneImageRenderOutput, PlacementId, RenderedImageState,
 };
 use crate::panes::grid::Grid;
 use crate::panes::kitty_asset_store::KittyAssetStore;
@@ -5537,7 +5537,6 @@ fn test_kitty_chunk(image_id: u32, placement_id: u32) -> KittyImageChunk {
         stable_render_id: placement_id as u64,
         image_id,
         placement_id: Some(PlacementId::Protocol(placement_id)),
-        placement_mode: KittyImagePlacementMode::Explicit,
         cell_x: 0,
         cell_y: 0,
         columns: 1,

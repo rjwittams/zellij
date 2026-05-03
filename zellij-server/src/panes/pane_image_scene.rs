@@ -1118,7 +1118,6 @@ impl PaneImageScene {
                 stable_render_id: placement.logical_placement_id.0,
                 image_id,
                 placement_id,
-                placement_mode: KittyImagePlacementMode::Explicit,
                 cell_x: projection.cell_x,
                 cell_y: projection.cell_y,
                 columns,

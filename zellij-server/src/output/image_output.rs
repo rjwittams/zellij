@@ -1212,7 +1212,6 @@ mod tests {
             stable_render_id: image_id as u64,
             image_id,
             placement_id: Some(crate::output::PlacementId::Protocol(placement_id)),
-            placement_mode: crate::output::KittyImagePlacementMode::Explicit,
             cell_x: 0,
             cell_y,
             columns: 1,

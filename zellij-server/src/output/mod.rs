@@ -1094,7 +1094,6 @@ pub struct KittyImageChunk {
     pub stable_render_id: u64,
     pub image_id: u32,
     pub placement_id: Option<PlacementId>,
-    pub placement_mode: KittyImagePlacementMode,
     pub cell_x: usize,
     pub cell_y: usize,
     pub columns: usize,

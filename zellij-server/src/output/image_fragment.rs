@@ -390,14 +390,11 @@ pub(crate) fn visible_image_fragments(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::output::KittyImagePlacementMode;
-
     fn test_chunk() -> KittyImageChunk {
         KittyImageChunk {
             stable_render_id: 77,
             image_id: 41,
             placement_id: Some(PlacementId::Protocol(77)),
-            placement_mode: KittyImagePlacementMode::Explicit,
             cell_x: 0,
             cell_y: 0,
             columns: 4,
