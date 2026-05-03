@@ -8086,14 +8086,14 @@ fn test_kitty_asset_store_allocates_monotonic_ids() {
     let second = kitty_asset_store.next_asset_id();
     let third = kitty_asset_store.next_asset_id();
 
-    assert_eq!(second, first + 1);
-    assert_eq!(third, second + 1);
+    assert_eq!(second, Some(first.unwrap() + 1));
+    assert_eq!(third, Some(second.unwrap() + 1));
 }
 
 #[test]
 fn test_kitty_asset_store_round_trips_asset_data() {
     let mut kitty_asset_store = crate::panes::kitty_asset_store::KittyAssetStore::default();
-    let image_id = kitty_asset_store.next_asset_id();
+    let image_id = kitty_asset_store.next_asset_id().unwrap();
     let image_data = KittyImageData::Rgba {
         data: vec![1, 2, 3, 4],
         width: 1,
@@ -8109,7 +8109,7 @@ fn test_kitty_asset_store_round_trips_asset_data() {
 #[test]
 fn test_kitty_asset_store_updates_existing_asset() {
     let mut kitty_asset_store = crate::panes::kitty_asset_store::KittyAssetStore::default();
-    let image_id = kitty_asset_store.next_asset_id();
+    let image_id = kitty_asset_store.next_asset_id().unwrap();
     let original = KittyImageData::Rgb {
         data: vec![1, 2, 3],
         width: 1,

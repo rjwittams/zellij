@@ -199,10 +199,19 @@ impl KittyAssetStore {
         }
     }
 
-    pub fn next_asset_id(&mut self) -> u32 {
-        let next_asset_id = self.next_asset_id;
-        self.next_asset_id = self.next_asset_id.saturating_add(1);
-        next_asset_id
+    pub fn next_asset_id(&mut self) -> Option<u32> {
+        let start = self.next_asset_id.max(1);
+        let mut candidate = start;
+        loop {
+            self.next_asset_id = candidate.wrapping_add(1).max(1);
+            if !self.assets.contains_key(&candidate) && !self.has_placement_references(candidate) {
+                return Some(candidate);
+            }
+            candidate = self.next_asset_id;
+            if candidate == start {
+                return None;
+            }
+        }
     }
 
     pub fn insert_asset(&mut self, image_id: u32, image_data: KittyImageData) -> Vec<u32> {
@@ -363,5 +372,15 @@ mod tests {
 
         store.remove_asset(2);
         assert_eq!(store.decoded_bytes_total, 4);
+    }
+
+    #[test]
+    fn next_asset_id_wraps_and_skips_live_asset_ids() {
+        let mut store = KittyAssetStore::default();
+        store.next_asset_id = u32::MAX;
+        store.insert_asset(u32::MAX, rgba(1, 1));
+        store.insert_asset(1, rgba(1, 1));
+
+        assert_eq!(store.next_asset_id(), Some(2));
     }
 }

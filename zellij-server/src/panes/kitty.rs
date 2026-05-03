@@ -229,7 +229,7 @@ pub struct KittyRelativePlacement {
 struct PendingKittyTransmit {
     protocol_image_id: Option<u32>,
     image_number: Option<u32>,
-    image_id: u32,
+    image_id: Option<u32>,
     image_format: KittyImageFormat,
     compression: Option<KittyTransportCompression>,
     width: u32,
@@ -475,14 +475,8 @@ impl KittyImageState {
     ) -> Option<u32> {
         if let Some(protocol_image_id) = protocol_image_id {
             Some(protocol_image_id)
-        } else if let Some(image_number) = image_number {
+        } else if image_number.is_some() {
             let synthetic_id = self.next_synthetic_protocol_image_id();
-            self.image_number_to_protocol_image_ids
-                .entry(image_number)
-                .or_default()
-                .push(synthetic_id);
-            self.protocol_image_id_to_image_number
-                .insert(synthetic_id, image_number);
             Some(synthetic_id)
         } else {
             None
@@ -500,6 +494,18 @@ impl KittyImageState {
             .entry(internal_image_id)
             .or_default()
             .insert(protocol_image_id);
+    }
+
+    fn register_image_number_reference(&mut self, image_number: u32, protocol_image_id: u32) {
+        let protocol_image_ids = self
+            .image_number_to_protocol_image_ids
+            .entry(image_number)
+            .or_default();
+        if !protocol_image_ids.contains(&protocol_image_id) {
+            protocol_image_ids.push(protocol_image_id);
+        }
+        self.protocol_image_id_to_image_number
+            .insert(protocol_image_id, image_number);
     }
 
     fn relative_parent_placement(
@@ -580,13 +586,10 @@ impl KittyImageState {
         let Some(pending) = self.pending_transmit.take() else {
             return;
         };
-        if self
-            .kitty_asset_store
-            .borrow()
-            .asset(pending.image_id)
-            .is_none()
-        {
-            self.remove_protocol_references_for_internal_image_id(pending.image_id);
+        if let Some(image_id) = pending.image_id {
+            if self.kitty_asset_store.borrow().asset(image_id).is_none() {
+                self.remove_protocol_references_for_internal_image_id(image_id);
+            }
         }
     }
 
@@ -665,14 +668,16 @@ impl KittyImageState {
         };
         let protocol_image_id = pending.protocol_image_id;
         let image_number = pending.image_number;
+        let pending_image_id = pending.image_id;
         let mut placement = pending.placement.clone();
-        let image_id = pending.image_id;
         let reply_context = pending.reply_context.clone();
-        let replaced_existing_asset = self.kitty_asset_store.borrow().asset(image_id).is_some();
+        let replaced_existing_asset = pending_image_id
+            .map(|image_id| self.kitty_asset_store.borrow().asset(image_id).is_some())
+            .unwrap_or(false);
         let asset_data = match pending.into_asset_data() {
             Ok(asset_data) => asset_data,
             Err(message) => {
-                if !replaced_existing_asset {
+                if let Some(image_id) = pending_image_id.filter(|_| !replaced_existing_asset) {
                     self.remove_protocol_references_for_internal_image_id(image_id);
                 }
                 return KittyApcOutcome {
@@ -686,8 +691,31 @@ impl KittyImageState {
                 };
             },
         };
+        let image_id = if let Some(image_id) = pending_image_id {
+            image_id
+        } else {
+            let Some(image_id) = self.kitty_asset_store.borrow_mut().next_asset_id() else {
+                return KittyApcOutcome {
+                    effect: None,
+                    reply: build_non_query_reply(
+                        &reply_context,
+                        protocol_image_id,
+                        image_number,
+                        Some(kitty_asset_id_space_exhausted_message()),
+                    ),
+                };
+            };
+            if let Some(protocol_image_id) = protocol_image_id {
+                self.register_protocol_image_reference(protocol_image_id, image_id);
+            }
+            image_id
+        };
+        if let (Some(image_number), Some(protocol_image_id)) = (image_number, protocol_image_id) {
+            self.register_image_number_reference(image_number, protocol_image_id);
+        }
         let image_dimensions = asset_data.dimensions();
         if let Some(placement) = placement.as_mut() {
+            placement.image_id = image_id;
             placement.anchor = anchor.clone();
             placement.protocol_image_id = protocol_image_id;
         }
@@ -816,20 +844,13 @@ impl KittyImageState {
                 let resolved_protocol_image_id =
                     self.protocol_image_id_for_create(protocol_image_id, image_number);
                 let image_id = if let Some(protocol_image_id) = resolved_protocol_image_id {
-                    if let Some(existing_image_id) = self
-                        .protocol_image_id_to_internal_id
+                    self.protocol_image_id_to_internal_id
                         .get(&protocol_image_id)
-                    {
-                        *existing_image_id
-                    } else {
-                        let image_id = self.kitty_asset_store.borrow_mut().next_asset_id();
-                        self.register_protocol_image_reference(protocol_image_id, image_id);
-                        image_id
-                    }
+                        .copied()
                 } else {
-                    self.kitty_asset_store.borrow_mut().next_asset_id()
+                    None
                 };
-                if let Some(placement) = placement.as_mut() {
+                if let (Some(placement), Some(image_id)) = (placement.as_mut(), image_id) {
                     placement.image_id = image_id;
                     placement.protocol_image_id = resolved_protocol_image_id;
                 }
@@ -852,9 +873,10 @@ impl KittyImageState {
                     media_source,
                 };
                 if let Err(message) = pending.validate_current_direct_payload_size() {
-                    let replaced_existing_asset =
-                        self.kitty_asset_store.borrow().asset(image_id).is_some();
-                    if !replaced_existing_asset {
+                    let replaced_existing_asset = image_id
+                        .map(|image_id| self.kitty_asset_store.borrow().asset(image_id).is_some())
+                        .unwrap_or(false);
+                    if let Some(image_id) = image_id.filter(|_| !replaced_existing_asset) {
                         self.remove_protocol_references_for_internal_image_id(image_id);
                     }
                     return KittyApcOutcome {
@@ -1056,13 +1078,12 @@ impl KittyImageState {
                 let append_result = pending.append_direct_payload(payload);
                 if let Err(message) = append_result {
                     let pending = self.pending_transmit.take().expect("pending checked above");
-                    let replaced_existing_asset = self
-                        .kitty_asset_store
-                        .borrow()
-                        .asset(pending.image_id)
-                        .is_some();
-                    if !replaced_existing_asset {
-                        self.remove_protocol_references_for_internal_image_id(pending.image_id);
+                    let replaced_existing_asset = pending
+                        .image_id
+                        .map(|image_id| self.kitty_asset_store.borrow().asset(image_id).is_some())
+                        .unwrap_or(false);
+                    if let Some(image_id) = pending.image_id.filter(|_| !replaced_existing_asset) {
+                        self.remove_protocol_references_for_internal_image_id(image_id);
                     }
                     return KittyApcOutcome {
                         effect: None,
@@ -2326,6 +2347,10 @@ fn expected_raw_payload_size(
 
 fn kitty_payload_too_large_message() -> String {
     "EFBIG:Too much data".to_string()
+}
+
+fn kitty_asset_id_space_exhausted_message() -> String {
+    "ENOMEM:No available kitty image ids".to_string()
 }
 
 fn kitty_image_dimensions(image_data: &KittyImageData) -> (u32, u32) {
@@ -3777,9 +3802,10 @@ mod tests {
             None,
         );
         assert!(first_reply.reply.is_none());
-        let first_protocol_id = kitty_state
-            .protocol_image_id_for_image_number(77)
-            .expect("chunked image-number upload should allocate a protocol id");
+        assert!(
+            kitty_state.protocol_image_id_for_image_number(77).is_none(),
+            "chunked image-number upload should not publish a protocol id until it succeeds"
+        );
 
         let second_reply =
             kitty_state.handle_apc(b"Gq=0,a=t,f=24,s=1,v=1,I=77;EjRW", anchor, 0, 0, None);
@@ -3797,12 +3823,6 @@ mod tests {
                 .get(&77)
                 .map(Vec::as_slice),
             Some(&[second_protocol_id][..])
-        );
-        assert!(
-            !kitty_state
-                .protocol_image_id_to_internal_id
-                .contains_key(&first_protocol_id),
-            "abandoned chunked upload should not leave a protocol id mapped to a missing asset"
         );
     }
 
@@ -3915,7 +3935,7 @@ mod tests {
         let pending = PendingKittyTransmit {
             protocol_image_id: Some(625),
             image_number: None,
-            image_id: 1,
+            image_id: Some(1),
             image_format: KittyImageFormat::Png,
             compression: None,
             width: 0,
@@ -3942,6 +3962,42 @@ mod tests {
                 .validate_direct_payload_size(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES + 1)
                 .unwrap_err(),
             "EFBIG:Too much data"
+        );
+    }
+
+    #[test]
+    fn failed_new_upload_does_not_consume_internal_asset_id() {
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store);
+        let anchor = FlowAnchor::LogicalRow {
+            logical_row: 0,
+            column: 0,
+        };
+
+        let failed_reply =
+            kitty_state.handle_apc(b"Gq=0,a=t,f=24,i=626,m=1;AA==", anchor.clone(), 0, 0, None);
+        assert!(failed_reply
+            .reply
+            .unwrap()
+            .to_apc_response()
+            .contains("EINVAL:Zero width/height not allowed"));
+
+        let successful_reply =
+            kitty_state.handle_apc(b"Gq=0,a=t,f=24,s=1,v=1,i=627;AAAA", anchor, 0, 0, None);
+        assert!(matches!(
+            successful_reply.reply,
+            Some(KittyQueryResponse::Ok { .. })
+        ));
+        assert_eq!(
+            kitty_state.protocol_image_id_to_internal_id.get(&627),
+            Some(&1),
+            "failed new uploads should not advance the internal asset id allocator"
+        );
+        assert!(
+            !kitty_state
+                .protocol_image_id_to_internal_id
+                .contains_key(&626),
+            "failed new uploads should not leave a protocol mapping"
         );
     }
 
@@ -4447,7 +4503,7 @@ mod tests {
         let image_data = PendingKittyTransmit {
             protocol_image_id: Some(7),
             image_number: None,
-            image_id: 99,
+            image_id: Some(99),
             image_format,
             compression: None,
             width,
