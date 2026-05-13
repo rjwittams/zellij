@@ -21,7 +21,10 @@ use crate::ClientId;
 use sixel_image::SixelImage;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
+#[cfg(unix)]
+use std::ffi::CString;
 use std::rc::Rc;
+use zellij_utils::input::options::KittyImageOutputTransport;
 use zellij_utils::pane_size::{Dimension, PaneGeom, Size, SizeInPixels};
 
 fn pid(value: u32) -> PlacementId {
@@ -34,6 +37,20 @@ fn wire_pid_for_stable_render_id(stable_render_id: u64) -> PlacementId {
 
 fn placeholder_wire_pid_for_stable_render_id(stable_render_id: u64) -> PlacementId {
     PlacementId::Synthetic(stable_render_id as u32)
+}
+
+#[cfg(unix)]
+fn test_shared_memory_exists(name: &str) -> bool {
+    let c_name = CString::new(name).expect("test shm name should not contain nul");
+    let fd = unsafe { libc::shm_open(c_name.as_ptr(), libc::O_RDONLY, 0) };
+    if fd < 0 {
+        false
+    } else {
+        unsafe {
+            libc::close(fd);
+        }
+        true
+    }
 }
 
 /// Helper to create a simple Output instance for testing
@@ -1170,7 +1187,7 @@ fn test_image_output_can_publish_resident_assets_as_regular_files() {
     let client_ids = create_test_clients(1);
     let chunk = create_kitty_chunk(1, 2, 2);
     let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
-        create_test_output_with_media_cache(media_cache);
+        create_test_output_with_media_cache(media_cache.clone());
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
     output.set_kitty_file_output_enabled_for_client(1, true);
@@ -1197,6 +1214,198 @@ fn test_image_output_can_publish_resident_assets_as_regular_files() {
         .unwrap();
     assert_eq!(files.len(), 1);
     assert_eq!(std::fs::read(files[0].path()).unwrap(), vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn test_image_output_can_publish_resident_assets_as_temporary_files() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir.clone())));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(1, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache.clone());
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_output_transports_for_client(
+        1,
+        vec![
+            KittyImageOutputTransport::TemporaryFile,
+            KittyImageOutputTransport::Direct,
+        ],
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=1,q=2,f=100,t=t;"),
+        "temp-file-enabled clients should receive temporary-file kitty uploads"
+    );
+    assert!(
+        !client_output.contains("AQIDBA=="),
+        "temp-file-enabled clients should not receive the direct base64 image payload"
+    );
+
+    let files = std::fs::read_dir(&media_dir)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert!(
+        files[0]
+            .file_name()
+            .to_string_lossy()
+            .contains("tty-graphics-protocol"),
+        "temporary output paths should be safe for terminal-side cleanup"
+    );
+    assert_eq!(std::fs::read(files[0].path()).unwrap(), vec![1, 2, 3, 4]);
+}
+
+#[test]
+fn test_temp_file_output_preserves_raw_rgba_format_fields() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(88, 2, 2);
+    let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    seed_test_kitty_asset(
+        kitty_asset_store,
+        88,
+        KittyImageData::Rgba {
+            data: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+            width: 2,
+            height: 2,
+        },
+    );
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_output_transports_for_client(
+        1,
+        vec![
+            KittyImageOutputTransport::TemporaryFile,
+            KittyImageOutputTransport::Direct,
+        ],
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=88,q=2,f=32,s=2,v=2,t=t;"),
+        "temporary-file raw RGBA uploads should include format dimensions, got {client_output:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_image_output_can_publish_resident_assets_as_shared_memory() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(1, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache.clone());
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_output_transports_for_client(
+        1,
+        vec![
+            KittyImageOutputTransport::SharedMemory,
+            KittyImageOutputTransport::Direct,
+        ],
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=1,q=2,f=100,t=s;"),
+        "shm-enabled clients should receive shared-memory kitty uploads, got {client_output:?}"
+    );
+    assert!(
+        !client_output.contains("AQIDBA=="),
+        "shm-enabled clients should not receive the direct base64 image payload"
+    );
+
+    for _ in 0..=240 {
+        media_cache.borrow_mut().advance_render_generation();
+    }
+    media_cache
+        .borrow_mut()
+        .retain_files(KittyOutputMediaRetention::KeepRecentlyReferenced, |_, _| {
+            false
+        });
+}
+
+#[cfg(unix)]
+#[test]
+fn test_shm_output_preserves_raw_rgba_format_fields() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(88, 2, 2);
+    let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache.clone());
+    seed_test_kitty_asset(
+        kitty_asset_store,
+        88,
+        KittyImageData::Rgba {
+            data: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+            width: 2,
+            height: 2,
+        },
+    );
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_output_transports_for_client(
+        1,
+        vec![
+            KittyImageOutputTransport::SharedMemory,
+            KittyImageOutputTransport::Direct,
+        ],
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=88,q=2,f=32,s=2,v=2,t=s;"),
+        "shm raw RGBA uploads should include format dimensions, got {client_output:?}"
+    );
+
+    for _ in 0..=240 {
+        media_cache.borrow_mut().advance_render_generation();
+    }
+    media_cache
+        .borrow_mut()
+        .retain_files(KittyOutputMediaRetention::KeepRecentlyReferenced, |_, _| {
+            false
+        });
 }
 
 #[test]
@@ -1460,6 +1669,90 @@ fn test_output_media_cache_explicit_retention_reaps_unkept_files() {
         !media_path.exists(),
         "explicit-only retention should remove media that the caller does not keep"
     );
+}
+
+#[test]
+fn test_output_media_cache_reaps_stale_temporary_files() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let mut asset_data = KittyAssetData::Image(KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    });
+
+    let media_path = media_cache
+        .create_temporary_file_for_asset(1, 1, 1, &mut asset_data)
+        .expect("should write temporary test media file");
+    for _ in 0..=240 {
+        media_cache.advance_render_generation();
+    }
+    media_cache.retain_files(KittyOutputMediaRetention::KeepRecentlyReferenced, |_, _| {
+        false
+    });
+
+    assert!(
+        !media_path.exists(),
+        "stale temporary output media should be removed by retention"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_output_media_cache_reaps_stale_shared_memory_objects() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let mut asset_data = KittyAssetData::Image(KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    });
+
+    let name = media_cache
+        .create_shared_memory_for_asset(1, 1, 1, &mut asset_data)
+        .expect("should write shared-memory test media");
+    assert!(
+        test_shared_memory_exists(&name),
+        "shared-memory output object should exist before stale cleanup"
+    );
+
+    for _ in 0..=240 {
+        media_cache.advance_render_generation();
+    }
+    media_cache.retain_files(KittyOutputMediaRetention::KeepRecentlyReferenced, |_, _| {
+        false
+    });
+
+    assert!(
+        !test_shared_memory_exists(&name),
+        "stale shared-memory output objects should be unlinked by retention"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_output_media_cache_cleans_tracked_one_shot_media() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let mut asset_data = KittyAssetData::Image(KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    });
+    let temp_path = media_cache
+        .create_temporary_file_for_asset(1, 1, 1, &mut asset_data)
+        .expect("should write temporary test media");
+    let shm_name = media_cache
+        .create_shared_memory_for_asset(1, 2, 1, &mut asset_data)
+        .expect("should write shared-memory test media");
+
+    media_cache.cleanup_tracked_one_shot_media();
+
+    assert!(!temp_path.exists());
+    assert!(!test_shared_memory_exists(&shm_name));
 }
 
 #[test]

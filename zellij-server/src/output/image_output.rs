@@ -22,6 +22,7 @@ use std::{
     rc::Rc,
 };
 use zellij_utils::errors::prelude::*;
+use zellij_utils::input::options::KittyImageOutputTransport;
 use zellij_utils::pane_size::{Size, SizeInPixels};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -264,7 +265,7 @@ impl ClientImageRenderState {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ImageOutput {
     client_image_states: HashMap<ClientId, ClientImageRenderState>,
-    clients_with_kitty_file_output: HashSet<ClientId>,
+    client_kitty_output_transports: HashMap<ClientId, Vec<KittyImageOutputTransport>>,
     kitty_file_output_acknowledgement_policies:
         HashMap<ClientId, KittyFileOutputAcknowledgementPolicy>,
     pub(crate) sixel_image_store: Rc<RefCell<SixelImageStore>>,
@@ -372,11 +373,30 @@ impl ImageOutput {
 
     pub fn set_kitty_file_output_enabled_for_client(&mut self, client_id: ClientId, enabled: bool) {
         if enabled {
-            self.clients_with_kitty_file_output.insert(client_id);
+            self.set_kitty_output_transports_for_client(
+                client_id,
+                vec![
+                    KittyImageOutputTransport::File,
+                    KittyImageOutputTransport::Direct,
+                ],
+            );
         } else {
-            self.clients_with_kitty_file_output.remove(&client_id);
+            self.client_kitty_output_transports.remove(&client_id);
             self.kitty_file_output_acknowledgement_policies
                 .remove(&client_id);
+        }
+    }
+
+    pub fn set_kitty_output_transports_for_client(
+        &mut self,
+        client_id: ClientId,
+        transports: Vec<KittyImageOutputTransport>,
+    ) {
+        if transports.is_empty() {
+            self.client_kitty_output_transports.remove(&client_id);
+        } else {
+            self.client_kitty_output_transports
+                .insert(client_id, transports);
         }
     }
 
@@ -410,6 +430,21 @@ impl ImageOutput {
             .get(&client_id)
             .copied()
             .unwrap_or_default()
+    }
+
+    fn kitty_output_transports_for_client(
+        &self,
+        client_id: ClientId,
+    ) -> &[KittyImageOutputTransport] {
+        self.client_kitty_output_transports
+            .get(&client_id)
+            .map(|transports| transports.as_slice())
+            .unwrap_or(&[KittyImageOutputTransport::Direct])
+    }
+
+    fn client_can_use_regular_file_output(&self, client_id: ClientId) -> bool {
+        self.kitty_output_transports_for_client(client_id)
+            .contains(&KittyImageOutputTransport::File)
     }
 
     fn explicit_wire_placement_id(chunk: &KittyImageChunk) -> super::PlacementId {
@@ -597,7 +632,7 @@ impl ImageOutput {
                             }
                             upload_index += 1;
                             vte_output.push_str(&Self::serialize_kitty_image_data(
-                                &self.clients_with_kitty_file_output,
+                                self.kitty_output_transports_for_client(client_id),
                                 &self.kitty_output_media_cache,
                                 client_id,
                                 *image_id,
@@ -640,7 +675,7 @@ impl ImageOutput {
     }
 
     fn serialize_kitty_image_data(
-        clients_with_kitty_file_output: &HashSet<ClientId>,
+        kitty_output_transports: &[KittyImageOutputTransport],
         kitty_output_media_cache: &Rc<RefCell<KittyOutputMediaCache>>,
         client_id: ClientId,
         image_id: u32,
@@ -648,7 +683,57 @@ impl ImageOutput {
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
         acknowledgement: KittyFileOutputAcknowledgement,
     ) -> String {
-        if clients_with_kitty_file_output.contains(&client_id) {
+        for transport in kitty_output_transports {
+            match transport {
+                KittyImageOutputTransport::File => {
+                    if let Some(serialized) = Self::try_serialize_regular_file_output(
+                        kitty_output_media_cache,
+                        client_id,
+                        image_id,
+                        generation,
+                        asset_data,
+                        acknowledgement,
+                    ) {
+                        return serialized;
+                    }
+                },
+                KittyImageOutputTransport::TemporaryFile => {
+                    if let Some(serialized) = Self::try_serialize_temporary_file_output(
+                        kitty_output_media_cache,
+                        client_id,
+                        image_id,
+                        generation,
+                        asset_data,
+                    ) {
+                        return serialized;
+                    }
+                },
+                KittyImageOutputTransport::SharedMemory => {
+                    if let Some(serialized) = Self::try_serialize_shared_memory_output(
+                        kitty_output_media_cache,
+                        client_id,
+                        image_id,
+                        generation,
+                        asset_data,
+                    ) {
+                        return serialized;
+                    }
+                },
+                KittyImageOutputTransport::Direct => break,
+            }
+        }
+        Self::serialize_direct_kitty_image_data(image_id, asset_data)
+    }
+
+    fn try_serialize_regular_file_output(
+        kitty_output_media_cache: &Rc<RefCell<KittyOutputMediaCache>>,
+        client_id: ClientId,
+        image_id: u32,
+        generation: u64,
+        asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
+        acknowledgement: KittyFileOutputAcknowledgement,
+    ) -> Option<String> {
+        {
             let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
             if let Ok(path) = kitty_output_media_cache
                 .ensure_regular_file_for_asset(image_id, generation, asset_data)
@@ -666,11 +751,50 @@ impl ImageOutput {
                         0
                     },
                 };
-                return KittyImageState::serialize_asset_data_from_file(
+                return Some(KittyImageState::serialize_asset_data_from_file(
                     image_id, asset_data, &path, quiet,
-                );
+                ));
             }
         }
+        None
+    }
+
+    fn try_serialize_temporary_file_output(
+        kitty_output_media_cache: &Rc<RefCell<KittyOutputMediaCache>>,
+        client_id: ClientId,
+        image_id: u32,
+        generation: u64,
+        asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
+    ) -> Option<String> {
+        let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
+        let path = kitty_output_media_cache
+            .create_temporary_file_for_asset(client_id, image_id, generation, asset_data)
+            .ok()?;
+        Some(KittyImageState::serialize_asset_data_from_temporary_file(
+            image_id, asset_data, &path, 2,
+        ))
+    }
+
+    fn try_serialize_shared_memory_output(
+        kitty_output_media_cache: &Rc<RefCell<KittyOutputMediaCache>>,
+        client_id: ClientId,
+        image_id: u32,
+        generation: u64,
+        asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
+    ) -> Option<String> {
+        let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
+        let name = kitty_output_media_cache
+            .create_shared_memory_for_asset(client_id, image_id, generation, asset_data)
+            .ok()?;
+        Some(KittyImageState::serialize_asset_data_from_shared_memory(
+            image_id, asset_data, &name, 2,
+        ))
+    }
+
+    fn serialize_direct_kitty_image_data(
+        image_id: u32,
+        asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
+    ) -> String {
         asset_data
             .image_data()
             .map(|image_data| KittyImageState::serialize_image_data(image_id, &image_data))
@@ -683,7 +807,7 @@ impl ImageOutput {
         acknowledgement_policy: KittyFileOutputAcknowledgementPolicy,
         asset_ops: &[KittyAssetOp],
     ) -> usize {
-        if !self.clients_with_kitty_file_output.contains(&client_id)
+        if !self.client_can_use_regular_file_output(client_id)
             || acknowledgement_policy != KittyFileOutputAcknowledgementPolicy::Watermark
         {
             return 0;
@@ -709,7 +833,7 @@ impl ImageOutput {
         chunks: &[KittyImageChunk],
         renders: &[KittyPlaceholderRender],
     ) -> usize {
-        if !self.clients_with_kitty_file_output.contains(&client_id)
+        if !self.client_can_use_regular_file_output(client_id)
             || acknowledgement_policy != KittyFileOutputAcknowledgementPolicy::Watermark
         {
             return 0;
@@ -761,7 +885,7 @@ impl ImageOutput {
                 };
                 upload_index += 1;
                 raw_vte_output.push_str(&Self::serialize_kitty_image_data(
-                    &self.clients_with_kitty_file_output,
+                    self.kitty_output_transports_for_client(client_id),
                     &self.kitty_output_media_cache,
                     client_id,
                     image_id,

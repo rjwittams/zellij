@@ -5607,6 +5607,58 @@ fn screen_enables_kitty_file_transport_for_regular_clients_only() {
 }
 
 #[test]
+fn screen_enables_kitty_temp_file_transport_for_regular_clients() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    screen.kitty_image_output_transports = vec![
+        KittyImageOutputTransport::TemporaryFile,
+        KittyImageOutputTransport::Direct,
+    ];
+    screen.connected_clients.borrow_mut().insert(1, false);
+
+    let chunk = test_kitty_chunk(77, 1);
+    screen.kitty_asset_store.borrow_mut().insert_asset(
+        chunk.image_id,
+        KittyImageData::Png {
+            data: vec![1, 2, 3, 4],
+            width: 1,
+            height: 1,
+        },
+    );
+
+    let mut output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+    output.add_clients(
+        &HashSet::from([1]),
+        Rc::new(RefCell::new(LinkHandler::new())),
+        None,
+    );
+    screen.configure_kitty_file_output_for_regular_clients(&mut output);
+    output.add_pane_image_output_to_client(
+        1,
+        PaneImageRenderOutput {
+            kitty_scene: KittyRenderBundle {
+                explicit_chunks: vec![chunk],
+                placeholder_renders: vec![],
+            },
+            ..Default::default()
+        },
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let regular_client_output = serialized.get(&1).unwrap();
+    assert!(regular_client_output.contains("t=t;"));
+    assert!(!regular_client_output.contains("AQIDBA=="));
+}
+
+#[test]
 fn watcher_helper_round_trips_followed_client_image_state() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);

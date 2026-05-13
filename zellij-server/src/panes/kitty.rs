@@ -1380,7 +1380,7 @@ impl KittyImageState {
     ) -> String {
         let format = KittyAssetFormat::from(image_data);
         let (width, height) = kitty_image_dimensions(image_data);
-        Self::serialize_image_file(image_id, format, width, height, path, quiet)
+        Self::serialize_image_file(image_id, format, width, height, path, quiet, "f")
     }
 
     pub fn serialize_asset_data_from_file(
@@ -1390,7 +1390,55 @@ impl KittyImageState {
         quiet: u8,
     ) -> String {
         let (width, height) = asset_data.dimensions();
-        Self::serialize_image_file(image_id, asset_data.format(), width, height, path, quiet)
+        Self::serialize_image_file(
+            image_id,
+            asset_data.format(),
+            width,
+            height,
+            path,
+            quiet,
+            "f",
+        )
+    }
+
+    pub fn serialize_asset_data_from_temporary_file(
+        image_id: u32,
+        asset_data: &KittyAssetData,
+        path: &Path,
+        quiet: u8,
+    ) -> String {
+        let (width, height) = asset_data.dimensions();
+        Self::serialize_image_file(
+            image_id,
+            asset_data.format(),
+            width,
+            height,
+            path,
+            quiet,
+            "t",
+        )
+    }
+
+    pub fn serialize_asset_data_from_shared_memory(
+        image_id: u32,
+        asset_data: &KittyAssetData,
+        name: &str,
+        quiet: u8,
+    ) -> String {
+        let (width, height) = asset_data.dimensions();
+        let mut raw_vte_output = String::new();
+        raw_vte_output.push_str("\u{1b}_G");
+        raw_vte_output.push_str(&serialize_transmit_external_media(
+            image_id,
+            asset_data.format(),
+            width,
+            height,
+            "s",
+            name.as_bytes(),
+            quiet,
+        ));
+        raw_vte_output.push_str("\u{1b}\\");
+        raw_vte_output
     }
 
     fn serialize_image_file(
@@ -1400,11 +1448,18 @@ impl KittyImageState {
         height: u32,
         path: &Path,
         quiet: u8,
+        medium: &str,
     ) -> String {
         let mut raw_vte_output = String::new();
         raw_vte_output.push_str("\u{1b}_G");
-        raw_vte_output.push_str(&serialize_transmit_file(
-            image_id, format, width, height, path, quiet,
+        raw_vte_output.push_str(&serialize_transmit_external_media(
+            image_id,
+            format,
+            width,
+            height,
+            medium,
+            path.to_string_lossy().as_bytes(),
+            quiet,
         ));
         raw_vte_output.push_str("\u{1b}\\");
         raw_vte_output
@@ -2662,12 +2717,13 @@ fn serialize_transmit(image_id: u32, image_data: &KittyImageData) -> Vec<String>
         .collect()
 }
 
-fn serialize_transmit_file(
+fn serialize_transmit_external_media(
     image_id: u32,
     format: KittyAssetFormat,
     width: u32,
     height: u32,
-    path: &Path,
+    medium: &str,
+    payload: &[u8],
     quiet: u8,
 ) -> String {
     let mut command = String::new();
@@ -2683,8 +2739,8 @@ fn serialize_transmit_file(
             let _ = write!(command, "f=32,s={width},v={height},");
         },
     };
-    let payload = base64::encode(path.to_string_lossy().as_bytes());
-    command.push_str("t=f;");
+    let payload = base64::encode(payload);
+    let _ = write!(command, "t={medium};");
     command.push_str(&payload);
     command
 }

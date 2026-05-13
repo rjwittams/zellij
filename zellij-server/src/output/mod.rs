@@ -25,6 +25,7 @@ use std::{
 };
 use zellij_utils::data::{HighlightLayer, PaneContents, PaneRenderReport};
 use zellij_utils::errors::prelude::*;
+use zellij_utils::input::options::KittyImageOutputTransport;
 use zellij_utils::pane_size::SizeInPixels;
 
 use self::image_fragment::PreparedImageOutput;
@@ -480,6 +481,15 @@ impl Output {
     pub fn set_kitty_file_output_enabled_for_client(&mut self, client_id: ClientId, enabled: bool) {
         self.image_output
             .set_kitty_file_output_enabled_for_client(client_id, enabled);
+    }
+
+    pub fn set_kitty_output_transports_for_client(
+        &mut self,
+        client_id: ClientId,
+        transports: Vec<KittyImageOutputTransport>,
+    ) {
+        self.image_output
+            .set_kitty_output_transports_for_client(client_id, transports);
     }
 
     pub fn set_kitty_file_output_acknowledgement_policy_for_client(

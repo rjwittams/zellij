@@ -2544,10 +2544,7 @@ impl Screen {
     }
 
     fn configure_kitty_file_output_for_regular_clients(&self, output: &mut Output) {
-        if !self
-            .kitty_image_output_transports
-            .contains(&KittyImageOutputTransport::File)
-        {
+        if self.kitty_image_output_transports.is_empty() {
             return;
         }
         for (client_id, is_web_client) in self.connected_clients.borrow().iter() {
@@ -2563,7 +2560,10 @@ impl Screen {
                         KittyFileOutputAcknowledgementPolicy::Always
                     },
                 };
-                output.set_kitty_file_output_enabled_for_client(*client_id, true);
+                output.set_kitty_output_transports_for_client(
+                    *client_id,
+                    self.kitty_image_output_transports.clone(),
+                );
                 output.set_kitty_file_output_acknowledgement_policy_for_client(
                     *client_id,
                     acknowledgement_policy,
@@ -7670,6 +7670,10 @@ pub(crate) fn screen_thread_main(
                 screen.render(None)?;
             },
             ScreenInstruction::Exit => {
+                screen
+                    .kitty_output_media_cache
+                    .borrow_mut()
+                    .cleanup_tracked_one_shot_media();
                 KittyOutputMediaCache::cleanup_session_media(&screen.session_name);
                 break;
             },

@@ -5,6 +5,8 @@ use std::{
     io::{self, Write},
     path::PathBuf,
 };
+#[cfg(unix)]
+use std::{ffi::CString, ptr};
 use zellij_utils::consts::ZELLIJ_SOCK_DIR;
 
 const RECENTLY_REFERENCED_RENDER_GENERATIONS: u64 = 240;
@@ -28,11 +30,26 @@ struct PendingRegularFileRead {
     requested_acknowledgement: bool,
 }
 
+#[derive(Clone, Debug)]
+struct TrackedTemporaryOutputFile {
+    path: PathBuf,
+    last_referenced_render_generation: u64,
+}
+
+#[derive(Clone, Debug)]
+struct TrackedSharedMemoryOutput {
+    name: String,
+    last_referenced_render_generation: u64,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct KittyOutputMediaCache {
     media_dir: Option<PathBuf>,
     render_generation: u64,
+    one_shot_media_sequence: u64,
     files: HashMap<(u32, u64), CachedKittyOutputFile>,
+    temporary_files: VecDeque<TrackedTemporaryOutputFile>,
+    shared_memory_objects: VecDeque<TrackedSharedMemoryOutput>,
     pending_regular_file_reads: HashMap<ClientId, VecDeque<PendingRegularFileRead>>,
 }
 
@@ -41,7 +58,10 @@ impl KittyOutputMediaCache {
         Self {
             media_dir: None,
             render_generation: 0,
+            one_shot_media_sequence: 0,
             files: HashMap::new(),
+            temporary_files: VecDeque::new(),
+            shared_memory_objects: VecDeque::new(),
             pending_regular_file_reads: HashMap::new(),
         }
     }
@@ -54,7 +74,10 @@ impl KittyOutputMediaCache {
         Self {
             media_dir: Some(media_dir),
             render_generation: 0,
+            one_shot_media_sequence: 0,
             files: HashMap::new(),
+            temporary_files: VecDeque::new(),
+            shared_memory_objects: VecDeque::new(),
             pending_regular_file_reads: HashMap::new(),
         }
     }
@@ -108,6 +131,63 @@ impl KittyOutputMediaCache {
         Ok(path)
     }
 
+    pub fn create_temporary_file_for_asset(
+        &mut self,
+        client_id: ClientId,
+        image_id: u32,
+        generation: u64,
+        asset_data: &mut KittyAssetData,
+    ) -> io::Result<PathBuf> {
+        let media_dir = self.media_dir.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "kitty output media disabled")
+        })?;
+        fs::create_dir_all(media_dir)?;
+        set_private_media_permissions(media_dir);
+
+        let sequence = self.one_shot_media_sequence;
+        self.one_shot_media_sequence = self.one_shot_media_sequence.saturating_add(1);
+        let path = media_dir.join(format!(
+            "tty-graphics-protocol-c{}-i{}-g{}-r{}-{}.kitty-image",
+            client_id, image_id, generation, self.render_generation, sequence
+        ));
+        let write_result = (|| -> io::Result<()> {
+            let mut file = fs::File::create(&path)?;
+            write_kitty_asset_data(&mut file, asset_data)?;
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            let _ = fs::remove_file(&path);
+            return Err(error);
+        }
+        self.temporary_files.push_back(TrackedTemporaryOutputFile {
+            path: path.clone(),
+            last_referenced_render_generation: self.render_generation,
+        });
+        Ok(path)
+    }
+
+    pub fn create_shared_memory_for_asset(
+        &mut self,
+        _client_id: ClientId,
+        _image_id: u32,
+        _generation: u64,
+        asset_data: &mut KittyAssetData,
+    ) -> io::Result<String> {
+        let image_data = asset_data.image_data().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "invalid kitty image data")
+        })?;
+        let sequence = self.one_shot_media_sequence;
+        self.one_shot_media_sequence = self.one_shot_media_sequence.saturating_add(1);
+        let name = format!("/zk{:x}{:x}", std::process::id(), sequence);
+        write_shared_memory_payload(&name, kitty_image_bytes(&image_data))?;
+        self.shared_memory_objects
+            .push_back(TrackedSharedMemoryOutput {
+                name: name.clone(),
+                last_referenced_render_generation: self.render_generation,
+            });
+        Ok(name)
+    }
+
     pub fn retain_files<F>(&mut self, retention: KittyOutputMediaRetention, mut keep: F)
     where
         F: FnMut(u32, u64) -> bool,
@@ -135,6 +215,22 @@ impl KittyOutputMediaCache {
                 let _ = fs::remove_file(&cached_file.path);
             }
             should_keep
+        });
+        self.temporary_files.retain(|tracked_file| {
+            let was_recently_referenced =
+                tracked_file.last_referenced_render_generation >= recently_referenced_cutoff;
+            if !was_recently_referenced {
+                let _ = fs::remove_file(&tracked_file.path);
+            }
+            was_recently_referenced && tracked_file.path.exists()
+        });
+        self.shared_memory_objects.retain(|tracked_object| {
+            let was_recently_referenced =
+                tracked_object.last_referenced_render_generation >= recently_referenced_cutoff;
+            if !was_recently_referenced {
+                let _ = unlink_shared_memory_payload(&tracked_object.name);
+            }
+            was_recently_referenced
         });
     }
 
@@ -176,6 +272,15 @@ impl KittyOutputMediaCache {
         self.pending_regular_file_reads.remove(&client_id);
     }
 
+    pub fn cleanup_tracked_one_shot_media(&mut self) {
+        for tracked_file in self.temporary_files.drain(..) {
+            let _ = fs::remove_file(tracked_file.path);
+        }
+        for tracked_object in self.shared_memory_objects.drain(..) {
+            let _ = unlink_shared_memory_payload(&tracked_object.name);
+        }
+    }
+
     pub fn advance_render_generation(&mut self) {
         self.render_generation = self.render_generation.saturating_add(1);
     }
@@ -190,6 +295,8 @@ impl KittyOutputMediaCache {
         if !old_path.exists() {
             self.media_dir = Some(session_image_media_dir(new_session_name));
             self.files.clear();
+            self.temporary_files.clear();
+            self.shared_memory_objects.clear();
             self.pending_regular_file_reads.clear();
             return;
         }
@@ -199,6 +306,11 @@ impl KittyOutputMediaCache {
                 for cached_file in self.files.values_mut() {
                     if let Ok(relative_path) = cached_file.path.strip_prefix(&old_path) {
                         cached_file.path = new_path.join(relative_path);
+                    }
+                }
+                for temporary_file in self.temporary_files.iter_mut() {
+                    if let Ok(relative_path) = temporary_file.path.strip_prefix(&old_path) {
+                        temporary_file.path = new_path.join(relative_path);
                     }
                 }
                 self.pending_regular_file_reads.clear();
@@ -221,6 +333,86 @@ impl KittyOutputMediaCache {
             let _ = fs::remove_dir_all(path);
         }
     }
+}
+
+#[cfg(unix)]
+fn write_shared_memory_payload(name: &str, payload: &[u8]) -> io::Result<()> {
+    let c_name = CString::new(name)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid shared memory name"))?;
+    let fd = unsafe {
+        libc::shm_open(
+            c_name.as_ptr(),
+            libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    let write_result = write_shared_memory_payload_to_fd(fd, payload);
+    unsafe {
+        libc::close(fd);
+    }
+    if write_result.is_err() {
+        let _ = unlink_shared_memory_payload(name);
+    }
+    write_result
+}
+
+#[cfg(unix)]
+fn write_shared_memory_payload_to_fd(fd: libc::c_int, payload: &[u8]) -> io::Result<()> {
+    let len = payload.len();
+    if unsafe { libc::ftruncate(fd, len as libc::off_t) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    if len == 0 {
+        return Ok(());
+    }
+    let mapping = unsafe {
+        libc::mmap(
+            ptr::null_mut(),
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_SHARED,
+            fd,
+            0,
+        )
+    };
+    if mapping == libc::MAP_FAILED {
+        return Err(io::Error::last_os_error());
+    }
+    unsafe {
+        ptr::copy_nonoverlapping(payload.as_ptr(), mapping as *mut u8, len);
+        if libc::munmap(mapping, len) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_shared_memory_payload(_name: &str, _payload: &[u8]) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "shared memory kitty output is unsupported on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn unlink_shared_memory_payload(name: &str) -> io::Result<()> {
+    let c_name = CString::new(name)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid shared memory name"))?;
+    if unsafe { libc::shm_unlink(c_name.as_ptr()) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(not(unix))]
+fn unlink_shared_memory_payload(_name: &str) -> io::Result<()> {
+    Ok(())
 }
 
 fn session_media_dir(session_name: &str) -> PathBuf {
