@@ -14,10 +14,7 @@ use crate::panes::kitty_placeholder::{
 };
 use crate::panes::terminal_character::{AnsiCode, RcCharacterStyles};
 
-use crate::panes::pane_image_scene::{
-    project_placement_to_viewport, FlowAnchor, ImageAssetId, ImagePlacementGeometry,
-    PlacementOccupancy,
-};
+use crate::panes::pane_image_scene::{FlowAnchor, ImageAssetId, ImagePlacementGeometry};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
@@ -382,14 +379,6 @@ impl Drop for KittyImageState {
                 .borrow_mut()
                 .remove_placement_reference(placement.image_id);
         }
-    }
-}
-
-fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
-    if original == 0 {
-        0
-    } else {
-        ((total as u64 * kept as u64) / original as u64) as u32
     }
 }
 
@@ -1106,108 +1095,6 @@ impl KittyImageState {
                 }
             },
         }
-    }
-
-    pub fn visible_chunks<F>(
-        &self,
-        content_x: usize,
-        content_y: usize,
-        scrollback_size_in_lines: usize,
-        viewport_width: usize,
-        viewport_height: usize,
-        character_cell_size: Option<SizeInPixels>,
-        resolve_anchor: F,
-    ) -> Vec<KittyImageChunk>
-    where
-        F: Fn(&FlowAnchor) -> Option<(usize, usize)>,
-    {
-        let Some(cell_size) = character_cell_size else {
-            return vec![];
-        };
-        let mut chunks = vec![];
-        let kitty_asset_store = self.kitty_asset_store.borrow();
-        for placement in &self.placements {
-            let Some((image_width, image_height)) =
-                kitty_asset_store.image_dimensions(placement.image_id)
-            else {
-                continue;
-            };
-            let mut source_x = placement.source_x.unwrap_or(0);
-            let mut source_y = placement.source_y.unwrap_or(0);
-            let mut source_width = placement
-                .source_width
-                .unwrap_or_else(|| image_width.saturating_sub(source_x));
-            let mut source_height = placement
-                .source_height
-                .unwrap_or_else(|| image_height.saturating_sub(source_y));
-            let mut columns = placement.columns.unwrap_or_else(|| {
-                ((source_width as usize + cell_size.width.saturating_sub(1)) / cell_size.width)
-                    .max(1) as u32
-            }) as usize;
-            let mut rows = placement.rows.unwrap_or_else(|| {
-                ((source_height as usize + cell_size.height.saturating_sub(1)) / cell_size.height)
-                    .max(1) as u32
-            }) as usize;
-
-            if columns == 0 || rows == 0 {
-                continue;
-            }
-
-            let Some((logical_row, column)) = resolve_anchor(&placement.anchor) else {
-                continue;
-            };
-            let Some(projection) = project_placement_to_viewport(
-                logical_row,
-                column,
-                &PlacementOccupancy { columns, rows },
-                content_x,
-                content_y,
-                scrollback_size_in_lines,
-                viewport_width,
-                viewport_height,
-            ) else {
-                continue;
-            };
-            let clipped_by_projection = projection.clipped_left_cols > 0
-                || projection.clipped_top_rows > 0
-                || projection.columns != columns
-                || projection.rows != rows;
-
-            if projection.clipped_left_cols > 0 {
-                source_x =
-                    source_x + scale_u32(source_width, projection.clipped_left_cols, columns);
-            }
-            source_width = scale_u32(source_width, projection.columns, columns);
-            columns = projection.columns;
-
-            if projection.clipped_top_rows > 0 {
-                source_y = source_y + scale_u32(source_height, projection.clipped_top_rows, rows);
-            }
-            source_height = scale_u32(source_height, projection.rows, rows);
-            rows = projection.rows;
-
-            let cell_x = projection.cell_x;
-            let cell_y = projection.cell_y;
-            chunks.push(KittyImageChunk {
-                stable_render_id: placement.image_id as u64,
-                image_id: placement.image_id,
-                placement_id: placement.placement_id,
-                cell_x,
-                cell_y,
-                columns,
-                rows,
-                columns_specified: placement.columns.is_some() || clipped_by_projection,
-                rows_specified: placement.rows.is_some() || clipped_by_projection,
-                source_x,
-                source_y,
-                source_width,
-                source_height,
-                z_index: placement.z_index.unwrap_or(0),
-                x_offset: placement.x_offset.unwrap_or(0),
-                y_offset: placement.y_offset.unwrap_or(0),
-            });
-        }
-        chunks
     }
 
     pub fn clear(&mut self) {
