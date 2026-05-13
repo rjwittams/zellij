@@ -2102,17 +2102,10 @@ impl PendingKittyTransmit {
                     )?;
                     match media.payload_len() {
                         Some(payload_len) if payload_len == expected_len => {
-                            let format = match image_format {
-                                KittyImageFormat::Rgb => KittyAssetFormat::Rgb,
-                                KittyImageFormat::Rgba => KittyAssetFormat::Rgba,
-                                KittyImageFormat::Png => unreachable!(),
-                            };
-                            return Ok(KittyAssetData::External {
-                                media,
-                                format,
-                                width: self.width,
-                                height: self.height,
-                            });
+                            // Finalizing the transmit is the success boundary for q=0/q=1
+                            // callers. Do not acknowledge raw external media while the
+                            // stored asset still depends on the producer-owned reference.
+                            return self.into_image_data().map(KittyAssetData::Image);
                         },
                         Some(payload_len) if payload_len < expected_len => {
                             return Err(format!(
@@ -3124,8 +3117,8 @@ mod tests {
             reply.contains("OK"),
             "regular file upload should succeed, got {reply:?}"
         );
+        std::fs::remove_file(&path).ok();
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 601, &payload);
-        std::fs::remove_file(path).ok();
     }
 
     #[test]
@@ -3156,12 +3149,12 @@ mod tests {
             reply.contains("OK"),
             "regular file upload with unaligned O should succeed, got {reply:?}"
         );
+        std::fs::remove_file(&path).ok();
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 602, &payload);
-        std::fs::remove_file(path).ok();
     }
 
     #[test]
-    fn kitty_temporary_file_rgba_upload_deletes_safe_temp_file_after_materialization() {
+    fn kitty_temporary_file_rgba_upload_deletes_safe_temp_file_before_success_reply() {
         let payload = vec![
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
         ];
@@ -3186,14 +3179,10 @@ mod tests {
             "temporary file upload should succeed, got {reply:?}"
         );
         assert!(
-            path.exists(),
-            "safe temporary file should not be read or deleted until materialization"
+            !path.exists(),
+            "safe temporary file should be read and deleted before success is acknowledged"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 605, &payload);
-        assert!(
-            !path.exists(),
-            "safe temporary file should be deleted after materialization"
-        );
     }
 
     #[test]
@@ -3222,14 +3211,10 @@ mod tests {
             "temporary file upload with magic directory should succeed, got {reply:?}"
         );
         assert!(
-            path.exists(),
-            "safe temporary file should not be read or deleted until materialization"
+            !path.exists(),
+            "safe temporary file should be read and deleted before success is acknowledged"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 619, &payload);
-        assert!(
-            !path.exists(),
-            "safe temporary file should be deleted when the marker is in the full temp path"
-        );
         std::fs::remove_dir(dir).ok();
     }
 
@@ -3291,7 +3276,7 @@ mod tests {
         );
         assert!(
             path.exists(),
-            "temporary file outside known temp dirs should not be deleted before materialization"
+            "temporary file outside known temp dirs should not be deleted after transmit"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 620, &payload);
         assert!(
@@ -3330,14 +3315,10 @@ mod tests {
             "temporary file upload with S/O should succeed, got {reply:?}"
         );
         assert!(
-            path.exists(),
-            "safe temporary file with S/O should not be deleted until materialization"
+            !path.exists(),
+            "safe temporary file with S/O should be read and deleted before success is acknowledged"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 607, &payload);
-        assert!(
-            !path.exists(),
-            "safe temporary file with S/O should be deleted after materialization"
-        );
     }
 
     #[test]
@@ -3370,7 +3351,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn kitty_shared_memory_rgba_upload_unlinks_after_materialization() {
+    fn kitty_shared_memory_rgba_upload_unlinks_before_success_reply() {
         let payload = vec![
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
         ];
@@ -3395,14 +3376,10 @@ mod tests {
             "shared memory upload should succeed, got {reply:?}"
         );
         assert!(
-            kitty_shared_memory_exists(&name),
-            "shared memory object should not be read or unlinked until materialization"
+            !kitty_shared_memory_exists(&name),
+            "shared memory object should be read and unlinked before success is acknowledged"
         );
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 611, &payload);
-        assert!(
-            !kitty_shared_memory_exists(&name),
-            "shared memory object should be unlinked after materialization"
-        );
     }
 
     #[cfg(unix)]
@@ -3447,14 +3424,10 @@ mod tests {
                 "shared memory upload with offset {offset} should succeed, got {reply:?}"
             );
             assert!(
-                kitty_shared_memory_exists(&name),
-                "shared memory object should not be unlinked before materialization"
+                !kitty_shared_memory_exists(&name),
+                "shared memory object should be read and unlinked before success is acknowledged"
             );
             assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, image_id, &payload);
-            assert!(
-                !kitty_shared_memory_exists(&name),
-                "shared memory object should be unlinked after materialization"
-            );
         }
     }
 
