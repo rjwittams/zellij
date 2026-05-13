@@ -39,10 +39,7 @@ use zellij_utils::ipc::PixelDimensions;
 use interprocess::local_socket::Stream as LocalSocketStream;
 use zellij_utils::{
     channels::{self, ChannelWithContext, Receiver},
-    data::{
-        Direction, FloatingPaneCoordinates, InputMode, ModeInfo, NewPanePlacement, Palette,
-        PluginCapabilities,
-    },
+    data::{Direction, FloatingPaneCoordinates, InputMode, ModeInfo, NewPanePlacement, Palette},
     input::options::{KittyImageFileLifetime, KittyImageOutputTransport},
     ipc::{ClientAttributes, ClientToServerMsg, ServerToClientMsg},
 };
@@ -10359,7 +10356,9 @@ fn create_non_mirrored_screen(size: Size) -> Screen {
         true,  // arrow_fonts
         None,  // layout_dir
         false, // explicitly_disable_kitty_keyboard_protocol
-        true,  // stacked_resize
+        vec![KittyImageOutputTransport::Direct],
+        KittyImageFileLifetime::GraceWindow,
+        true, // stacked_resize
         None,
         false,
         WebSharing::Off,
