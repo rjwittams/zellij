@@ -117,7 +117,9 @@ impl PendingKittyPlaceholder {
         let image_id_low_bits = self.image_id_low_bits?;
         let placeholder_row = match self.row_diacritic {
             Some(row_diacritic) => kitty_diacritic_to_index(row_diacritic)? as u16,
-            None => inherited.map(|previous| previous.placeholder_row)?,
+            None => inherited
+                .map(|previous| previous.placeholder_row)
+                .unwrap_or(0),
         };
         let placeholder_col = match self.column_diacritic {
             Some(column_diacritic) => kitty_diacritic_to_index(column_diacritic)? as u16,
@@ -1386,13 +1388,11 @@ impl KittyImageState {
             }
         }
 
-        for (placement_index, chunk) in chunks.iter().enumerate() {
-            let placement_id = chunk
-                .placement_id
-                .unwrap_or(PlacementId::Synthetic(PlacementId::synthetic_wire_value(
-                    placement_index as u32 + 1,
-                )))
-                .wire_value();
+        for chunk in chunks {
+            let placement_id = match chunk.placement_id {
+                Some(PlacementId::Synthetic(value)) => value,
+                Some(PlacementId::Protocol(_)) | None => chunk.stable_render_id as u32,
+            };
             raw_vte_output.push_str(&Self::serialize_explicit_placement(chunk, placement_id));
         }
         raw_vte_output.push_str("\u{1b}[u");
@@ -1423,13 +1423,8 @@ impl KittyImageState {
             }
         }
 
-        for (placement_index, render) in renders.iter().enumerate() {
-            let placement_id = render
-                .placement_id
-                .unwrap_or(PlacementId::Synthetic(PlacementId::synthetic_wire_value(
-                    placement_index as u32 + 1,
-                )))
-                .wire_value();
+        for render in renders {
+            let placement_id = render.stable_render_id as u32;
             raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
         }
         raw_vte_output.push_str("\u{1b}[u");
@@ -1465,28 +1460,16 @@ impl KittyImageState {
             }
         }
 
-        let mut next_synthesized_placement_id = 1u32;
         for chunk in chunks {
-            let placement_id = chunk.placement_id.unwrap_or_else(|| {
-                let placement_id = next_synthesized_placement_id;
-                next_synthesized_placement_id += 1;
-                PlacementId::Synthetic(PlacementId::synthetic_wire_value(placement_id))
-            });
-            raw_vte_output.push_str(&Self::serialize_explicit_placement(
-                chunk,
-                placement_id.wire_value(),
-            ));
+            let placement_id = match chunk.placement_id {
+                Some(PlacementId::Synthetic(value)) => value,
+                Some(PlacementId::Protocol(_)) | None => chunk.stable_render_id as u32,
+            };
+            raw_vte_output.push_str(&Self::serialize_explicit_placement(chunk, placement_id));
         }
         for render in renders {
-            let placement_id = render.placement_id.unwrap_or_else(|| {
-                let placement_id = next_synthesized_placement_id;
-                next_synthesized_placement_id += 1;
-                PlacementId::Synthetic(PlacementId::synthetic_wire_value(placement_id))
-            });
-            raw_vte_output.push_str(&Self::serialize_placeholder_render(
-                render,
-                placement_id.wire_value(),
-            ));
+            let placement_id = render.stable_render_id as u32;
+            raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
         }
         raw_vte_output.push_str("\u{1b}[u");
         raw_vte_output
@@ -2082,14 +2065,16 @@ impl KittyPlacement {
         character_cell_size: Option<SizeInPixels>,
     ) -> ImagePlacementGeometry {
         let (image_width, image_height) = image_dimensions;
-        let source_x = self.source_x.unwrap_or(0);
-        let source_y = self.source_y.unwrap_or(0);
+        let source_x = self.source_x.unwrap_or(0).min(image_width);
+        let source_y = self.source_y.unwrap_or(0).min(image_height);
         let source_width = self
             .source_width
-            .unwrap_or_else(|| image_width.saturating_sub(source_x));
+            .unwrap_or_else(|| image_width.saturating_sub(source_x))
+            .min(image_width.saturating_sub(source_x));
         let source_height = self
             .source_height
-            .unwrap_or_else(|| image_height.saturating_sub(source_y));
+            .unwrap_or_else(|| image_height.saturating_sub(source_y))
+            .min(image_height.saturating_sub(source_y));
         let (columns, rows) = if let Some(cell_size) = character_cell_size {
             let default_columns = || {
                 ((source_width as usize + cell_size.width.saturating_sub(1)) / cell_size.width)

@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 mod image_fragment;
 mod image_output;
 mod kitty_diff;
+pub(crate) mod kitty_host_placement_id;
 mod kitty_output_media;
 
 use crate::panes::Row;
@@ -29,6 +30,7 @@ use zellij_utils::pane_size::SizeInPixels;
 use self::image_fragment::PreparedImageOutput;
 use self::image_output::ImageOutput;
 pub(crate) use self::image_output::KittyFileOutputAcknowledgementPolicy;
+pub(crate) use self::kitty_host_placement_id::{placement_id_allocator, PlacementIdAllocator};
 pub use self::kitty_output_media::{KittyOutputMediaCache, KittyOutputMediaRetention};
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use zellij_utils::pane_size::{PaneGeom, Size};
@@ -1037,12 +1039,6 @@ pub enum PlacementId {
 }
 
 impl PlacementId {
-    const SYNTHETIC_WIRE_NAMESPACE: u32 = 0x8000_0000;
-
-    pub fn synthetic_wire_value(value: u32) -> u32 {
-        value.max(1) | Self::SYNTHETIC_WIRE_NAMESPACE
-    }
-
     pub fn wire_value(self) -> u32 {
         match self {
             PlacementId::Protocol(value) | PlacementId::Synthetic(value) => value,

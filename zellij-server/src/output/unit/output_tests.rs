@@ -28,12 +28,12 @@ fn pid(value: u32) -> PlacementId {
     PlacementId::Protocol(value)
 }
 
-fn synthetic_pid(value: u32) -> PlacementId {
-    PlacementId::Synthetic(PlacementId::synthetic_wire_value(value))
+fn wire_pid_for_stable_render_id(stable_render_id: u64) -> PlacementId {
+    PlacementId::Synthetic(stable_render_id as u32)
 }
 
-fn wire_pid_for_stable_render_id(stable_render_id: u64) -> PlacementId {
-    synthetic_pid(stable_render_id as u32)
+fn placeholder_wire_pid_for_stable_render_id(stable_render_id: u64) -> PlacementId {
+    PlacementId::Synthetic(stable_render_id as u32)
 }
 
 /// Helper to create a simple Output instance for testing
@@ -1554,7 +1554,8 @@ fn test_image_output_asset_change_recreates_shared_explicit_and_placeholder_plac
     let mut placeholder_render = create_kitty_placeholder_render(1);
     placeholder_render.placement_id = Some(pid(20));
     let explicit_wire_pid = wire_pid_for_stable_render_id(explicit_chunk.stable_render_id);
-    let placeholder_wire_pid = wire_pid_for_stable_render_id(placeholder_render.stable_render_id);
+    let placeholder_wire_pid =
+        placeholder_wire_pid_for_stable_render_id(placeholder_render.stable_render_id);
 
     let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
         create_test_output_with_state();
@@ -1974,7 +1975,7 @@ fn test_kitty_diff_assigns_distinct_stable_synthesized_ids_across_modes() {
     let serialized = output.serialize().unwrap();
     let client_output = serialized.get(&1).unwrap();
     let explicit_wire_pid = wire_pid_for_stable_render_id(1);
-    let placeholder_wire_pid = wire_pid_for_stable_render_id(2);
+    let placeholder_wire_pid = placeholder_wire_pid_for_stable_render_id(2);
 
     assert!(
         client_output.contains(&format!("a=p,i=1,p={}", explicit_wire_pid.wire_value())),
@@ -1986,6 +1987,40 @@ fn test_kitty_diff_assigns_distinct_stable_synthesized_ids_across_modes() {
             placeholder_wire_pid.wire_value()
         )),
         "expected the placeholder placement to receive a distinct synthesized id"
+    );
+}
+
+#[test]
+fn unnamed_kitty_placeholder_wire_id_fits_underline_color_encoding() {
+    let client_ids = create_test_clients(1);
+    let mut render = create_kitty_placeholder_render(200);
+    render.placement_id = None;
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.add_pane_image_output_to_client(
+        1,
+        PaneImageRenderOutput {
+            kitty_scene: KittyRenderBundle {
+                explicit_chunks: vec![],
+                placeholder_renders: vec![render],
+            },
+            ..Default::default()
+        },
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+
+    assert!(
+        client_output.contains("a=p,U=1,i=200,p=400"),
+        "placeholder virtual placement id must stay inside the 24-bit color-encoded namespace: {client_output:?}"
+    );
+    assert!(
+        client_output.contains("\u{1b}[58;2;0;1;144m"),
+        "placeholder cell underline color must encode the same placement id as p=400: {client_output:?}"
     );
 }
 
@@ -2347,6 +2382,34 @@ fn test_prepared_image_output_serializes_kitty_after_text() {
     assert!(
         text_pos < kitty_pos,
         "kitty image serialization should happen after text serialization"
+    );
+}
+
+#[test]
+fn real_explicit_placement_uses_stable_render_id_as_host_id() {
+    let client_ids = create_test_clients(1);
+    let mut chunk = create_kitty_chunk(203, 2, 2);
+    chunk.stable_render_id = 405;
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+
+    assert!(
+        client_output.contains("a=p,i=203,p=405"),
+        "real explicit host placement id should be the allocated stable render id, got: {client_output:?}"
+    );
+    assert!(
+        !client_output.contains("a=p,i=203,p=2147484053"),
+        "real explicit host placement id should not be remapped away from the allocated id"
     );
 }
 
@@ -2730,7 +2793,7 @@ fn test_prepare_render_body_derives_kitty_placeholder_fragments() {
                 key: KittyPlacementKey {
                     stable_render_id: 184,
                     image_id: 92,
-                    wire_placement_id: wire_pid_for_stable_render_id(184),
+                    wire_placement_id: placeholder_wire_pid_for_stable_render_id(184),
                 },
                 render: create_kitty_placeholder_render(92),
             }],
@@ -2790,10 +2853,18 @@ fn test_clip_kitty_explicit_fragment_assigns_distinct_split_placement_id() {
     assert_eq!(fragments.len(), 1);
     match &fragments[0] {
         ImageFragment::KittyExplicit(chunk) => {
-            assert!(matches!(
-                chunk.placement_id,
-                Some(PlacementId::Synthetic(_))
-            ));
+            let Some(PlacementId::Synthetic(fragment_placement_id)) = chunk.placement_id else {
+                panic!("expected split fragment to receive a synthetic placement id");
+            };
+            assert!(
+                fragment_placement_id
+                    >= crate::output::kitty_host_placement_id::EXPLICIT_FRAGMENT_PLACEMENT_ID_MIN,
+                "split fragment placement id should be in the explicit-only range"
+            );
+            assert_ne!(
+                fragment_placement_id, chunk.stable_render_id as u32,
+                "split fragment placement id should not collide with the base real placement id"
+            );
         },
         other => panic!("expected kitty explicit fragment, got {other:?}"),
     }

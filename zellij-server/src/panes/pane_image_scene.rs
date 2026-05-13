@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use zellij_utils::pane_size::SizeInPixels;
 
 use crate::output::{
-    KittyImageChunk, KittyImagePlacementMode, KittyPlaceholderCellRender, KittyPlaceholderRender,
-    PlacementId,
+    placement_id_allocator, KittyImageChunk, KittyImagePlacementMode, KittyPlaceholderCellRender,
+    KittyPlaceholderRender, PlacementId, PlacementIdAllocator,
 };
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -388,14 +388,9 @@ pub struct ImageSceneHandleResult {
 }
 
 static NEXT_IMAGE_ASSET_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_LOGICAL_PLACEMENT_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_image_asset_id() -> ImageAssetId {
     ImageAssetId(NEXT_IMAGE_ASSET_ID.fetch_add(1, Ordering::Relaxed))
-}
-
-pub fn next_logical_placement_id() -> LogicalPlacementId {
-    LogicalPlacementId(NEXT_LOGICAL_PLACEMENT_ID.fetch_add(1, Ordering::Relaxed))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -685,7 +680,15 @@ impl PaneImageScene {
                     image_id: insertion.protocol_image_id,
                     placement_id: insertion.protocol_placement_id,
                 });
-                let logical_placement_id = next_logical_placement_id();
+                let placement_id_allocator = placement_id_allocator();
+                let logical_placement_id = match insertion.placement_mode {
+                    KittyImagePlacementMode::Explicit => {
+                        placement_id_allocator.allocate_explicit_placement_id()
+                    },
+                    KittyImagePlacementMode::Placeholder => {
+                        placement_id_allocator.allocate_placeholder_placement_id()
+                    },
+                };
                 let flavor = match insertion.placement_mode {
                     KittyImagePlacementMode::Explicit => {
                         PlacementFlavor::KittyExplicit(KittyExplicitPlacementFlavor {
@@ -1089,7 +1092,7 @@ impl PaneImageScene {
             let mut source_height = flavor.source_height;
             let mut columns = flavor.occupancy.columns;
             let mut rows = flavor.occupancy.rows;
-            if columns == 0 || rows == 0 {
+            if columns == 0 || rows == 0 || source_width == 0 || source_height == 0 {
                 continue;
             }
             let Some(projection) = project_placement_to_viewport(
@@ -1249,6 +1252,9 @@ impl PaneImageScene {
             } else {
                 flavor.source_height
             };
+            if base_source_width == 0 || base_source_height == 0 {
+                continue;
+            }
             let source_x = base_source_x
                 + ((base_source_width as u64 * min_placeholder_col as u64) / total_columns as u64)
                     as u32;

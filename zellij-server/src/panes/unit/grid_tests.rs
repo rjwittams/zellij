@@ -21,7 +21,11 @@ fn pid(value: u32) -> PlacementId {
 }
 
 fn synthetic_wire_placement_id(stable_render_id: u64) -> u32 {
-    PlacementId::synthetic_wire_value(stable_render_id as u32)
+    stable_render_id as u32
+}
+
+fn placeholder_wire_placement_id(stable_render_id: u64) -> u32 {
+    stable_render_id as u32
 }
 
 fn read_fixture(fixture_name: &str) -> Vec<u8> {
@@ -4402,8 +4406,6 @@ fn single_click_drag_selection_preserved_after_scroll() {
 
 #[test]
 fn osc_11_set_and_query_pane_default_bg() {
-    use crate::panes::terminal_character::AnsiCode;
-
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
@@ -4455,8 +4457,6 @@ fn osc_11_set_and_query_pane_default_bg() {
 
 #[test]
 fn osc_10_set_and_query_pane_default_fg() {
-    use crate::panes::terminal_character::AnsiCode;
-
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
@@ -4505,8 +4505,6 @@ fn osc_10_set_and_query_pane_default_fg() {
 
 #[test]
 fn osc_110_111_reset_pane_default_colors() {
-    use crate::panes::terminal_character::AnsiCode;
-
     let mut vte_parser = vte::Parser::new();
     let sixel_image_store = Rc::new(RefCell::new(SixelImageStore::default()));
     let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
@@ -5557,6 +5555,22 @@ fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u3
     format!("\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
 }
 
+fn kitty_display_cropped_placement(
+    image_id: u32,
+    placement_id: u32,
+    cols: u32,
+    rows: u32,
+    source_x: u32,
+    source_y: u32,
+    source_width: u32,
+    source_height: u32,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=p,C=1,i={image_id},p={placement_id},c={cols},r={rows},x={source_x},y={source_y},w={source_width},h={source_height}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
 fn kitty_relative_display_placement(
     image_id: u32,
     placement_id: u32,
@@ -5756,6 +5770,48 @@ fn placeholder_text_with_placement_inherited_single_row(
     }
     output.push_str("\u{1b}[39m\u{1b}[59m");
     output.into_bytes()
+}
+
+fn placeholder_run_start_default_text(image_id: u32, x: usize, y: usize) -> Vec<u8> {
+    let image_low = image_id & 0x00FF_FFFF;
+    let image_r = (image_low >> 16) & 0xFF;
+    let image_g = (image_low >> 8) & 0xFF;
+    let image_b = image_low & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    format!("\u{1b}[{y};{x}H\u{1b}[38;2;{image_r};{image_g};{image_b}m{placeholder}\u{1b}[39m")
+        .into_bytes()
+}
+
+fn placeholder_soft_wrap_explicit_diacritics_text(image_id: u32, x: usize, y: usize) -> Vec<u8> {
+    let image_low = image_id & 0x00FF_FFFF;
+    let image_r = (image_low >> 16) & 0xFF;
+    let image_g = (image_low >> 8) & 0xFF;
+    let image_b = image_low & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    let row0 = '\u{305}';
+    let col0 = '\u{305}';
+    let col1 = '\u{30D}';
+    let col2 = '\u{30E}';
+    let hi1 = '\u{30D}';
+    format!(
+        "\u{1b}[{y};{x}H\u{1b}[38;2;{image_r};{image_g};{image_b}m{placeholder}{row0}{col0}{hi1}{placeholder}{row0}{col1}{hi1}{placeholder}{row0}{col2}{hi1}\u{1b}[39m"
+    )
+    .into_bytes()
+}
+
+fn placeholder_soft_wrap_inherited_diacritics_text(image_id: u32, x: usize, y: usize) -> Vec<u8> {
+    let image_low = image_id & 0x00FF_FFFF;
+    let image_r = (image_low >> 16) & 0xFF;
+    let image_g = (image_low >> 8) & 0xFF;
+    let image_b = image_low & 0xFF;
+    let placeholder = '\u{10EEEE}';
+    let row0 = '\u{305}';
+    let col0 = '\u{305}';
+    let hi1 = '\u{30D}';
+    format!(
+        "\u{1b}[{y};{x}H\u{1b}[38;2;{image_r};{image_g};{image_b}m{placeholder}{row0}{col0}{hi1}{placeholder}{placeholder}\u{1b}[39m"
+    )
+    .into_bytes()
 }
 
 fn placeholder_text_with_placement_inherited_rows(
@@ -6505,6 +6561,58 @@ fn kitty_placeholder_stays_aligned_with_text_marker_after_prior_wrap_and_scroll(
 }
 
 #[test]
+fn kitty_placeholder_explicit_diacritics_render_across_soft_wrap() {
+    let image_id = (1 << 24) | 0x42;
+    let mut grid = create_grid_with_size_and_raw(4, 6, &kitty_virtual_rgba(image_id, 40, 16, 5, 2));
+    feed_bytes(
+        &mut grid,
+        &placeholder_soft_wrap_explicit_diacritics_text(image_id, 5, 2),
+    );
+
+    let placeholder_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(placeholder_renders.len(), 1);
+    assert_eq!(
+        placeholder_renders[0].cells.len(),
+        3,
+        "fully explicit placeholder cells should render on both sides of a soft wrap: {placeholder_renders:?}"
+    );
+}
+
+#[test]
+fn kitty_placeholder_omitted_diacritics_do_not_inherit_across_soft_wrap() {
+    let image_id = (1 << 24) | 0x42;
+    let mut grid = create_grid_with_size_and_raw(4, 6, &kitty_virtual_rgba(image_id, 40, 16, 5, 2));
+    feed_bytes(
+        &mut grid,
+        &placeholder_soft_wrap_inherited_diacritics_text(image_id, 5, 2),
+    );
+
+    let placeholder_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(placeholder_renders.len(), 1);
+    assert_eq!(
+        placeholder_renders[0].cells.len(),
+        2,
+        "omitted placeholder diacritics should inherit within a render line, but not across a soft wrap: {placeholder_renders:?}"
+    );
+}
+
+#[test]
+fn kitty_placeholder_run_start_without_diacritics_defaults_to_first_cell() {
+    let mut grid = create_grid_with_size_and_raw(4, 8, &kitty_virtual_rgba(200, 1, 1, 1, 1));
+    feed_bytes(&mut grid, &placeholder_run_start_default_text(200, 2, 2));
+
+    let placeholder_renders = grid.visible_kitty_placeholder_renders(0, 0);
+    assert_eq!(
+        placeholder_renders.len(),
+        1,
+        "first placeholder cell without diacritics should resolve to the image origin"
+    );
+    assert_eq!(placeholder_renders[0].cells.len(), 1);
+    assert_eq!(placeholder_renders[0].cells[0].placeholder_row, 0);
+    assert_eq!(placeholder_renders[0].cells[0].placeholder_col, 0);
+}
+
+#[test]
 fn kitty_placeholder_inherits_omitted_diacritics_for_rgb_and_rgba() {
     let mut grid =
         create_grid_with_size_and_raw(4, 16, &kitty_virtual_rgb_with_placement(30, 1, 4, 1, 4, 1));
@@ -6594,6 +6702,39 @@ fn kitty_placeholder_inherits_omitted_diacritics_in_smoke_style_multi_row_grid()
             .map(|render| render.cells.len()),
         Some(cols * rows),
         "RGBA smoke-style inherited placeholder grid should resolve all cells",
+    );
+}
+
+#[test]
+fn kitty_source_rectangle_width_is_clamped_to_image_bounds() {
+    let mut grid = create_grid_with_size_and_raw(8, 24, &kitty_retransmit_rgba(201, 100, 100));
+    feed_bytes(
+        &mut grid,
+        &kitty_display_cropped_placement(201, 1, 18, 8, 80, 20, 200, 60),
+    );
+
+    let chunks = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].source_x, 80);
+    assert_eq!(chunks[0].source_y, 20);
+    assert_eq!(
+        chunks[0].source_width, 20,
+        "source width should clamp to remaining pixels inside the image"
+    );
+    assert_eq!(chunks[0].source_height, 60);
+}
+
+#[test]
+fn kitty_fully_outside_source_rectangle_is_not_visible() {
+    let mut grid = create_grid_with_size_and_raw(8, 24, &kitty_retransmit_rgba(202, 100, 100));
+    feed_bytes(
+        &mut grid,
+        &kitty_display_cropped_placement(202, 1, 18, 8, 120, 20, 20, 40),
+    );
+
+    assert!(
+        grid.visible_kitty_image_chunks(0, 0).is_empty(),
+        "fully outside source rectangles should not produce a visible placement"
     );
 }
 
@@ -7865,7 +8006,7 @@ fn kitty_retransmit_then_recreate_emits_both_recreated_placements_to_output() {
         .kitty_scene
         .placeholder_renders
         .first()
-        .map(|render| synthetic_wire_placement_id(render.stable_render_id))
+        .map(|render| placeholder_wire_placement_id(render.stable_render_id))
         .expect("expected recreated placeholder render");
     let explicit_wire_placement_id = second_render
         .image_output

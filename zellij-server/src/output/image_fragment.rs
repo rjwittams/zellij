@@ -1,7 +1,9 @@
 use super::{
     kitty_diff::{KittyScenePlan, KittySceneState},
-    FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender, PlacementId, SixelImageChunk,
+    placement_id_allocator, FloatingPanesStack, KittyImageChunk, KittyPlaceholderRender,
+    PlacementId, PlacementIdAllocator, SixelImageChunk,
 };
+use crate::panes::pane_image_scene::LogicalPlacementId;
 use crate::ClientId;
 use zellij_utils::pane_size::{PaneGeom, SizeInPixels};
 
@@ -53,31 +55,10 @@ fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
 }
 
 fn synthesize_split_fragment_placement_id(chunk: &KittyImageChunk) -> Option<PlacementId> {
-    let base = match chunk.placement_id? {
-        PlacementId::Protocol(value) | PlacementId::Synthetic(value) => value,
-    };
-    let mut hash = (base as u64) ^ 0x9e37_79b9_7f4a_7c15;
-    let fields = [
-        chunk.cell_x as u64,
-        chunk.cell_y as u64,
-        chunk.columns as u64,
-        chunk.rows as u64,
-        chunk.source_x as u64,
-        chunk.source_y as u64,
-        chunk.source_width as u64,
-        chunk.source_height as u64,
-        chunk.x_offset as u64,
-        chunk.y_offset as u64,
-    ];
-    for field in fields {
-        hash ^= field
-            .wrapping_add(0x9e37_79b9_7f4a_7c15)
-            .wrapping_add(hash << 6)
-            .wrapping_add(hash >> 2);
-    }
-    Some(PlacementId::Synthetic(PlacementId::synthetic_wire_value(
-        (hash & 0xffff_ffff) as u32,
-    )))
+    Some(
+        placement_id_allocator()
+            .explicit_fragment_placement_id(LogicalPlacementId(chunk.stable_render_id), chunk),
+    )
 }
 
 fn promote_split_explicit_chunk_to_bounded_geometry(chunk: KittyImageChunk) -> KittyImageChunk {

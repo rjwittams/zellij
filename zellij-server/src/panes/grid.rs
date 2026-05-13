@@ -2634,6 +2634,16 @@ impl Grid {
     fn consume_kitty_placeholder_char(&mut self, c: char) -> bool {
         if c == KITTY_UNICODE_PLACEHOLDER_CHAR {
             self.finalize_pending_kitty_placeholder();
+            if self.cursor.x.saturating_add(1) > self.width {
+                if self.disable_linewrap {
+                    self.image_placeholder_tracker
+                        .clear_last_resolved_placeholder();
+                    return true;
+                }
+                self.line_wrap();
+                self.image_placeholder_tracker
+                    .clear_last_resolved_placeholder();
+            }
             self.image_placeholder_tracker
                 .begin_placeholder(&self.cursor.pending_styles, self.kitty_cursor_flow_anchor());
             self.move_cursor_forward_until_edge(1);

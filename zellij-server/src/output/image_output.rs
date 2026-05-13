@@ -412,22 +412,17 @@ impl ImageOutput {
             .unwrap_or_default()
     }
 
-    fn stable_wire_placement_id(
-        protocol_placement_id: Option<super::PlacementId>,
-        stable_render_id: u64,
-    ) -> super::PlacementId {
-        // Host-terminal placement IDs are Zellij-owned. Keep protocol placement
-        // IDs in scene state for app-visible semantics, but serialize a separate
-        // stable ID so protocol and synthesized identities cannot collapse to the
-        // same host (image_id, placement_id) pair.
-        match protocol_placement_id {
-            Some(super::PlacementId::Synthetic(value)) => {
-                super::PlacementId::Synthetic(super::PlacementId::synthetic_wire_value(value))
+    fn explicit_wire_placement_id(chunk: &KittyImageChunk) -> super::PlacementId {
+        match chunk.placement_id {
+            Some(super::PlacementId::Synthetic(value)) => super::PlacementId::Synthetic(value),
+            Some(super::PlacementId::Protocol(_)) | None => {
+                super::PlacementId::Synthetic(chunk.stable_render_id as u32)
             },
-            Some(super::PlacementId::Protocol(_)) | None => super::PlacementId::Synthetic(
-                super::PlacementId::synthetic_wire_value(stable_render_id as u32),
-            ),
         }
+    }
+
+    fn placeholder_wire_placement_id(render: &KittyPlaceholderRender) -> super::PlacementId {
+        super::PlacementId::Synthetic(render.stable_render_id as u32)
     }
 
     fn kitty_scene_state_from_rendered(
@@ -449,8 +444,7 @@ impl ImageOutput {
                 .map(|(image_id, generation)| (*image_id, *generation)),
         );
         for chunk in chunks {
-            let placement_id =
-                ImageOutput::stable_wire_placement_id(chunk.placement_id, chunk.stable_render_id);
+            let placement_id = ImageOutput::explicit_wire_placement_id(chunk);
             if let Entry::Vacant(entry) = scene.resident_asset_generations.entry(chunk.image_id) {
                 entry.insert(kitty_asset_store.generation(chunk.image_id)?);
             }
@@ -464,8 +458,7 @@ impl ImageOutput {
             });
         }
         for render in placeholder_renders {
-            let placement_id =
-                ImageOutput::stable_wire_placement_id(render.placement_id, render.stable_render_id);
+            let placement_id = ImageOutput::placeholder_wire_placement_id(render);
             if let Entry::Vacant(entry) = scene.resident_asset_generations.entry(render.image_id) {
                 entry.insert(kitty_asset_store.generation(render.image_id)?);
             }
@@ -783,28 +776,15 @@ impl ImageOutput {
             }
         }
 
-        let mut next_synthesized_placement_id = 1u32;
         for chunk in chunks {
-            let placement_id = chunk.placement_id.unwrap_or_else(|| {
-                let placement_id = next_synthesized_placement_id;
-                next_synthesized_placement_id += 1;
-                crate::output::PlacementId::Synthetic(
-                    crate::output::PlacementId::synthetic_wire_value(placement_id),
-                )
-            });
+            let placement_id = ImageOutput::explicit_wire_placement_id(chunk);
             raw_vte_output.push_str(&KittyImageState::serialize_explicit_placement(
                 chunk,
                 placement_id.wire_value(),
             ));
         }
         for render in renders {
-            let placement_id = render.placement_id.unwrap_or_else(|| {
-                let placement_id = next_synthesized_placement_id;
-                next_synthesized_placement_id += 1;
-                crate::output::PlacementId::Synthetic(
-                    crate::output::PlacementId::synthetic_wire_value(placement_id),
-                )
-            });
+            let placement_id = ImageOutput::placeholder_wire_placement_id(render);
             raw_vte_output.push_str(&KittyImageState::serialize_placeholder_render(
                 render,
                 placement_id.wire_value(),
@@ -1272,17 +1252,6 @@ mod tests {
             .last_rendered_state
             .kitty_scene_state()
             .is_some());
-    }
-
-    #[test]
-    fn synthetic_wire_placement_id_does_not_collide_with_protocol_wire_value() {
-        let protocol_placement_id = crate::output::PlacementId::Protocol(5);
-        let synthetic_placement_id = ImageOutput::stable_wire_placement_id(None, 5);
-
-        assert_ne!(
-            protocol_placement_id.wire_value(),
-            synthetic_placement_id.wire_value()
-        );
     }
 
     #[test]

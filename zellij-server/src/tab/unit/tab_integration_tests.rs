@@ -1,5 +1,5 @@
 use super::{Output, Tab};
-use crate::output::{KittyOutputMediaCache, PlacementId, RenderedImageState};
+use crate::output::{KittyOutputMediaCache, RenderedImageState};
 use crate::panes::kitty_asset_store::KittyAssetStore;
 use crate::panes::sixel::SixelImageStore;
 use crate::screen::CopyOptions;
@@ -3930,7 +3930,11 @@ fn render_tab_with_last_state(
 }
 
 fn synthetic_wire_placement_id(stable_render_id: u64) -> u32 {
-    PlacementId::synthetic_wire_value(stable_render_id as u32)
+    stable_render_id as u32
+}
+
+fn placeholder_wire_placement_id(stable_render_id: u64) -> u32 {
+    stable_render_id as u32
 }
 
 #[test]
@@ -11306,7 +11310,7 @@ fn kitty_shared_asset_replace_emits_updated_payloads_at_tab_level() {
         .placeholder_renders
         .iter()
         .find(|render| render.image_id == internal_image_id)
-        .map(|render| synthetic_wire_placement_id(render.stable_render_id))
+        .map(|render| placeholder_wire_placement_id(render.stable_render_id))
         .expect("expected replacement placeholder render");
     let explicit_wire_placement_id = second_state
         .rendered_image_state()
