@@ -2951,6 +2951,39 @@ mod tests {
         path
     }
 
+    fn write_kitty_safe_temp_dir_media_fixture(name: &str, bytes: &[u8]) -> (PathBuf, PathBuf) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "tty-graphics-protocol-zellij-{name}-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&dir).expect("fixture directory should be writable");
+        let path = dir.join("payload.bin");
+        std::fs::write(&path, bytes).expect("fixture file should be writable");
+        (dir, path)
+    }
+
+    fn write_kitty_nontemp_magic_media_fixture(name: &str, bytes: &[u8]) -> (PathBuf, PathBuf) {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let dir = std::env::current_dir()
+            .expect("current dir should be available")
+            .join("target")
+            .join(format!(
+                "zellij-kitty-file-media-{name}-{}-{unique}",
+                std::process::id()
+            ));
+        std::fs::create_dir_all(&dir).expect("fixture directory should be writable");
+        let path = dir.join("payload-tty-graphics-protocol.bin");
+        std::fs::write(&path, bytes).expect("fixture file should be writable");
+        (dir, path)
+    }
+
     fn kitty_file_media_transmit_apc(
         medium: &str,
         image_id: u32,
@@ -3275,6 +3308,43 @@ mod tests {
     }
 
     #[test]
+    fn kitty_temporary_file_rgba_upload_deletes_when_magic_is_in_temp_directory_name() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let (dir, path) = write_kitty_safe_temp_dir_media_fixture("directory-marker", &payload);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_file_media_transmit_apc("t", 619, 32, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "temporary file upload with magic directory should succeed, got {reply:?}"
+        );
+        assert!(
+            path.exists(),
+            "safe temporary file should not be read or deleted until materialization"
+        );
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 619, &payload);
+        assert!(
+            !path.exists(),
+            "safe temporary file should be deleted when the marker is in the full temp path"
+        );
+        std::fs::remove_dir(dir).ok();
+    }
+
+    #[test]
     fn kitty_temporary_file_rgba_upload_keeps_temp_file_without_magic_name() {
         let payload = vec![
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
@@ -3303,6 +3373,43 @@ mod tests {
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 606, &payload);
         assert!(path.exists(), "unsafe temporary file name should be kept");
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn kitty_temporary_file_rgba_upload_keeps_magic_path_outside_temp_dirs() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let (dir, path) = write_kitty_nontemp_magic_media_fixture("nontemp-marker", &payload);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_file_media_transmit_apc("t", 620, 32, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "temporary file upload outside temp dirs should still read, got {reply:?}"
+        );
+        assert!(
+            path.exists(),
+            "temporary file outside known temp dirs should not be deleted before materialization"
+        );
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 620, &payload);
+        assert!(
+            path.exists(),
+            "temporary file outside known temp dirs should not be deleted even with the marker"
+        );
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
