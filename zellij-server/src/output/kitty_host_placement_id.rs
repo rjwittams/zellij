@@ -51,16 +51,11 @@ impl PlacementIdAllocator for AtomicPlacementIdAllocator {
     ) -> PlacementId {
         let mut hash = base_placement_id.0 ^ 0x9e37_79b9_7f4a_7c15;
         let fields = [
-            fragment.cell_x as u64,
-            fragment.cell_y as u64,
-            fragment.columns as u64,
-            fragment.rows as u64,
+            fragment.image_id as u64,
             fragment.source_x as u64,
             fragment.source_y as u64,
             fragment.source_width as u64,
             fragment.source_height as u64,
-            fragment.x_offset as u64,
-            fragment.y_offset as u64,
         ];
         for field in fields {
             hash ^= field

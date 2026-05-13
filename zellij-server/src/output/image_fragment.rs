@@ -417,4 +417,60 @@ mod tests {
         assert!(split.rows_specified);
         assert_eq!(split.image_id, chunk.image_id);
     }
+
+    #[test]
+    fn split_explicit_fragment_id_is_stable_across_destination_moves() {
+        let chunk = test_chunk();
+        let first = build_split_explicit_fragment(KittyImageChunk {
+            cell_x: 1,
+            cell_y: 2,
+            columns: 2,
+            rows: 1,
+            source_x: 30,
+            source_y: 30,
+            source_width: 40,
+            source_height: 10,
+            ..chunk.clone()
+        });
+        let moved = build_split_explicit_fragment(KittyImageChunk {
+            cell_x: 3,
+            cell_y: 4,
+            columns: 2,
+            rows: 1,
+            source_x: 30,
+            source_y: 30,
+            source_width: 40,
+            source_height: 10,
+            ..chunk
+        });
+
+        assert_eq!(
+            first.placement_id, moved.placement_id,
+            "split fragment id should be derived from the real placement and source region, not the destination cell"
+        );
+    }
+
+    #[test]
+    fn split_explicit_fragment_id_changes_across_source_regions() {
+        let chunk = test_chunk();
+        let left = build_split_explicit_fragment(KittyImageChunk {
+            source_x: 10,
+            source_y: 20,
+            source_width: 40,
+            source_height: 10,
+            ..chunk.clone()
+        });
+        let right = build_split_explicit_fragment(KittyImageChunk {
+            source_x: 50,
+            source_y: 20,
+            source_width: 40,
+            source_height: 10,
+            ..chunk
+        });
+
+        assert_ne!(
+            left.placement_id, right.placement_id,
+            "different split source regions should keep distinct fragment ids"
+        );
+    }
 }
