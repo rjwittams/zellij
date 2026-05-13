@@ -167,9 +167,13 @@ impl KittyAssetData {
 
     pub fn decoded_byte_size(&self) -> usize {
         let (width, height) = self.dimensions();
+        let bytes_per_pixel = match self.format() {
+            KittyAssetFormat::Rgb => 3,
+            KittyAssetFormat::Png | KittyAssetFormat::Rgba => 4,
+        };
         (width as usize)
             .saturating_mul(height as usize)
-            .saturating_mul(4)
+            .saturating_mul(bytes_per_pixel)
     }
 
     pub fn format(&self) -> KittyAssetFormat {
@@ -552,6 +556,29 @@ mod tests {
             width,
             height,
         }
+    }
+
+    fn rgb(width: u32, height: u32) -> KittyImageData {
+        KittyImageData::Rgb {
+            data: vec![0; (width * height * 3) as usize],
+            width,
+            height,
+        }
+    }
+
+    fn png(width: u32, height: u32, payload_len: usize) -> KittyImageData {
+        KittyImageData::Png {
+            data: vec![0; payload_len],
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn decoded_byte_size_tracks_decoded_pixel_size_by_format() {
+        assert_eq!(KittyAssetData::Image(rgba(2, 2)).decoded_byte_size(), 16);
+        assert_eq!(KittyAssetData::Image(rgb(2, 2)).decoded_byte_size(), 12);
+        assert_eq!(KittyAssetData::Image(png(2, 2, 1)).decoded_byte_size(), 16);
     }
 
     #[test]
