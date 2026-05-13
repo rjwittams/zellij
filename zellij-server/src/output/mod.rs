@@ -649,9 +649,13 @@ impl Output {
         client_ids: impl Iterator<Item = ClientId>,
         z_index: Option<usize>,
     ) {
+        let client_ids: Vec<ClientId> = client_ids.collect();
+        for client_id in client_ids.iter().copied() {
+            self.ensure_client_slot(client_id);
+        }
         self.image_output.add_pane_image_output_to_multiple_clients(
             pane_image_output,
-            client_ids,
+            client_ids.into_iter(),
             self.floating_panes_stack.as_ref(),
             z_index,
         );

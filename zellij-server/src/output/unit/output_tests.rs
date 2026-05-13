@@ -3465,6 +3465,34 @@ fn test_add_sixel_image_chunks_to_multiple_clients() {
 }
 
 #[test]
+fn test_multi_client_image_output_registers_image_only_clients() {
+    let mut output = create_test_output();
+    let client_ids = create_test_clients(2);
+
+    output.add_pane_image_output_to_multiple_clients(
+        pane_image_output_with_kitty_scene(vec![create_kitty_chunk(1, 2, 2)]),
+        client_ids.iter().copied(),
+        None,
+    );
+
+    let result = output.serialize().unwrap();
+    assert_eq!(
+        result.len(),
+        2,
+        "image-only multi-client output should serialize every target client"
+    );
+    for client_id in client_ids {
+        let client_output = result
+            .get(&client_id)
+            .unwrap_or_else(|| panic!("image-only multi-client output missing client {client_id}"));
+        assert!(
+            client_output.contains("\u{1b}_G"),
+            "client {client_id} should receive kitty image output"
+        );
+    }
+}
+
+#[test]
 fn test_character_chunk_new() {
     let terminal_chars: Vec<TerminalCharacter> = vec![TerminalCharacter::new('A')];
 
