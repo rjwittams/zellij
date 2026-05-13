@@ -441,7 +441,7 @@ impl KittyAssetStore {
         let next_generation = self
             .assets
             .get(&image_id)
-            .map(|asset| asset.generation.saturating_add(1))
+            .map(|asset| asset.generation.wrapping_add(1))
             .unwrap_or(1);
         self.asset_order
             .retain(|existing_id| *existing_id != image_id);
@@ -583,5 +583,16 @@ mod tests {
         store.insert_asset(1, rgba(1, 1));
 
         assert_eq!(store.next_asset_id(), Some(2));
+    }
+
+    #[test]
+    fn replacing_asset_wraps_generation_instead_of_saturating() {
+        let mut store = KittyAssetStore::default();
+        store.insert_asset(1, rgba(1, 1));
+        store.assets.get_mut(&1).unwrap().generation = u64::MAX;
+
+        store.insert_asset(1, rgba(2, 2));
+
+        assert_eq!(store.generation(1), Some(0));
     }
 }
