@@ -1253,6 +1253,65 @@ fn test_image_output_publishes_file_backed_raw_assets_as_regular_files() {
 }
 
 #[test]
+fn test_image_output_normalizes_unaligned_file_backed_raw_asset_offsets() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let source_path = tempdir.path().join("source-rgba-with-offset.bin");
+    let image_payload = vec![
+        255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+    ];
+    let mut source_payload = vec![0xAA, 0xBB, 0xCC];
+    source_payload.extend_from_slice(&image_payload);
+    std::fs::write(&source_path, &source_payload).unwrap();
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir.clone())));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(805, 2, 2);
+    let (mut output, _sixel_image_store, kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    seed_test_file_backed_kitty_asset(
+        kitty_asset_store,
+        805,
+        KittyExternalMedia::new(
+            KittyExternalMediaLocation::RegularFile(source_path),
+            KittyByteRange {
+                offset: 3,
+                size: Some(image_payload.len()),
+            },
+        ),
+    );
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_file_output_enabled_for_client(1, true);
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=805,q=2,f=32,s=2,v=2,t=f;"),
+        "file-backed raw assets should be republished as normalized kitty file uploads"
+    );
+    assert!(
+        !client_output.contains(",S=") && !client_output.contains(",O="),
+        "republished file output should not carry through the source file byte range"
+    );
+    assert!(
+        !client_output.contains(&base64::encode(&image_payload)),
+        "file-backed raw assets should not be serialized as direct base64 payloads"
+    );
+
+    let files = std::fs::read_dir(&media_dir)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(files.len(), 1);
+    assert_eq!(std::fs::read(files[0].path()).unwrap(), image_payload);
+}
+
+#[test]
 fn test_image_output_file_transport_is_per_client_and_reuses_published_files() {
     let tempdir = tempfile::tempdir().unwrap();
     let media_dir = tempdir.path().join("session-media/test/image");
