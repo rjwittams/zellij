@@ -1947,6 +1947,8 @@ impl<'a> KittyApc<'a> {
             _ => return None,
         };
         let placement_id = self.placement_id();
+        let protocol_cell_coord =
+            |value: Option<&str>| -> Option<u32> { value?.parse::<u32>().ok()?.checked_sub(1) };
         let selector = match delete_selector {
             "a" | "A" => KittyDeleteSelector::AllVisible,
             "i" | "I" => KittyDeleteSelector::ImageId {
@@ -1959,20 +1961,20 @@ impl<'a> KittyApc<'a> {
             },
             "c" | "C" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cursor),
             "p" | "P" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
-                x: self.source_x?.parse::<u32>().ok()?,
-                y: self.source_y?.parse::<u32>().ok()?,
+                x: protocol_cell_coord(self.source_x)?,
+                y: protocol_cell_coord(self.source_y)?,
                 z: None,
             }),
             "q" | "Q" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
-                x: self.source_x?.parse::<u32>().ok()?,
-                y: self.source_y?.parse::<u32>().ok()?,
+                x: protocol_cell_coord(self.source_x)?,
+                y: protocol_cell_coord(self.source_y)?,
                 z: Some(self.z_index?.parse::<i32>().ok()?),
             }),
             "x" | "X" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Column {
-                x: self.source_x?.parse::<u32>().ok()?,
+                x: protocol_cell_coord(self.source_x)?,
             }),
             "y" | "Y" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Row {
-                y: self.source_y?.parse::<u32>().ok()?,
+                y: protocol_cell_coord(self.source_y)?,
             }),
             "z" | "Z" => KittyDeleteSelector::Geometry(KittyGeometrySelector::Z {
                 z: self.z_index?.parse::<i32>().ok()?,
@@ -4223,8 +4225,8 @@ mod tests {
             b"Ga=d,d=p,x=24,y=11",
             KittyDeleteRequest {
                 selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
-                    x: 24,
-                    y: 11,
+                    x: 23,
+                    y: 10,
                     z: None,
                 }),
                 mode: KittyDeleteMode::PlacementsOnly,
@@ -4234,8 +4236,8 @@ mod tests {
             b"Ga=d,d=P,x=24,y=11",
             KittyDeleteRequest {
                 selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
-                    x: 24,
-                    y: 11,
+                    x: 23,
+                    y: 10,
                     z: None,
                 }),
                 mode: KittyDeleteMode::PlacementsAndBackingData,
@@ -4245,8 +4247,8 @@ mod tests {
             b"Ga=d,d=q,x=24,y=11,z=-1",
             KittyDeleteRequest {
                 selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
-                    x: 24,
-                    y: 11,
+                    x: 23,
+                    y: 10,
                     z: Some(-1),
                 }),
                 mode: KittyDeleteMode::PlacementsOnly,
@@ -4256,8 +4258,8 @@ mod tests {
             b"Ga=d,d=Q,x=24,y=11,z=-1",
             KittyDeleteRequest {
                 selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
-                    x: 24,
-                    y: 11,
+                    x: 23,
+                    y: 10,
                     z: Some(-1),
                 }),
                 mode: KittyDeleteMode::PlacementsAndBackingData,
@@ -4266,28 +4268,28 @@ mod tests {
         assert_delete_request(
             b"Ga=d,d=x,x=8",
             KittyDeleteRequest {
-                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Column { x: 8 }),
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Column { x: 7 }),
                 mode: KittyDeleteMode::PlacementsOnly,
             },
         );
         assert_delete_request(
             b"Ga=d,d=X,x=8",
             KittyDeleteRequest {
-                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Column { x: 8 }),
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Column { x: 7 }),
                 mode: KittyDeleteMode::PlacementsAndBackingData,
             },
         );
         assert_delete_request(
             b"Ga=d,d=y,y=11",
             KittyDeleteRequest {
-                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Row { y: 11 }),
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Row { y: 10 }),
                 mode: KittyDeleteMode::PlacementsOnly,
             },
         );
         assert_delete_request(
             b"Ga=d,d=Y,y=11",
             KittyDeleteRequest {
-                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Row { y: 11 }),
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Row { y: 10 }),
                 mode: KittyDeleteMode::PlacementsAndBackingData,
             },
         );
@@ -4305,6 +4307,24 @@ mod tests {
                 mode: KittyDeleteMode::PlacementsAndBackingData,
             },
         );
+    }
+
+    #[test]
+    fn kitty_delete_request_converts_protocol_origin_to_zero_based_geometry_selector() {
+        assert_delete_request(
+            b"Ga=d,d=p,x=1,y=1",
+            KittyDeleteRequest {
+                selector: KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell {
+                    x: 0,
+                    y: 0,
+                    z: None,
+                }),
+                mode: KittyDeleteMode::PlacementsOnly,
+            },
+        );
+        assert_eq!(kitty_delete_request(b"Ga=d,d=p,x=0,y=1"), None);
+        assert_eq!(kitty_delete_request(b"Ga=d,d=x,x=0"), None);
+        assert_eq!(kitty_delete_request(b"Ga=d,d=y,y=0"), None);
     }
 
     #[test]

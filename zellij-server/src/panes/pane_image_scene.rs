@@ -434,12 +434,6 @@ impl PlacementRect {
     }
 }
 
-fn one_indexed_protocol_cell_to_zero_based(value: u32) -> Option<usize> {
-    value
-        .checked_sub(1)
-        .and_then(|value| usize::try_from(value).ok())
-}
-
 impl PaneImageScene {
     pub fn empty_clone(&self) -> Self {
         Self::new(self.kitty.kitty_asset_store())
@@ -1003,18 +997,20 @@ impl PaneImageScene {
                 rect.contains_cell(cursor.0, cursor.1)
             },
             KittyDeleteSelector::Geometry(KittyGeometrySelector::Cell { x, y, z }) => {
-                let column = one_indexed_protocol_cell_to_zero_based(x)?;
-                let row = one_indexed_protocol_cell_to_zero_based(y)?
+                let column = usize::try_from(x).ok()?;
+                let row = usize::try_from(y)
+                    .ok()?
                     .checked_add(scrollback_size_in_lines)?;
                 rect.contains_cell(column, row)
                     && z.map(|target_z| target_z == z_index).unwrap_or(true)
             },
             KittyDeleteSelector::Geometry(KittyGeometrySelector::Column { x }) => {
-                let column = one_indexed_protocol_cell_to_zero_based(x)?;
+                let column = usize::try_from(x).ok()?;
                 rect.intersects_column(column)
             },
             KittyDeleteSelector::Geometry(KittyGeometrySelector::Row { y }) => {
-                let row = one_indexed_protocol_cell_to_zero_based(y)?
+                let row = usize::try_from(y)
+                    .ok()?
                     .checked_add(scrollback_size_in_lines)?;
                 rect.intersects_row(row)
             },
