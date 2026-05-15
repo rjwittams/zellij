@@ -452,9 +452,15 @@ impl ImageOutput {
             .unwrap_or(&[KittyImageOutputTransport::Direct])
     }
 
-    fn client_can_use_regular_file_output(&self, client_id: ClientId) -> bool {
+    fn transport_supports_upload_ack_tracking(transport: KittyImageOutputTransport) -> bool {
+        matches!(transport, KittyImageOutputTransport::File)
+    }
+
+    fn client_can_track_upload_acks(&self, client_id: ClientId) -> bool {
         self.kitty_output_transports_for_client(client_id)
-            .contains(&KittyImageOutputTransport::File)
+            .iter()
+            .copied()
+            .any(Self::transport_supports_upload_ack_tracking)
     }
 
     fn explicit_wire_placement_id(chunk: &KittyImageChunk) -> super::PlacementId {
@@ -620,7 +626,7 @@ impl ImageOutput {
                     return vte_output;
                 }
                 vte_output.push_str("\u{1b}[s");
-                let watermark_upload_count = self.kitty_file_upload_count_for_diff(
+                let watermark_upload_count = self.kitty_ack_tracked_upload_count_for_diff(
                     client_id,
                     acknowledgement_policy,
                     asset_ops,
@@ -817,13 +823,13 @@ impl ImageOutput {
             .unwrap_or_default()
     }
 
-    fn kitty_file_upload_count_for_diff(
+    fn kitty_ack_tracked_upload_count_for_diff(
         &self,
         client_id: ClientId,
         acknowledgement_policy: KittyUploadAcknowledgementPolicy,
         asset_ops: &[KittyAssetOp],
     ) -> usize {
-        if !self.client_can_use_regular_file_output(client_id)
+        if !self.client_can_track_upload_acks(client_id)
             || acknowledgement_policy != KittyUploadAcknowledgementPolicy::Watermark
         {
             return 0;
@@ -842,14 +848,14 @@ impl ImageOutput {
             .count()
     }
 
-    fn kitty_file_upload_count_for_full_reset(
+    fn kitty_ack_tracked_upload_count_for_full_reset(
         &self,
         client_id: ClientId,
         acknowledgement_policy: KittyUploadAcknowledgementPolicy,
         chunks: &[KittyImageChunk],
         renders: &[KittyPlaceholderRender],
     ) -> usize {
-        if !self.client_can_use_regular_file_output(client_id)
+        if !self.client_can_track_upload_acks(client_id)
             || acknowledgement_policy != KittyUploadAcknowledgementPolicy::Watermark
         {
             return 0;
@@ -880,7 +886,7 @@ impl ImageOutput {
         raw_vte_output.push_str("\u{1b}[s");
 
         let acknowledgement_policy = self.kitty_upload_acknowledgement_policy(client_id);
-        let watermark_upload_count = self.kitty_file_upload_count_for_full_reset(
+        let watermark_upload_count = self.kitty_ack_tracked_upload_count_for_full_reset(
             client_id,
             acknowledgement_policy,
             chunks,
