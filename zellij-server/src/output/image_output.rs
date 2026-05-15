@@ -59,6 +59,17 @@ impl KittyUploadAcknowledgement {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct KittyUploadSerializationPolicy {
+    acknowledgement: KittyUploadAcknowledgement,
+}
+
+impl KittyUploadSerializationPolicy {
+    fn new(acknowledgement: KittyUploadAcknowledgement) -> Self {
+        Self { acknowledgement }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 struct CurrentImageState {
     sixel_chunks: Vec<SixelImageChunk>,
@@ -637,10 +648,12 @@ impl ImageOutput {
                                 *image_id,
                                 *generation,
                                 &mut asset.data,
-                                KittyUploadAcknowledgement::for_upload(
-                                    acknowledgement_policy,
-                                    upload_index,
-                                    watermark_upload_count,
+                                KittyUploadSerializationPolicy::new(
+                                    KittyUploadAcknowledgement::for_upload(
+                                        acknowledgement_policy,
+                                        upload_index,
+                                        watermark_upload_count,
+                                    ),
                                 ),
                             ));
                         },
@@ -680,7 +693,7 @@ impl ImageOutput {
         image_id: u32,
         generation: u64,
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
-        acknowledgement: KittyUploadAcknowledgement,
+        upload_policy: KittyUploadSerializationPolicy,
     ) -> String {
         for transport in kitty_output_transports {
             match transport {
@@ -691,7 +704,7 @@ impl ImageOutput {
                         image_id,
                         generation,
                         asset_data,
-                        acknowledgement,
+                        upload_policy,
                     ) {
                         return serialized;
                     }
@@ -703,6 +716,7 @@ impl ImageOutput {
                         image_id,
                         generation,
                         asset_data,
+                        upload_policy,
                     ) {
                         return serialized;
                     }
@@ -714,6 +728,7 @@ impl ImageOutput {
                         image_id,
                         generation,
                         asset_data,
+                        upload_policy,
                     ) {
                         return serialized;
                     }
@@ -730,14 +745,14 @@ impl ImageOutput {
         image_id: u32,
         generation: u64,
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
-        acknowledgement: KittyUploadAcknowledgement,
+        upload_policy: KittyUploadSerializationPolicy,
     ) -> Option<String> {
         {
             let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
             if let Ok(path) = kitty_output_media_cache
                 .ensure_regular_file_for_asset(image_id, generation, asset_data)
             {
-                let quiet = match acknowledgement {
+                let quiet = match upload_policy.acknowledgement {
                     KittyUploadAcknowledgement::None => 2,
                     KittyUploadAcknowledgement::TrackWithoutRequesting => {
                         kitty_output_media_cache
@@ -764,6 +779,7 @@ impl ImageOutput {
         image_id: u32,
         generation: u64,
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
+        _upload_policy: KittyUploadSerializationPolicy,
     ) -> Option<String> {
         let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
         let path = kitty_output_media_cache
@@ -780,6 +796,7 @@ impl ImageOutput {
         image_id: u32,
         generation: u64,
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
+        _upload_policy: KittyUploadSerializationPolicy,
     ) -> Option<String> {
         let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
         let name = kitty_output_media_cache
@@ -890,11 +907,11 @@ impl ImageOutput {
                     image_id,
                     asset.generation,
                     &mut asset.data,
-                    KittyUploadAcknowledgement::for_upload(
+                    KittyUploadSerializationPolicy::new(KittyUploadAcknowledgement::for_upload(
                         acknowledgement_policy,
                         upload_index,
                         watermark_upload_count,
-                    ),
+                    )),
                 ));
             }
         }
