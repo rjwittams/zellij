@@ -1,5 +1,5 @@
 use base64;
-use miniz_oxide::inflate::decompress_to_vec_zlib;
+use miniz_oxide::inflate::decompress_to_vec_zlib_with_limit;
 use zellij_utils::pane_size::SizeInPixels;
 
 use crate::output::{
@@ -294,7 +294,7 @@ impl KittyMediaSource {
                     ),
                     KittyByteRange {
                         offset,
-                        size: size.or(apc.raw_payload_size()),
+                        size: size.or(apc.inferred_external_payload_size()),
                     },
                 )))
             },
@@ -307,7 +307,7 @@ impl KittyMediaSource {
                     ),
                     KittyByteRange {
                         offset,
-                        size: size.or(apc.raw_payload_size()),
+                        size: size.or(apc.inferred_external_payload_size()),
                     },
                 )))
             },
@@ -320,7 +320,7 @@ impl KittyMediaSource {
                     ),
                     KittyByteRange {
                         offset,
-                        size: size.or(apc.raw_payload_size()),
+                        size: size.or(apc.inferred_external_payload_size()),
                     },
                 )))
             },
@@ -1625,13 +1625,77 @@ impl<'a> KittyApc<'a> {
             .and_then(|pixel_count| pixel_count.checked_mul(bytes_per_pixel))
     }
 
+    fn inferred_external_payload_size(&self) -> Option<usize> {
+        if self.compression.is_none() {
+            self.raw_payload_size()
+        } else {
+            None
+        }
+    }
+
+    fn external_payload_input_limit(&self) -> Option<usize> {
+        let image_format = parse_kitty_image_format(self.format)?;
+        let compression = parse_kitty_transport_compression(self.compression)?;
+        match image_format {
+            KittyImageFormat::Png => Some(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES),
+            KittyImageFormat::Rgb => {
+                let Some((width, height)) = self.parsed_dimensions() else {
+                    return Some(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES);
+                };
+                raw_payload_input_limit(width, height, 3, compression).ok()
+            },
+            KittyImageFormat::Rgba => {
+                let Some((width, height)) = self.parsed_dimensions() else {
+                    return Some(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES);
+                };
+                raw_payload_input_limit(width, height, 4, compression).ok()
+            },
+        }
+    }
+
+    fn decompressed_payload_limit(&self) -> Option<usize> {
+        match parse_kitty_image_format(self.format)? {
+            KittyImageFormat::Png => Some(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES),
+            KittyImageFormat::Rgb => self
+                .parsed_dimensions()
+                .and_then(|(width, height)| expected_raw_payload_size(width, height, 3).ok())
+                .or(Some(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES)),
+            KittyImageFormat::Rgba => self
+                .parsed_dimensions()
+                .and_then(|(width, height)| expected_raw_payload_size(width, height, 4).ok())
+                .or(Some(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES)),
+        }
+    }
+
+    fn parsed_dimensions(&self) -> Option<(u32, u32)> {
+        Some((
+            self.width?.parse::<u32>().ok()?,
+            self.height?.parse::<u32>().ok()?,
+        ))
+    }
+
+    fn external_payload_too_large_message(&self) -> Option<String> {
+        let transmission_medium = parse_kitty_transmission_medium(self.medium)?;
+        if transmission_medium == KittyTransmissionMedium::Direct {
+            return None;
+        }
+        let media = KittyMediaSource::from_apc(self, transmission_medium)?.external_media()?;
+        let payload_len = media.payload_len()?;
+        let limit = self.external_payload_input_limit()?;
+        if payload_len > limit {
+            Some(kitty_payload_too_large_message())
+        } else {
+            None
+        }
+    }
+
     fn read_payload(&self) -> Option<Vec<u8>> {
         read_kitty_transmission_payload(
             self.payload,
             self.medium,
             self.size,
             self.offset,
-            self.raw_payload_size(),
+            self.inferred_external_payload_size(),
         )
     }
 
@@ -1675,11 +1739,35 @@ impl<'a> KittyApc<'a> {
                 image_number,
                 message: "EINVAL:Unsupported transmission medium".to_string(),
             }
+        } else if parse_kitty_image_format(self.format).is_none() {
+            KittyQueryResponse::Error {
+                image_id,
+                placement_id,
+                image_number,
+                message: "EINVAL:Invalid or unsupported image format".to_string(),
+            }
+        } else if parse_kitty_transport_compression(self.compression).is_none() {
+            KittyQueryResponse::Error {
+                image_id,
+                placement_id,
+                image_number,
+                message: "EINVAL:Invalid image payload encoding".to_string(),
+            }
+        } else if let Some(message) = self.external_payload_too_large_message() {
+            KittyQueryResponse::Error {
+                image_id,
+                placement_id,
+                image_number,
+                message,
+            }
         } else {
-            let payload = match self
-                .read_payload()
-                .and_then(|payload| apply_kitty_transport_compression(payload, self.compression))
-            {
+            let payload = match self.read_payload().and_then(|payload| {
+                apply_kitty_transport_compression(
+                    payload,
+                    self.compression,
+                    self.decompressed_payload_limit(),
+                )
+            }) {
                 Some(payload) => payload,
                 None => {
                     let response = KittyQueryResponse::Error {
@@ -2019,6 +2107,21 @@ impl PendingKittyTransmit {
         }
     }
 
+    fn validate_external_payload_size(&self) -> Result<(), String> {
+        let KittyMediaSource::External(media) = &self.media_source else {
+            return Ok(());
+        };
+        let limit = self.direct_payload_limit()?;
+        if media
+            .payload_len()
+            .is_some_and(|payload_len| payload_len > limit)
+        {
+            Err(kitty_payload_too_large_message())
+        } else {
+            Ok(())
+        }
+    }
+
     fn direct_payload_limit(&self) -> Result<usize, String> {
         match self.image_format {
             KittyImageFormat::Png => Ok(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES),
@@ -2028,18 +2131,19 @@ impl PendingKittyTransmit {
     }
 
     fn raw_direct_payload_limit(&self, bytes_per_pixel: usize) -> Result<usize, String> {
-        let expected_len =
-            expected_nonzero_raw_payload_size(self.width, self.height, bytes_per_pixel)?;
-        if self.compression.is_some() {
-            Ok(expected_len
-                .saturating_add(KITTY_COMPRESSED_RAW_DIRECT_TRANSMIT_PADDING_BYTES)
-                .min(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES))
-        } else {
-            Ok(expected_len)
+        raw_payload_input_limit(self.width, self.height, bytes_per_pixel, self.compression)
+    }
+
+    fn decompressed_payload_limit(&self) -> Result<usize, String> {
+        match self.image_format {
+            KittyImageFormat::Png => Ok(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES),
+            KittyImageFormat::Rgb => expected_nonzero_raw_payload_size(self.width, self.height, 3),
+            KittyImageFormat::Rgba => expected_nonzero_raw_payload_size(self.width, self.height, 4),
         }
     }
 
     fn into_asset_data(self) -> Result<KittyAssetData, String> {
+        self.validate_external_payload_size()?;
         if self.compression.is_none() {
             let image_format = self.image_format;
             if matches!(image_format, KittyImageFormat::Rgb | KittyImageFormat::Rgba) {
@@ -2084,8 +2188,12 @@ impl PendingKittyTransmit {
     fn into_image_data(self) -> Result<KittyImageData, String> {
         let payload = match self.compression {
             Some(KittyTransportCompression::Zlib) => {
-                decompress_to_vec_zlib(&self.media_source.into_payload()?)
-                    .map_err(|_| "EINVAL:Invalid image payload encoding".to_string())?
+                let decompressed_payload_limit = self.decompressed_payload_limit()?;
+                decompress_to_vec_zlib_with_limit(
+                    &self.media_source.into_payload()?,
+                    decompressed_payload_limit,
+                )
+                .map_err(|_| "EINVAL:Invalid image payload encoding".to_string())?
             },
             None => self.media_source.into_payload()?,
         };
@@ -2138,6 +2246,22 @@ fn validate_raw_payload_size(
     }
 }
 
+fn raw_payload_input_limit(
+    width: u32,
+    height: u32,
+    bytes_per_pixel: usize,
+    compression: Option<KittyTransportCompression>,
+) -> Result<usize, String> {
+    let expected_len = expected_nonzero_raw_payload_size(width, height, bytes_per_pixel)?;
+    if compression.is_some() {
+        Ok(expected_len
+            .saturating_add(KITTY_COMPRESSED_RAW_DIRECT_TRANSMIT_PADDING_BYTES)
+            .min(KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES))
+    } else {
+        Ok(expected_len)
+    }
+}
+
 fn expected_nonzero_raw_payload_size(
     width: u32,
     height: u32,
@@ -2179,9 +2303,10 @@ fn kitty_image_dimensions(image_data: &KittyImageData) -> (u32, u32) {
 fn apply_kitty_transport_compression(
     payload: Vec<u8>,
     compression: Option<&str>,
+    decompressed_payload_limit: Option<usize>,
 ) -> Option<Vec<u8>> {
     match compression {
-        Some("z") => decompress_to_vec_zlib(&payload).ok(),
+        Some("z") => decompress_to_vec_zlib_with_limit(&payload, decompressed_payload_limit?).ok(),
         Some(_) => None,
         None => Some(payload),
     }
@@ -2198,6 +2323,15 @@ fn parse_kitty_transmission_medium(medium: Option<&str>) -> Option<KittyTransmis
         Some("s") => Some(KittyTransmissionMedium::SharedMemory),
         Some("d") | None => Some(KittyTransmissionMedium::Direct),
         Some(_) => None,
+    }
+}
+
+fn parse_kitty_image_format(format: Option<&str>) -> Option<KittyImageFormat> {
+    match format.unwrap_or("32") {
+        "100" => Some(KittyImageFormat::Png),
+        "24" => Some(KittyImageFormat::Rgb),
+        "32" => Some(KittyImageFormat::Rgba),
+        _ => None,
     }
 }
 
@@ -2479,12 +2613,7 @@ impl ParsedKittyCommand {
             match action {
                 "T" | "t" => {
                     let media_source = KittyMediaSource::from_apc(apc, transmission_medium)?;
-                    let image_format = match apc.format.unwrap_or("32") {
-                        "100" => KittyImageFormat::Png,
-                        "24" => KittyImageFormat::Rgb,
-                        "32" => KittyImageFormat::Rgba,
-                        _ => return None,
-                    };
+                    let image_format = parse_kitty_image_format(apc.format)?;
                     let compression = parse_kitty_transport_compression(apc.compression)?;
                     let protocol_image_id = apc.parsed_image_id();
                     let image_number = apc.image_number();
@@ -2774,6 +2903,26 @@ mod tests {
             std::process::id()
         ));
         std::fs::write(&path, bytes).expect("fixture file should be writable");
+        path
+    }
+
+    fn write_sparse_kitty_png_media_fixture(name: &str, len: u64) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "zellij-kitty-file-media-{name}-{}-{unique}.png",
+            std::process::id()
+        ));
+        let mut png_header = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+        png_header.extend_from_slice(&2u32.to_be_bytes());
+        png_header.extend_from_slice(&2u32.to_be_bytes());
+        let mut file = std::fs::File::create(&path).expect("fixture file should be writable");
+        use std::io::Write;
+        file.write_all(&png_header)
+            .expect("fixture header should be writable");
+        file.set_len(len).expect("fixture file should be sizable");
         path
     }
 
@@ -3126,6 +3275,95 @@ mod tests {
         );
         std::fs::remove_file(&path).ok();
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 623, &payload);
+    }
+
+    #[test]
+    fn kitty_regular_file_png_upload_without_size_rejects_oversized_file() {
+        let path = write_sparse_kitty_png_media_fixture(
+            "oversized-png",
+            (KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES + 1) as u64,
+        );
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_file_media_transmit_apc("f", 624, 100, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("EFBIG:Too much data"),
+            "oversized regular-file PNG upload should fail before materialization, got {reply:?}"
+        );
+        std::fs::remove_file(&path).ok();
+        assert!(
+            !kitty_state
+                .protocol_image_id_to_internal_id
+                .contains_key(&624),
+            "oversized regular-file PNG upload should not create an asset"
+        );
+    }
+
+    #[test]
+    fn kitty_regular_file_png_query_without_size_rejects_oversized_file() {
+        let path = write_sparse_kitty_png_media_fixture(
+            "oversized-png-query",
+            (KITTY_MAX_PENDING_DIRECT_TRANSMIT_BYTES + 1) as u64,
+        );
+        let query_apc = kitty_file_media_query_apc("f", 625, 100, &path, None, None);
+        let query = KittyApc::parse(&query_apc).expect("query APC should parse");
+
+        let reply = query.query_response().unwrap().to_apc_response();
+
+        assert!(
+            reply.contains("EFBIG:Too much data"),
+            "oversized regular-file PNG query should fail before materialization, got {reply:?}"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn kitty_regular_file_compressed_raw_upload_without_size_reads_full_compressed_payload() {
+        let payload = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        let compressed = miniz_oxide::deflate::compress_to_vec_zlib(&payload, 0);
+        assert!(
+            compressed.len() > payload.len(),
+            "test payload should catch truncation to the decompressed raw byte count"
+        );
+        let path = write_kitty_file_media_fixture("compressed-raw", &compressed);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+        let apc = format!(
+            "Gq=0,a=t,t=f,o=z,f=32,s=2,v=2,i=626;{}",
+            base64::encode(path.to_string_lossy().as_bytes())
+        )
+        .into_bytes();
+
+        let reply = kitty_state.handle_apc(
+            &apc,
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "compressed regular-file raw upload should read the whole compressed object when S is omitted, got {reply:?}"
+        );
+        std::fs::remove_file(&path).ok();
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 626, &payload);
     }
 
     #[test]
