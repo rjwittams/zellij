@@ -53,6 +53,30 @@ fn test_shared_memory_exists(name: &str) -> bool {
     }
 }
 
+#[cfg(unix)]
+fn create_test_shared_memory(name: &str) {
+    let c_name = CString::new(name).expect("test shm name should not contain nul");
+    let fd = unsafe {
+        libc::shm_open(
+            c_name.as_ptr(),
+            libc::O_CREAT | libc::O_EXCL | libc::O_RDWR,
+            0o600,
+        )
+    };
+    assert!(fd >= 0, "should create test shared memory object {name}");
+    unsafe {
+        libc::close(fd);
+    }
+}
+
+#[cfg(unix)]
+fn unlink_test_shared_memory(name: &str) {
+    let c_name = CString::new(name).expect("test shm name should not contain nul");
+    unsafe {
+        libc::shm_unlink(c_name.as_ptr());
+    }
+}
+
 /// Helper to create a simple Output instance for testing
 fn create_test_output() -> Output {
     let (output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
@@ -1905,6 +1929,33 @@ fn test_output_media_cache_reaps_stale_shared_memory_objects() {
         !test_shared_memory_exists(&name),
         "stale shared-memory output objects should be unlinked by retention"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_output_media_cache_retries_shared_memory_name_collisions() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let mut asset_data = KittyAssetData::Image(KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    });
+
+    let colliding_name =
+        super::super::kitty_output_media::next_shared_memory_output_name_for_tests();
+    create_test_shared_memory(&colliding_name);
+    let name = media_cache
+        .create_shared_memory_for_asset(1, 1, 1, &mut asset_data)
+        .expect("should retry after shared-memory name collision");
+
+    assert_ne!(name, colliding_name);
+    assert!(test_shared_memory_exists(&colliding_name));
+    assert!(test_shared_memory_exists(&name));
+
+    unlink_test_shared_memory(&colliding_name);
+    unlink_test_shared_memory(&name);
 }
 
 #[cfg(unix)]

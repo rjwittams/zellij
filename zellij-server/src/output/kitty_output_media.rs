@@ -11,6 +11,7 @@ use std::{ffi::CString, ptr};
 use zellij_utils::consts::ZELLIJ_SOCK_DIR;
 
 const RECENTLY_REFERENCED_RENDER_GENERATIONS: u64 = 240;
+const SHARED_MEMORY_OUTPUT_CREATE_ATTEMPTS: usize = 16;
 static SHARED_MEMORY_OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -182,9 +183,7 @@ impl KittyOutputMediaCache {
         let payload = asset_data.materialized_image_payload().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "invalid kitty image data")
         })?;
-        let sequence = SHARED_MEMORY_OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let name = format!("/zk{:x}{:x}", std::process::id(), sequence);
-        write_shared_memory_payload(&name, payload.bytes)?;
+        let name = write_shared_memory_payload(payload.bytes)?;
         self.shared_memory_objects
             .push_back(TrackedSharedMemoryOutput {
                 client_id,
@@ -388,7 +387,40 @@ impl KittyOutputMediaCache {
 }
 
 #[cfg(unix)]
-fn write_shared_memory_payload(name: &str, payload: &[u8]) -> io::Result<()> {
+fn next_shared_memory_output_name() -> String {
+    shared_memory_output_name_for_sequence(
+        SHARED_MEMORY_OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+    )
+}
+
+#[cfg(unix)]
+fn shared_memory_output_name_for_sequence(sequence: u64) -> String {
+    format!("/zk{:x}{:x}", std::process::id(), sequence)
+}
+
+#[cfg(all(test, unix))]
+pub(crate) fn next_shared_memory_output_name_for_tests() -> String {
+    next_shared_memory_output_name()
+}
+
+#[cfg(unix)]
+fn write_shared_memory_payload(payload: &[u8]) -> io::Result<String> {
+    for _ in 0..SHARED_MEMORY_OUTPUT_CREATE_ATTEMPTS {
+        let name = next_shared_memory_output_name();
+        match create_shared_memory_payload(&name, payload) {
+            Ok(()) => return Ok(name),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to allocate unique kitty shared-memory output name",
+    ))
+}
+
+#[cfg(unix)]
+fn create_shared_memory_payload(name: &str, payload: &[u8]) -> io::Result<()> {
     let c_name = CString::new(name)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid shared memory name"))?;
     let fd = unsafe {
@@ -444,7 +476,7 @@ fn write_shared_memory_payload_to_fd(fd: libc::c_int, payload: &[u8]) -> io::Res
 }
 
 #[cfg(not(unix))]
-fn write_shared_memory_payload(_name: &str, _payload: &[u8]) -> io::Result<()> {
+fn write_shared_memory_payload(_payload: &[u8]) -> io::Result<String> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "shared memory kitty output is unsupported on this platform",
