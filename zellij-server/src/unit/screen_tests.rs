@@ -5932,10 +5932,10 @@ fn screen_watermark_lifetime_keeps_pending_output_media_until_watermark_response
         .unwrap();
     media_cache
         .borrow_mut()
-        .mark_pending_regular_file_read(1, 250, first_generation, false);
+        .mark_pending_upload(1, 250, first_generation, false);
     media_cache
         .borrow_mut()
-        .mark_pending_regular_file_read(1, 251, second_generation, true);
+        .mark_pending_upload(1, 251, second_generation, true);
     screen.regular_last_rendered_image_state.insert(
         1,
         Rc::new(LastRenderedImageState::new(RenderedImageState {
@@ -5952,7 +5952,7 @@ fn screen_watermark_lifetime_keeps_pending_output_media_until_watermark_response
     screen.reap_stale_kitty_output_media_files();
     assert!(
         first_media_path.exists() && second_media_path.exists(),
-        "watermark should keep unacknowledged file reads alive without a grace window"
+        "watermark should keep unacknowledged uploads alive without a grace window"
     );
 
     screen.handle_kitty_image_terminal_response(b"Gi=251;OK", 1);
@@ -5990,13 +5990,13 @@ fn screen_always_ack_lifetime_keeps_pending_output_media_until_terminal_response
         .unwrap();
     media_cache
         .borrow_mut()
-        .mark_pending_regular_file_read(1, 250, generation, true);
+        .mark_pending_upload(1, 250, generation, true);
 
     screen.kitty_asset_store.borrow_mut().remove_asset(250);
     screen.reap_stale_kitty_output_media_files();
     assert!(
         media_path.exists(),
-        "always-ack should keep unacknowledged file reads alive without a grace window"
+        "always-ack should keep unacknowledged uploads alive without a grace window"
     );
 
     screen.handle_kitty_image_terminal_response(b"Gi=250;OK", 1);

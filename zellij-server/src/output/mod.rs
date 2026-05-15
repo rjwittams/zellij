@@ -30,7 +30,7 @@ use zellij_utils::pane_size::SizeInPixels;
 
 use self::image_fragment::PreparedImageOutput;
 use self::image_output::ImageOutput;
-pub(crate) use self::image_output::KittyFileOutputAcknowledgementPolicy;
+pub(crate) use self::image_output::KittyUploadAcknowledgementPolicy;
 pub(crate) use self::kitty_host_placement_id::{placement_id_allocator, PlacementIdAllocator};
 pub use self::kitty_output_media::{KittyOutputMediaCache, KittyOutputMediaRetention};
 use crate::panes::pane_image_scene::KittyRenderBundle;
@@ -492,13 +492,13 @@ impl Output {
             .set_kitty_output_transports_for_client(client_id, transports);
     }
 
-    pub fn set_kitty_file_output_acknowledgement_policy_for_client(
+    pub fn set_kitty_upload_acknowledgement_policy_for_client(
         &mut self,
         client_id: ClientId,
-        policy: KittyFileOutputAcknowledgementPolicy,
+        policy: KittyUploadAcknowledgementPolicy,
     ) {
         self.image_output
-            .set_kitty_file_output_acknowledgement_policy_for_client(client_id, policy);
+            .set_kitty_upload_acknowledgement_policy_for_client(client_id, policy);
     }
 
     pub fn last_rendered_image_states(&self) -> HashMap<ClientId, Rc<LastRenderedImageState>> {

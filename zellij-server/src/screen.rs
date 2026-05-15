@@ -77,7 +77,7 @@ use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
 
 use crate::{
     output::{
-        KittyFileOutputAcknowledgementPolicy, KittyOutputMediaCache, KittyOutputMediaRetention,
+        KittyOutputMediaCache, KittyOutputMediaRetention, KittyUploadAcknowledgementPolicy,
         LastRenderedImageState, Output,
     },
     panes::kitty_asset_store::KittyAssetStore,
@@ -2550,21 +2550,17 @@ impl Screen {
         for (client_id, is_web_client) in self.connected_clients.borrow().iter() {
             if !*is_web_client && !self.watcher_clients.contains_key(client_id) {
                 let acknowledgement_policy = match self.kitty_image_file_lifetime {
-                    KittyImageFileLifetime::GraceWindow => {
-                        KittyFileOutputAcknowledgementPolicy::None
-                    },
+                    KittyImageFileLifetime::GraceWindow => KittyUploadAcknowledgementPolicy::None,
                     KittyImageFileLifetime::Watermark => {
-                        KittyFileOutputAcknowledgementPolicy::Watermark
+                        KittyUploadAcknowledgementPolicy::Watermark
                     },
-                    KittyImageFileLifetime::AlwaysAck => {
-                        KittyFileOutputAcknowledgementPolicy::Always
-                    },
+                    KittyImageFileLifetime::AlwaysAck => KittyUploadAcknowledgementPolicy::Always,
                 };
                 output.set_kitty_output_transports_for_client(
                     *client_id,
                     self.kitty_image_output_transports.clone(),
                 );
-                output.set_kitty_file_output_acknowledgement_policy_for_client(
+                output.set_kitty_upload_acknowledgement_policy_for_client(
                     *client_id,
                     acknowledgement_policy,
                 );
@@ -2633,7 +2629,7 @@ impl Screen {
         if let Some(image_id) = response.image_id {
             self.kitty_output_media_cache
                 .borrow_mut()
-                .acknowledge_regular_file_read(client_id, image_id);
+                .acknowledge_upload(client_id, image_id);
         }
         log::trace!(
             target: "zellij::kitty_images",

@@ -24,7 +24,7 @@ struct CachedKittyOutputFile {
 }
 
 #[derive(Clone, Debug)]
-struct PendingRegularFileRead {
+struct PendingKittyUpload {
     image_id: u32,
     generation: u64,
     requested_acknowledgement: bool,
@@ -51,7 +51,7 @@ pub struct KittyOutputMediaCache {
     files: HashMap<(u32, u64), CachedKittyOutputFile>,
     temporary_files: VecDeque<TrackedTemporaryOutputFile>,
     shared_memory_objects: VecDeque<TrackedSharedMemoryOutput>,
-    pending_regular_file_reads: HashMap<ClientId, VecDeque<PendingRegularFileRead>>,
+    pending_uploads: HashMap<ClientId, VecDeque<PendingKittyUpload>>,
 }
 
 impl KittyOutputMediaCache {
@@ -64,7 +64,7 @@ impl KittyOutputMediaCache {
             files: HashMap::new(),
             temporary_files: VecDeque::new(),
             shared_memory_objects: VecDeque::new(),
-            pending_regular_file_reads: HashMap::new(),
+            pending_uploads: HashMap::new(),
         }
     }
 
@@ -81,7 +81,7 @@ impl KittyOutputMediaCache {
             files: HashMap::new(),
             temporary_files: VecDeque::new(),
             shared_memory_objects: VecDeque::new(),
-            pending_regular_file_reads: HashMap::new(),
+            pending_uploads: HashMap::new(),
         }
     }
 
@@ -190,22 +190,22 @@ impl KittyOutputMediaCache {
         let recently_referenced_cutoff = self
             .render_generation
             .saturating_sub(RECENTLY_REFERENCED_RENDER_GENERATIONS);
-        let pending_regular_file_reads: HashSet<(u32, u64)> = self
-            .pending_regular_file_reads
+        let pending_uploads: HashSet<(u32, u64)> = self
+            .pending_uploads
             .values()
-            .flat_map(|pending_reads| {
-                pending_reads
+            .flat_map(|pending_client_uploads| {
+                pending_client_uploads
                     .iter()
-                    .map(|pending_read| (pending_read.image_id, pending_read.generation))
+                    .map(|pending_upload| (pending_upload.image_id, pending_upload.generation))
             })
             .collect();
         self.files.retain(|(image_id, generation), cached_file| {
             let was_recently_referenced = retention
                 == KittyOutputMediaRetention::KeepRecentlyReferenced
                 && cached_file.last_referenced_render_generation >= recently_referenced_cutoff;
-            let has_pending_read = pending_regular_file_reads.contains(&(*image_id, *generation));
+            let has_pending_upload = pending_uploads.contains(&(*image_id, *generation));
             let should_keep =
-                keep(*image_id, *generation) || was_recently_referenced || has_pending_read;
+                keep(*image_id, *generation) || was_recently_referenced || has_pending_upload;
             if !should_keep {
                 let _ = fs::remove_file(&cached_file.path);
             }
@@ -243,31 +243,34 @@ impl KittyOutputMediaCache {
         Ok(media_dir.clone())
     }
 
-    pub fn mark_pending_regular_file_read(
+    pub fn mark_pending_upload(
         &mut self,
         client_id: ClientId,
         image_id: u32,
         generation: u64,
         requested_acknowledgement: bool,
     ) {
-        self.pending_regular_file_reads
+        self.pending_uploads
             .entry(client_id)
             .or_default()
-            .push_back(PendingRegularFileRead {
+            .push_back(PendingKittyUpload {
                 image_id,
                 generation,
                 requested_acknowledgement,
             });
     }
 
-    pub fn acknowledge_regular_file_read(&mut self, client_id: ClientId, image_id: u32) {
-        match self.pending_regular_file_reads.entry(client_id) {
+    pub fn acknowledge_upload(&mut self, client_id: ClientId, image_id: u32) {
+        match self.pending_uploads.entry(client_id) {
             std::collections::hash_map::Entry::Occupied(mut entry) => {
-                let pending_reads = entry.get_mut();
-                if let Some(watermark_index) = pending_reads.iter().position(|pending_read| {
-                    pending_read.image_id == image_id && pending_read.requested_acknowledgement
-                }) {
-                    pending_reads.drain(..=watermark_index);
+                let pending_client_uploads = entry.get_mut();
+                if let Some(watermark_index) =
+                    pending_client_uploads.iter().position(|pending_upload| {
+                        pending_upload.image_id == image_id
+                            && pending_upload.requested_acknowledgement
+                    })
+                {
+                    pending_client_uploads.drain(..=watermark_index);
                 }
                 if entry.get().is_empty() {
                     entry.remove();
@@ -278,7 +281,7 @@ impl KittyOutputMediaCache {
     }
 
     pub fn remove_client(&mut self, client_id: ClientId) {
-        self.pending_regular_file_reads.remove(&client_id);
+        self.pending_uploads.remove(&client_id);
     }
 
     pub fn cleanup_tracked_one_shot_media(&mut self) {
@@ -307,7 +310,7 @@ impl KittyOutputMediaCache {
             self.files.clear();
             self.temporary_files.clear();
             self.shared_memory_objects.clear();
-            self.pending_regular_file_reads.clear();
+            self.pending_uploads.clear();
             return;
         }
 
@@ -323,7 +326,7 @@ impl KittyOutputMediaCache {
                         temporary_file.path = new_path.join(relative_path);
                     }
                 }
-                self.pending_regular_file_reads.clear();
+                self.pending_uploads.clear();
             },
             Err(error) => {
                 log::warn!(

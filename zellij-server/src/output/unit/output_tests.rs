@@ -4,8 +4,8 @@ use super::super::kitty_diff::{
     KittySceneState, PlannedKittyPlacement,
 };
 use super::super::{
-    CharacterChunk, FloatingPanesStack, KittyFileOutputAcknowledgementPolicy, KittyImageChunk,
-    KittyImageData, KittyOutputMediaCache, KittyOutputMediaRetention, KittyPlaceholderCellRender,
+    CharacterChunk, FloatingPanesStack, KittyImageChunk, KittyImageData, KittyOutputMediaCache,
+    KittyOutputMediaRetention, KittyPlaceholderCellRender, KittyUploadAcknowledgementPolicy,
     LastRenderedImageState, Output, OutputBuffer, PaneImageRenderOutput, PlacementId,
     RenderedImageState, SixelImageChunk,
 };
@@ -1570,9 +1570,9 @@ fn test_image_output_can_request_acknowledgements_for_file_transport() {
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
     output.set_kitty_file_output_enabled_for_client(1, true);
-    output.set_kitty_file_output_acknowledgement_policy_for_client(
+    output.set_kitty_upload_acknowledgement_policy_for_client(
         1,
-        KittyFileOutputAcknowledgementPolicy::Always,
+        KittyUploadAcknowledgementPolicy::Always,
     );
     output.add_pane_image_output_to_client(
         1,
@@ -1601,9 +1601,9 @@ fn test_image_output_watermark_requests_acknowledgement_only_for_last_file_uploa
     let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
     output.add_clients(&client_ids, link_handler, None);
     output.set_kitty_file_output_enabled_for_client(1, true);
-    output.set_kitty_file_output_acknowledgement_policy_for_client(
+    output.set_kitty_upload_acknowledgement_policy_for_client(
         1,
-        KittyFileOutputAcknowledgementPolicy::Watermark,
+        KittyUploadAcknowledgementPolicy::Watermark,
     );
     output.add_pane_image_output_to_client(
         1,
@@ -1756,7 +1756,7 @@ fn test_output_media_cache_cleans_tracked_one_shot_media() {
 }
 
 #[test]
-fn test_output_media_cache_explicit_retention_keeps_pending_file_reads_until_acknowledged() {
+fn test_output_media_cache_explicit_retention_keeps_pending_uploads_until_acknowledged() {
     let tempdir = tempfile::tempdir().unwrap();
     let media_dir = tempdir.path().join("session-media/test/image");
     let mut media_cache = KittyOutputMediaCache::new(media_dir);
@@ -1769,23 +1769,23 @@ fn test_output_media_cache_explicit_retention_keeps_pending_file_reads_until_ack
     let media_path = media_cache
         .ensure_regular_file(1, 1, &image_data)
         .expect("should write test media file");
-    media_cache.mark_pending_regular_file_read(1, 1, 1, true);
+    media_cache.mark_pending_upload(1, 1, 1, true);
     media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
     assert!(
         media_path.exists(),
-        "pending file reads should keep media alive without a grace window"
+        "pending uploads should keep media alive without a grace window"
     );
 
-    media_cache.acknowledge_regular_file_read(1, 1);
+    media_cache.acknowledge_upload(1, 1);
     media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
     assert!(
         !media_path.exists(),
-        "acknowledged file reads should no longer retain media"
+        "acknowledged uploads should no longer retain media"
     );
 }
 
 #[test]
-fn test_output_media_cache_watermark_acknowledgement_releases_earlier_pending_reads() {
+fn test_output_media_cache_watermark_acknowledgement_releases_earlier_pending_uploads() {
     let tempdir = tempfile::tempdir().unwrap();
     let media_dir = tempdir.path().join("session-media/test/image");
     let mut media_cache = KittyOutputMediaCache::new(media_dir);
@@ -1801,17 +1801,17 @@ fn test_output_media_cache_watermark_acknowledgement_releases_earlier_pending_re
     let second_path = media_cache
         .ensure_regular_file(2, 1, &image_data)
         .expect("should write second media file");
-    media_cache.mark_pending_regular_file_read(1, 1, 1, false);
-    media_cache.mark_pending_regular_file_read(1, 2, 1, true);
+    media_cache.mark_pending_upload(1, 1, 1, false);
+    media_cache.mark_pending_upload(1, 2, 1, true);
     media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
     assert!(first_path.exists());
     assert!(second_path.exists());
 
-    media_cache.acknowledge_regular_file_read(1, 2);
+    media_cache.acknowledge_upload(1, 2);
     media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
     assert!(
         !first_path.exists() && !second_path.exists(),
-        "watermark ack should release all pending file reads through the acknowledged upload"
+        "watermark ack should release all pending uploads through the acknowledged upload"
     );
 }
 
@@ -1844,9 +1844,9 @@ fn test_output_media_cache_rename_failure_keeps_old_files_tracked_for_cleanup() 
     std::fs::write(new_session_dir.join("conflict"), b"conflict")
         .expect("should make conflicting session dir non-empty");
 
-    media_cache.mark_pending_regular_file_read(1, 1, 1, true);
+    media_cache.mark_pending_upload(1, 1, 1, true);
     media_cache.rename_session(&old_session_name, &new_session_name);
-    media_cache.acknowledge_regular_file_read(1, 1);
+    media_cache.acknowledge_upload(1, 1);
     media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
 
     assert!(
@@ -1859,7 +1859,7 @@ fn test_output_media_cache_rename_failure_keeps_old_files_tracked_for_cleanup() 
 }
 
 #[test]
-fn test_output_media_cache_successful_rename_drops_stale_pending_file_reads() {
+fn test_output_media_cache_successful_rename_drops_stale_pending_uploads() {
     let old_session_name = format!(
         "zellij-test-kitty-rename-success-old-{}",
         std::process::id()
@@ -1880,7 +1880,7 @@ fn test_output_media_cache_successful_rename_drops_stale_pending_file_reads() {
     media_cache
         .ensure_regular_file(1, 1, &image_data)
         .expect("should write old test media file");
-    media_cache.mark_pending_regular_file_read(1, 1, 1, true);
+    media_cache.mark_pending_upload(1, 1, 1, true);
 
     media_cache.rename_session(&old_session_name, &new_session_name);
     let new_media_path = media_cache
@@ -1890,7 +1890,7 @@ fn test_output_media_cache_successful_rename_drops_stale_pending_file_reads() {
 
     assert!(
         !new_media_path.exists(),
-        "stale pending reads from before a successful rename should not pin new media files"
+        "stale pending uploads from before a successful rename should not pin new media files"
     );
 
     KittyOutputMediaCache::cleanup_session_media(&old_session_name);

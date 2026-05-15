@@ -26,7 +26,7 @@ use zellij_utils::input::options::KittyImageOutputTransport;
 use zellij_utils::pane_size::{Size, SizeInPixels};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum KittyFileOutputAcknowledgementPolicy {
+pub enum KittyUploadAcknowledgementPolicy {
     #[default]
     None,
     Always,
@@ -34,26 +34,26 @@ pub enum KittyFileOutputAcknowledgementPolicy {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum KittyFileOutputAcknowledgement {
+enum KittyUploadAcknowledgement {
     None,
     TrackWithoutRequesting,
     Request,
 }
 
-impl KittyFileOutputAcknowledgement {
+impl KittyUploadAcknowledgement {
     fn for_upload(
-        policy: KittyFileOutputAcknowledgementPolicy,
+        policy: KittyUploadAcknowledgementPolicy,
         upload_index: usize,
         upload_count: usize,
     ) -> Self {
         match policy {
-            KittyFileOutputAcknowledgementPolicy::None => KittyFileOutputAcknowledgement::None,
-            KittyFileOutputAcknowledgementPolicy::Always => KittyFileOutputAcknowledgement::Request,
-            KittyFileOutputAcknowledgementPolicy::Watermark if upload_index == upload_count => {
-                KittyFileOutputAcknowledgement::Request
+            KittyUploadAcknowledgementPolicy::None => KittyUploadAcknowledgement::None,
+            KittyUploadAcknowledgementPolicy::Always => KittyUploadAcknowledgement::Request,
+            KittyUploadAcknowledgementPolicy::Watermark if upload_index == upload_count => {
+                KittyUploadAcknowledgement::Request
             },
-            KittyFileOutputAcknowledgementPolicy::Watermark => {
-                KittyFileOutputAcknowledgement::TrackWithoutRequesting
+            KittyUploadAcknowledgementPolicy::Watermark => {
+                KittyUploadAcknowledgement::TrackWithoutRequesting
             },
         }
     }
@@ -266,8 +266,7 @@ impl ClientImageRenderState {
 pub(crate) struct ImageOutput {
     client_image_states: HashMap<ClientId, ClientImageRenderState>,
     client_kitty_output_transports: HashMap<ClientId, Vec<KittyImageOutputTransport>>,
-    kitty_file_output_acknowledgement_policies:
-        HashMap<ClientId, KittyFileOutputAcknowledgementPolicy>,
+    kitty_upload_acknowledgement_policies: HashMap<ClientId, KittyUploadAcknowledgementPolicy>,
     pub(crate) sixel_image_store: Rc<RefCell<SixelImageStore>>,
     pub(crate) kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
     kitty_output_media_cache: Rc<RefCell<KittyOutputMediaCache>>,
@@ -382,7 +381,7 @@ impl ImageOutput {
             );
         } else {
             self.client_kitty_output_transports.remove(&client_id);
-            self.kitty_file_output_acknowledgement_policies
+            self.kitty_upload_acknowledgement_policies
                 .remove(&client_id);
         }
     }
@@ -400,19 +399,19 @@ impl ImageOutput {
         }
     }
 
-    pub fn set_kitty_file_output_acknowledgement_policy_for_client(
+    pub fn set_kitty_upload_acknowledgement_policy_for_client(
         &mut self,
         client_id: ClientId,
-        policy: KittyFileOutputAcknowledgementPolicy,
+        policy: KittyUploadAcknowledgementPolicy,
     ) {
         match policy {
-            KittyFileOutputAcknowledgementPolicy::None => {
-                self.kitty_file_output_acknowledgement_policies
+            KittyUploadAcknowledgementPolicy::None => {
+                self.kitty_upload_acknowledgement_policies
                     .remove(&client_id);
             },
-            KittyFileOutputAcknowledgementPolicy::Always
-            | KittyFileOutputAcknowledgementPolicy::Watermark => {
-                self.kitty_file_output_acknowledgement_policies
+            KittyUploadAcknowledgementPolicy::Always
+            | KittyUploadAcknowledgementPolicy::Watermark => {
+                self.kitty_upload_acknowledgement_policies
                     .insert(client_id, policy);
             },
         }
@@ -422,11 +421,11 @@ impl ImageOutput {
         self.client_image_states.entry(client_id).or_default()
     }
 
-    fn kitty_file_output_acknowledgement_policy(
+    fn kitty_upload_acknowledgement_policy(
         &self,
         client_id: ClientId,
-    ) -> KittyFileOutputAcknowledgementPolicy {
-        self.kitty_file_output_acknowledgement_policies
+    ) -> KittyUploadAcknowledgementPolicy {
+        self.kitty_upload_acknowledgement_policies
             .get(&client_id)
             .copied()
             .unwrap_or_default()
@@ -595,7 +594,7 @@ impl ImageOutput {
     }
 
     fn serialize_kitty_plan(&mut self, client_id: ClientId, kitty_plan: &KittyScenePlan) -> String {
-        let acknowledgement_policy = self.kitty_file_output_acknowledgement_policy(client_id);
+        let acknowledgement_policy = self.kitty_upload_acknowledgement_policy(client_id);
         match kitty_plan {
             KittyScenePlan::Diff {
                 asset_ops,
@@ -638,7 +637,7 @@ impl ImageOutput {
                                 *image_id,
                                 *generation,
                                 &mut asset.data,
-                                KittyFileOutputAcknowledgement::for_upload(
+                                KittyUploadAcknowledgement::for_upload(
                                     acknowledgement_policy,
                                     upload_index,
                                     watermark_upload_count,
@@ -681,7 +680,7 @@ impl ImageOutput {
         image_id: u32,
         generation: u64,
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
-        acknowledgement: KittyFileOutputAcknowledgement,
+        acknowledgement: KittyUploadAcknowledgement,
     ) -> String {
         for transport in kitty_output_transports {
             match transport {
@@ -731,7 +730,7 @@ impl ImageOutput {
         image_id: u32,
         generation: u64,
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
-        acknowledgement: KittyFileOutputAcknowledgement,
+        acknowledgement: KittyUploadAcknowledgement,
     ) -> Option<String> {
         {
             let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
@@ -739,15 +738,15 @@ impl ImageOutput {
                 .ensure_regular_file_for_asset(image_id, generation, asset_data)
             {
                 let quiet = match acknowledgement {
-                    KittyFileOutputAcknowledgement::None => 2,
-                    KittyFileOutputAcknowledgement::TrackWithoutRequesting => {
+                    KittyUploadAcknowledgement::None => 2,
+                    KittyUploadAcknowledgement::TrackWithoutRequesting => {
                         kitty_output_media_cache
-                            .mark_pending_regular_file_read(client_id, image_id, generation, false);
+                            .mark_pending_upload(client_id, image_id, generation, false);
                         2
                     },
-                    KittyFileOutputAcknowledgement::Request => {
+                    KittyUploadAcknowledgement::Request => {
                         kitty_output_media_cache
-                            .mark_pending_regular_file_read(client_id, image_id, generation, true);
+                            .mark_pending_upload(client_id, image_id, generation, true);
                         0
                     },
                 };
@@ -804,11 +803,11 @@ impl ImageOutput {
     fn kitty_file_upload_count_for_diff(
         &self,
         client_id: ClientId,
-        acknowledgement_policy: KittyFileOutputAcknowledgementPolicy,
+        acknowledgement_policy: KittyUploadAcknowledgementPolicy,
         asset_ops: &[KittyAssetOp],
     ) -> usize {
         if !self.client_can_use_regular_file_output(client_id)
-            || acknowledgement_policy != KittyFileOutputAcknowledgementPolicy::Watermark
+            || acknowledgement_policy != KittyUploadAcknowledgementPolicy::Watermark
         {
             return 0;
         }
@@ -829,12 +828,12 @@ impl ImageOutput {
     fn kitty_file_upload_count_for_full_reset(
         &self,
         client_id: ClientId,
-        acknowledgement_policy: KittyFileOutputAcknowledgementPolicy,
+        acknowledgement_policy: KittyUploadAcknowledgementPolicy,
         chunks: &[KittyImageChunk],
         renders: &[KittyPlaceholderRender],
     ) -> usize {
         if !self.client_can_use_regular_file_output(client_id)
-            || acknowledgement_policy != KittyFileOutputAcknowledgementPolicy::Watermark
+            || acknowledgement_policy != KittyUploadAcknowledgementPolicy::Watermark
         {
             return 0;
         }
@@ -863,7 +862,7 @@ impl ImageOutput {
         let mut raw_vte_output = String::new();
         raw_vte_output.push_str("\u{1b}[s");
 
-        let acknowledgement_policy = self.kitty_file_output_acknowledgement_policy(client_id);
+        let acknowledgement_policy = self.kitty_upload_acknowledgement_policy(client_id);
         let watermark_upload_count = self.kitty_file_upload_count_for_full_reset(
             client_id,
             acknowledgement_policy,
@@ -891,7 +890,7 @@ impl ImageOutput {
                     image_id,
                     asset.generation,
                     &mut asset.data,
-                    KittyFileOutputAcknowledgement::for_upload(
+                    KittyUploadAcknowledgement::for_upload(
                         acknowledgement_policy,
                         upload_index,
                         watermark_upload_count,
