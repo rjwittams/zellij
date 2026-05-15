@@ -45,6 +45,7 @@ struct TrackedSharedMemoryOutput {
 #[derive(Clone, Debug, Default)]
 pub struct KittyOutputMediaCache {
     media_dir: Option<PathBuf>,
+    media_dir_initialized: bool,
     render_generation: u64,
     one_shot_media_sequence: u64,
     files: HashMap<(u32, u64), CachedKittyOutputFile>,
@@ -57,6 +58,7 @@ impl KittyOutputMediaCache {
     pub fn disabled() -> Self {
         Self {
             media_dir: None,
+            media_dir_initialized: false,
             render_generation: 0,
             one_shot_media_sequence: 0,
             files: HashMap::new(),
@@ -73,6 +75,7 @@ impl KittyOutputMediaCache {
     pub fn new(media_dir: PathBuf) -> Self {
         Self {
             media_dir: Some(media_dir),
+            media_dir_initialized: false,
             render_generation: 0,
             one_shot_media_sequence: 0,
             files: HashMap::new(),
@@ -105,11 +108,7 @@ impl KittyOutputMediaCache {
             }
         }
 
-        let media_dir = self.media_dir.as_ref().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "kitty output media disabled")
-        })?;
-        fs::create_dir_all(media_dir)?;
-        set_private_media_permissions(media_dir);
+        let media_dir = self.ensure_media_dir_ready()?;
 
         let path = media_dir.join(format!("i{}-g{}.kitty-image", image_id, generation));
         let write_result = (|| -> io::Result<()> {
@@ -138,11 +137,7 @@ impl KittyOutputMediaCache {
         generation: u64,
         asset_data: &mut KittyAssetData,
     ) -> io::Result<PathBuf> {
-        let media_dir = self.media_dir.as_ref().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "kitty output media disabled")
-        })?;
-        fs::create_dir_all(media_dir)?;
-        set_private_media_permissions(media_dir);
+        let media_dir = self.ensure_media_dir_ready()?;
 
         let sequence = self.one_shot_media_sequence;
         self.one_shot_media_sequence = self.one_shot_media_sequence.saturating_add(1);
@@ -173,13 +168,13 @@ impl KittyOutputMediaCache {
         _generation: u64,
         asset_data: &mut KittyAssetData,
     ) -> io::Result<String> {
-        let image_data = asset_data.image_data().ok_or_else(|| {
+        let payload = asset_data.materialized_image_payload().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "invalid kitty image data")
         })?;
         let sequence = self.one_shot_media_sequence;
         self.one_shot_media_sequence = self.one_shot_media_sequence.saturating_add(1);
         let name = format!("/zk{:x}{:x}", std::process::id(), sequence);
-        write_shared_memory_payload(&name, kitty_image_bytes(&image_data))?;
+        write_shared_memory_payload(&name, payload.bytes)?;
         self.shared_memory_objects
             .push_back(TrackedSharedMemoryOutput {
                 name: name.clone(),
@@ -232,6 +227,20 @@ impl KittyOutputMediaCache {
             }
             was_recently_referenced
         });
+    }
+
+    fn ensure_media_dir_ready(&mut self) -> io::Result<PathBuf> {
+        let media_dir = self.media_dir.as_ref().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "kitty output media disabled")
+        })?;
+        if self.media_dir_initialized && media_dir.exists() {
+            return Ok(media_dir.clone());
+        }
+
+        fs::create_dir_all(media_dir)?;
+        set_private_media_permissions(media_dir);
+        self.media_dir_initialized = true;
+        Ok(media_dir.clone())
     }
 
     pub fn mark_pending_regular_file_read(
@@ -294,6 +303,7 @@ impl KittyOutputMediaCache {
         let new_path = session_media_dir(new_session_name);
         if !old_path.exists() {
             self.media_dir = Some(session_image_media_dir(new_session_name));
+            self.media_dir_initialized = false;
             self.files.clear();
             self.temporary_files.clear();
             self.shared_memory_objects.clear();
@@ -325,6 +335,7 @@ impl KittyOutputMediaCache {
             },
         }
         self.media_dir = Some(session_image_media_dir(new_session_name));
+        self.media_dir_initialized = false;
     }
 
     pub fn cleanup_session_media(session_name: &str) {
@@ -423,22 +434,14 @@ fn session_image_media_dir(session_name: &str) -> PathBuf {
     session_media_dir(session_name).join("image")
 }
 
-fn kitty_image_bytes(image_data: &KittyImageData) -> &[u8] {
-    match image_data {
-        KittyImageData::Png { data, .. }
-        | KittyImageData::Rgb { data, .. }
-        | KittyImageData::Rgba { data, .. } => data,
-    }
-}
-
 fn write_kitty_asset_data(
     mut writer: impl Write,
     asset_data: &mut KittyAssetData,
 ) -> io::Result<()> {
-    let image_data = asset_data
-        .image_data()
+    let payload = asset_data
+        .materialized_image_payload()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid kitty image data"))?;
-    writer.write_all(kitty_image_bytes(&image_data))
+    writer.write_all(payload.bytes)
 }
 
 fn set_private_media_permissions(media_dir: &std::path::Path) {

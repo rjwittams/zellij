@@ -7,7 +7,7 @@ use crate::output::{
 };
 use crate::panes::kitty_asset_store::{
     KittyAssetData, KittyAssetFormat, KittyAssetStore, KittyByteRange, KittyExternalMedia,
-    KittyExternalMediaLocation,
+    KittyExternalMediaLocation, KittyImagePayload,
 };
 use crate::panes::kitty_placeholder::{
     kitty_diacritic_to_index, KITTY_ROWCOL_DIACRITICS, KITTY_UNICODE_PLACEHOLDER_CHAR,
@@ -1251,120 +1251,13 @@ impl KittyImageState {
             .and_then(|protocol_image_ids| protocol_image_ids.last().copied())
     }
 
-    pub fn serialize_chunks_with_asset_store(
-        chunks: &[KittyImageChunk],
-        kitty_asset_store: &mut KittyAssetStore,
-    ) -> String {
-        if chunks.is_empty() {
-            return String::new();
-        }
-        let mut raw_vte_output = String::new();
-        raw_vte_output.push_str("\u{1b}[s");
-
-        let mut transmitted_image_ids = std::collections::HashSet::new();
-        for chunk in chunks {
-            if transmitted_image_ids.insert(chunk.image_id) {
-                let Some(image_data) = kitty_asset_store.image_data(chunk.image_id) else {
-                    continue;
-                };
-                for transmit_command in serialize_transmit(chunk.image_id, &image_data) {
-                    raw_vte_output.push_str("\u{1b}_G");
-                    raw_vte_output.push_str(&transmit_command);
-                    raw_vte_output.push_str("\u{1b}\\");
-                }
-            }
-        }
-
-        for chunk in chunks {
-            let placement_id = match chunk.placement_id {
-                Some(PlacementId::Synthetic(value)) => value,
-                Some(PlacementId::Protocol(_)) | None => chunk.stable_render_id as u32,
-            };
-            raw_vte_output.push_str(&Self::serialize_explicit_placement(chunk, placement_id));
-        }
-        raw_vte_output.push_str("\u{1b}[u");
-        raw_vte_output
-    }
-
-    pub fn serialize_placeholder_renders_with_asset_store(
-        renders: &[KittyPlaceholderRender],
-        kitty_asset_store: &mut KittyAssetStore,
-    ) -> String {
-        if renders.is_empty() {
-            return String::new();
-        }
-        let mut raw_vte_output = String::new();
-        raw_vte_output.push_str("\u{1b}[s");
-
-        let mut transmitted_image_ids = std::collections::HashSet::new();
-        for render in renders {
-            if transmitted_image_ids.insert(render.image_id) {
-                let Some(image_data) = kitty_asset_store.image_data(render.image_id) else {
-                    continue;
-                };
-                for transmit_command in serialize_transmit(render.image_id, &image_data) {
-                    raw_vte_output.push_str("\u{1b}_G");
-                    raw_vte_output.push_str(&transmit_command);
-                    raw_vte_output.push_str("\u{1b}\\");
-                }
-            }
-        }
-
-        for render in renders {
-            let placement_id = render.stable_render_id as u32;
-            raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
-        }
-        raw_vte_output.push_str("\u{1b}[u");
-        raw_vte_output
-    }
-
-    pub fn serialize_full_scene_with_asset_store(
-        chunks: &[KittyImageChunk],
-        renders: &[KittyPlaceholderRender],
-        kitty_asset_store: &mut KittyAssetStore,
-    ) -> String {
-        if chunks.is_empty() && renders.is_empty() {
-            return String::new();
-        }
-        let mut raw_vte_output = String::new();
-        raw_vte_output.push_str("\u{1b}[s");
-
-        let mut transmitted_image_ids = std::collections::HashSet::new();
-        for image_id in chunks
-            .iter()
-            .map(|chunk| chunk.image_id)
-            .chain(renders.iter().map(|render| render.image_id))
-        {
-            if transmitted_image_ids.insert(image_id) {
-                let Some(image_data) = kitty_asset_store.image_data(image_id) else {
-                    continue;
-                };
-                for transmit_command in serialize_transmit(image_id, &image_data) {
-                    raw_vte_output.push_str("\u{1b}_G");
-                    raw_vte_output.push_str(&transmit_command);
-                    raw_vte_output.push_str("\u{1b}\\");
-                }
-            }
-        }
-
-        for chunk in chunks {
-            let placement_id = match chunk.placement_id {
-                Some(PlacementId::Synthetic(value)) => value,
-                Some(PlacementId::Protocol(_)) | None => chunk.stable_render_id as u32,
-            };
-            raw_vte_output.push_str(&Self::serialize_explicit_placement(chunk, placement_id));
-        }
-        for render in renders {
-            let placement_id = render.stable_render_id as u32;
-            raw_vte_output.push_str(&Self::serialize_placeholder_render(render, placement_id));
-        }
-        raw_vte_output.push_str("\u{1b}[u");
-        raw_vte_output
-    }
-
     pub fn serialize_image_data(image_id: u32, image_data: &KittyImageData) -> String {
+        Self::serialize_image_payload(image_id, KittyImagePayload::from(image_data))
+    }
+
+    pub fn serialize_image_payload(image_id: u32, payload: KittyImagePayload<'_>) -> String {
         let mut raw_vte_output = String::new();
-        for transmit_command in serialize_transmit(image_id, image_data) {
+        for transmit_command in serialize_transmit(image_id, payload) {
             raw_vte_output.push_str("\u{1b}_G");
             raw_vte_output.push_str(&transmit_command);
             raw_vte_output.push_str("\u{1b}\\");
@@ -2658,7 +2551,7 @@ fn parse_png_dimensions(png_data: &[u8]) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
-fn serialize_transmit(image_id: u32, image_data: &KittyImageData) -> Vec<String> {
+fn serialize_transmit(image_id: u32, payload: KittyImagePayload<'_>) -> Vec<String> {
     const KITTY_TRANSMIT_CHUNK_SIZE: usize = 3072;
 
     let mut parts = vec![
@@ -2666,33 +2559,22 @@ fn serialize_transmit(image_id: u32, image_data: &KittyImageData) -> Vec<String>
         format!("i={}", image_id),
         "q=2".to_string(),
     ];
-    let payload = match image_data {
-        KittyImageData::Png { data, .. } => {
+    match payload.format {
+        KittyAssetFormat::Png => {
             parts.push("f=100".to_string());
-            data
         },
-        KittyImageData::Rgb {
-            data,
-            width,
-            height,
-        } => {
+        KittyAssetFormat::Rgb => {
             parts.push("f=24".to_string());
-            parts.push(format!("s={}", width));
-            parts.push(format!("v={}", height));
-            data
+            parts.push(format!("s={}", payload.width));
+            parts.push(format!("v={}", payload.height));
         },
-        KittyImageData::Rgba {
-            data,
-            width,
-            height,
-        } => {
+        KittyAssetFormat::Rgba => {
             parts.push("f=32".to_string());
-            parts.push(format!("s={}", width));
-            parts.push(format!("v={}", height));
-            data
+            parts.push(format!("s={}", payload.width));
+            parts.push(format!("v={}", payload.height));
         },
     };
-    let payload = base64::encode(payload);
+    let payload = base64::encode(payload.bytes);
     let payload_parts: Vec<&str> = if payload.is_empty() {
         vec![""]
     } else {
@@ -4461,14 +4343,12 @@ mod tests {
             other => panic!("expected rgb image data, got {:?}", other),
         }
 
-        let serialized = serialize_transmit(
-            99,
-            &KittyImageData::Rgb {
-                data: vec![0x12, 0x34, 0x56],
-                width: 1,
-                height: 1,
-            },
-        );
+        let image_data = KittyImageData::Rgb {
+            data: vec![0x12, 0x34, 0x56],
+            width: 1,
+            height: 1,
+        };
+        let serialized = serialize_transmit(99, KittyImagePayload::from(&image_data));
         assert_eq!(serialized.len(), 1);
         assert!(serialized[0].contains("a=t"));
         assert!(serialized[0].contains("f=24"));

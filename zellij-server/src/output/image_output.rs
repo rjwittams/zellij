@@ -796,8 +796,8 @@ impl ImageOutput {
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
     ) -> String {
         asset_data
-            .image_data()
-            .map(|image_data| KittyImageState::serialize_image_data(image_id, &image_data))
+            .materialized_image_payload()
+            .map(|payload| KittyImageState::serialize_image_payload(image_id, payload))
             .unwrap_or_default()
     }
 

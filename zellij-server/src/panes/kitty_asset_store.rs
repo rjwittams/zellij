@@ -119,7 +119,80 @@ pub enum KittyAssetData {
     },
 }
 
+pub struct KittyImagePayload<'a> {
+    pub format: KittyAssetFormat,
+    pub width: u32,
+    pub height: u32,
+    pub bytes: &'a [u8],
+}
+
+impl<'a> From<&'a KittyImageData> for KittyImagePayload<'a> {
+    fn from(image_data: &'a KittyImageData) -> Self {
+        match image_data {
+            KittyImageData::Png {
+                data,
+                width,
+                height,
+            } => Self {
+                format: KittyAssetFormat::Png,
+                width: *width,
+                height: *height,
+                bytes: data,
+            },
+            KittyImageData::Rgb {
+                data,
+                width,
+                height,
+            } => Self {
+                format: KittyAssetFormat::Rgb,
+                width: *width,
+                height: *height,
+                bytes: data,
+            },
+            KittyImageData::Rgba {
+                data,
+                width,
+                height,
+            } => Self {
+                format: KittyAssetFormat::Rgba,
+                width: *width,
+                height: *height,
+                bytes: data,
+            },
+        }
+    }
+}
+
 impl KittyAssetData {
+    pub fn materialized_image_payload(&mut self) -> Option<KittyImagePayload<'_>> {
+        match self {
+            KittyAssetData::Image(image_data) => Some(KittyImagePayload::from(&*image_data)),
+            KittyAssetData::External {
+                media,
+                format,
+                width,
+                height,
+            } => {
+                let format = *format;
+                let width = *width;
+                let height = *height;
+                let payload = media.materialized_payload()?;
+                if let Some(bytes_per_pixel) = format.bytes_per_pixel() {
+                    let expected_len = expected_raw_payload_size(width, height, bytes_per_pixel)?;
+                    if payload.len() != expected_len {
+                        return None;
+                    }
+                }
+                Some(KittyImagePayload {
+                    format,
+                    width,
+                    height,
+                    bytes: payload,
+                })
+            },
+        }
+    }
+
     pub fn image_data(&mut self) -> Option<KittyImageData> {
         match self {
             KittyAssetData::Image(image_data) => Some(image_data.clone()),
@@ -572,6 +645,31 @@ mod tests {
             width,
             height,
         }
+    }
+
+    #[test]
+    fn materialized_image_payload_borrows_resident_image_bytes() {
+        let data = vec![1, 2, 3, 4];
+        let expected_ptr = data.as_ptr();
+        let mut asset_data = KittyAssetData::Image(KittyImageData::Rgba {
+            data,
+            width: 1,
+            height: 1,
+        });
+
+        let payload = asset_data
+            .materialized_image_payload()
+            .expect("resident image payload should be available");
+
+        assert_eq!(payload.format, KittyAssetFormat::Rgba);
+        assert_eq!(payload.width, 1);
+        assert_eq!(payload.height, 1);
+        assert_eq!(payload.bytes, &[1, 2, 3, 4]);
+        assert_eq!(
+            payload.bytes.as_ptr(),
+            expected_ptr,
+            "resident payload should borrow the stored bytes instead of cloning them"
+        );
     }
 
     #[test]
