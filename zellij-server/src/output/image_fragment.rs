@@ -54,6 +54,14 @@ fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
     }
 }
 
+fn scale_u32_extent(total: u32, kept: usize, original: usize) -> u32 {
+    if total == 0 || kept == 0 || original == 0 {
+        0
+    } else {
+        ((total as u64 * kept as u64).div_ceil(original as u64)) as u32
+    }
+}
+
 fn synthesize_split_fragment_placement_id(chunk: &KittyImageChunk) -> Option<PlacementId> {
     Some(
         placement_id_allocator()
@@ -112,7 +120,7 @@ fn clip_kitty_explicit_fragment(
         let kept_rows = intersection_top - chunk_top_edge;
         let chunk = KittyImageChunk {
             rows: kept_rows,
-            source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
+            source_height: scale_u32_extent(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
         uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(
@@ -126,7 +134,7 @@ fn clip_kitty_explicit_fragment(
             cell_y: intersection_bottom,
             rows: kept_rows,
             source_y: chunk.source_y + scale_u32(chunk.source_height, removed_rows, chunk.rows),
-            source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
+            source_height: scale_u32_extent(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
         uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(
@@ -146,8 +154,8 @@ fn clip_kitty_explicit_fragment(
                     intersection_top - chunk_top_edge,
                     chunk.rows,
                 ),
-            source_width: scale_u32(chunk.source_width, kept_cols, chunk.columns),
-            source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
+            source_width: scale_u32_extent(chunk.source_width, kept_cols, chunk.columns),
+            source_height: scale_u32_extent(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
         uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(
@@ -170,8 +178,8 @@ fn clip_kitty_explicit_fragment(
                     intersection_top - chunk_top_edge,
                     chunk.rows,
                 ),
-            source_width: scale_u32(chunk.source_width, kept_cols, chunk.columns),
-            source_height: scale_u32(chunk.source_height, kept_rows, chunk.rows),
+            source_width: scale_u32_extent(chunk.source_width, kept_cols, chunk.columns),
+            source_height: scale_u32_extent(chunk.source_height, kept_rows, chunk.rows),
             ..chunk.clone()
         };
         uncovered.push(ImageFragment::KittyExplicit(build_split_explicit_fragment(
@@ -373,6 +381,8 @@ pub(crate) fn visible_image_fragments(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zellij_utils::pane_size::Dimension;
+
     fn test_chunk() -> KittyImageChunk {
         KittyImageChunk {
             stable_render_id: 77,
@@ -471,6 +481,36 @@ mod tests {
         assert_ne!(
             left.placement_id, right.placement_id,
             "different split source regions should keep distinct fragment ids"
+        );
+    }
+
+    #[test]
+    fn split_explicit_fragment_keeps_nonzero_source_rectangle() {
+        let chunk = KittyImageChunk {
+            columns: 10,
+            rows: 10,
+            source_width: 1,
+            source_height: 1,
+            ..test_chunk()
+        };
+        let fragments = clip_kitty_explicit_fragment(
+            &PaneGeom {
+                x: 1,
+                y: 1,
+                cols: Dimension::fixed(9),
+                rows: Dimension::fixed(9),
+                ..Default::default()
+            },
+            &chunk,
+        );
+
+        assert!(
+            fragments.iter().any(|fragment| match fragment {
+                ImageFragment::KittyExplicit(fragment) =>
+                    fragment.source_width == 1 && fragment.source_height == 1,
+                _ => false,
+            }),
+            "nonzero split fragments must not serialize zero source extents: {fragments:?}"
         );
     }
 }

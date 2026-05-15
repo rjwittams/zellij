@@ -292,7 +292,10 @@ impl KittyMediaSource {
                     KittyExternalMediaLocation::RegularFile(
                         kitty_path_payload(&path_payload)?.to_path_buf(),
                     ),
-                    KittyByteRange { offset, size },
+                    KittyByteRange {
+                        offset,
+                        size: size.or(apc.raw_payload_size()),
+                    },
                 )))
             },
             KittyTransmissionMedium::TemporaryFile => {
@@ -302,7 +305,10 @@ impl KittyMediaSource {
                     KittyExternalMediaLocation::TemporaryFile(
                         kitty_path_payload(&path_payload)?.to_path_buf(),
                     ),
-                    KittyByteRange { offset, size },
+                    KittyByteRange {
+                        offset,
+                        size: size.or(apc.raw_payload_size()),
+                    },
                 )))
             },
             KittyTransmissionMedium::SharedMemory => {
@@ -2264,11 +2270,11 @@ fn read_kitty_transmission_payload(
         KittyTransmissionMedium::Direct => Some(payload),
         KittyTransmissionMedium::RegularFile => {
             let (size, offset) = parse_kitty_payload_byte_range(size, offset)?;
-            read_kitty_regular_file_payload(&payload, size, offset)
+            read_kitty_regular_file_payload(&payload, size.or(inferred_raw_payload_size), offset)
         },
         KittyTransmissionMedium::TemporaryFile => {
             let (size, offset) = parse_kitty_payload_byte_range(size, offset)?;
-            read_kitty_temporary_file_payload(&payload, size, offset)
+            read_kitty_temporary_file_payload(&payload, size.or(inferred_raw_payload_size), offset)
         },
         KittyTransmissionMedium::SharedMemory => {
             let (size, offset) = parse_kitty_payload_byte_range(size, offset)?;
@@ -3089,6 +3095,37 @@ mod tests {
         );
         std::fs::remove_file(&path).ok();
         assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 602, &payload);
+    }
+
+    #[test]
+    fn kitty_regular_file_raw_upload_ignores_stale_trailing_bytes_when_size_is_omitted() {
+        let payload = vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ];
+        let mut file_bytes = payload.clone();
+        file_bytes.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
+        let path = write_kitty_file_media_fixture("stale-trailing", &file_bytes);
+        let kitty_asset_store = Rc::new(RefCell::new(KittyAssetStore::default()));
+        let mut kitty_state = KittyImageState::new(kitty_asset_store.clone());
+
+        let reply = kitty_state.handle_apc(
+            &kitty_regular_file_transmit_apc(623, &path, None, None),
+            FlowAnchor::LogicalRow {
+                logical_row: 0,
+                column: 0,
+            },
+            0,
+            0,
+            None,
+        );
+
+        let reply = reply.reply.unwrap().to_apc_response();
+        assert!(
+            reply.contains("OK"),
+            "regular file raw upload should use the f/s/v byte count when S is omitted, got {reply:?}"
+        );
+        std::fs::remove_file(&path).ok();
+        assert_stored_rgba_payload(&kitty_state, &kitty_asset_store, 623, &payload);
     }
 
     #[test]

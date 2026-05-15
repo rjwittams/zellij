@@ -292,6 +292,14 @@ fn scale_u32(total: u32, kept: usize, original: usize) -> u32 {
     }
 }
 
+fn scale_u32_extent(total: u32, kept: usize, original: usize) -> u32 {
+    if total == 0 || kept == 0 || original == 0 {
+        0
+    } else {
+        ((total as u64 * kept as u64).div_ceil(original as u64)) as u32
+    }
+}
+
 fn apply_signed_offset(value: usize, offset: i32) -> usize {
     if offset >= 0 {
         value.saturating_add(offset as usize)
@@ -1110,13 +1118,16 @@ impl PaneImageScene {
             if projection.clipped_left_cols > 0 {
                 source_x += scale_u32(source_width, projection.clipped_left_cols, columns);
             }
-            source_width = scale_u32(source_width, projection.columns, columns);
+            source_width = scale_u32_extent(source_width, projection.columns, columns);
             columns = projection.columns;
             if projection.clipped_top_rows > 0 {
                 source_y += scale_u32(source_height, projection.clipped_top_rows, rows);
             }
-            source_height = scale_u32(source_height, projection.rows, rows);
+            source_height = scale_u32_extent(source_height, projection.rows, rows);
             rows = projection.rows;
+            if source_width == 0 || source_height == 0 {
+                continue;
+            }
             explicit_chunks.push(KittyImageChunk {
                 stable_render_id: placement.logical_placement_id.0,
                 image_id,
@@ -1257,10 +1268,11 @@ impl PaneImageScene {
             let source_y = base_source_y
                 + ((base_source_height as u64 * min_placeholder_row as u64) / total_rows as u64)
                     as u32;
-            let source_width =
-                ((base_source_width as u64 * visible_columns as u64) / total_columns as u64) as u32;
-            let source_height =
-                ((base_source_height as u64 * visible_rows as u64) / total_rows as u64) as u32;
+            let source_width = scale_u32_extent(base_source_width, visible_columns, total_columns);
+            let source_height = scale_u32_extent(base_source_height, visible_rows, total_rows);
+            if source_width == 0 || source_height == 0 {
+                continue;
+            }
             let cells: Vec<KittyPlaceholderCellRender> = resolved_cells
                 .into_iter()
                 .map(|(logical_row, column, placeholder_row, placeholder_col)| {

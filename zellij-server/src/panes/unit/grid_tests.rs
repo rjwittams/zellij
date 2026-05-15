@@ -5493,6 +5493,21 @@ fn kitty_explicit_rgba_no_movement_with_placement(
     .into_bytes()
 }
 
+fn kitty_explicit_rgba_no_movement_with_placement_payload(
+    image_id: u32,
+    placement_id: u32,
+    width: u32,
+    height: u32,
+    cols: u32,
+    rows: u32,
+    payload_b64: &str,
+) -> Vec<u8> {
+    format!(
+        "\u{1b}_Ga=T,C=1,f=32,s={width},v={height},c={cols},r={rows},i={image_id},p={placement_id};{payload_b64}\u{1b}\\"
+    )
+    .into_bytes()
+}
+
 fn kitty_virtual_rgba(image_id: u32, width: u32, height: u32, cols: u32, rows: u32) -> Vec<u8> {
     let payload_b64 = kitty_rgba_payload_b64(width, height);
     format!(
@@ -8111,6 +8126,112 @@ fn kitty_retransmit_then_recreate_emits_updated_asset_payload_to_output() {
     assert!(
         !client_output.contains(&initial_payload),
         "recreate path should not re-emit the stale initial kitty asset payload"
+    );
+}
+
+#[test]
+fn kitty_retransmit_after_resize_recreates_clipped_explicit_placement() {
+    let (mut grid, sixel_image_store, kitty_asset_store, character_cell_size) =
+        create_grid_with_shared_stores(6, 20);
+    feed_bytes(
+        &mut grid,
+        &kitty_explicit_rgba_no_movement_with_placement(28, 1, 10, 6, 10, 6, None),
+    );
+
+    let mut output = Output::new(
+        sixel_image_store,
+        kitty_asset_store,
+        Rc::new(RefCell::new(KittyOutputMediaCache::disabled())),
+        character_cell_size,
+        true,
+        true,
+    );
+    let client_ids = HashSet::from([1]);
+    output.add_clients(&client_ids, Rc::new(RefCell::new(LinkHandler::new())), None);
+
+    let first_render = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected initial render");
+    output
+        .add_character_chunks_to_client(1, first_render.character_chunks, None)
+        .unwrap();
+    output.add_pane_image_output_to_client(1, first_render.image_output, None);
+    let _ = output.serialize().unwrap();
+
+    grid.change_size(3, 6);
+    let updated_payload = kitty_raw_payload_b64(10, 6, 4, 0x7F);
+    feed_bytes(&mut grid, &kitty_retransmit_rgba(28, 10, 6));
+    feed_bytes(
+        &mut grid,
+        &kitty_explicit_rgba_no_movement_with_placement_payload(
+            28,
+            1,
+            10,
+            6,
+            10,
+            6,
+            &updated_payload,
+        ),
+    );
+
+    let second_render = grid
+        .render(0, 0, &Style::default())
+        .unwrap()
+        .expect("expected resized recreate render");
+    let chunk = second_render
+        .image_output
+        .kitty_scene
+        .explicit_chunks
+        .first()
+        .expect("expected a clipped explicit placement after resize");
+    assert_eq!(chunk.columns, 6);
+    assert_eq!(chunk.rows, 3);
+    assert_eq!(chunk.source_width, 6);
+    assert_eq!(chunk.source_height, 3);
+
+    output
+        .add_character_chunks_to_client(1, second_render.character_chunks, None)
+        .unwrap();
+    output.add_pane_image_output_to_client(1, second_render.image_output, None);
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains(&updated_payload),
+        "resized recreate path should emit the updated kitty asset payload, got: {client_output:?}"
+    );
+    assert!(
+        client_output.contains("a=p")
+            && client_output.contains("c=6")
+            && client_output.contains("r=3")
+            && client_output.contains("w=6")
+            && client_output.contains("h=3"),
+        "resized recreate path should place the clipped explicit geometry, got: {client_output:?}"
+    );
+}
+
+#[test]
+fn kitty_explicit_viewport_clip_keeps_nonzero_source_rectangle() {
+    let mut grid = create_grid_with_size_and_raw(
+        10,
+        10,
+        &kitty_explicit_rgba_no_movement_with_placement(29, 1, 1, 1, 10, 10, None),
+    );
+
+    grid.change_size(1, 1);
+
+    let chunks = grid.visible_kitty_image_chunks(0, 0);
+    assert_eq!(chunks.len(), 1);
+    assert_eq!(chunks[0].columns, 1);
+    assert_eq!(chunks[0].rows, 1);
+    assert_eq!(
+        chunks[0].source_width, 1,
+        "a nonzero visible explicit placement must not serialize w=0"
+    );
+    assert_eq!(
+        chunks[0].source_height, 1,
+        "a nonzero visible explicit placement must not serialize h=0"
     );
 }
 
