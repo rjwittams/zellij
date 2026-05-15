@@ -68,6 +68,27 @@ impl KittyUploadSerializationPolicy {
     fn new(acknowledgement: KittyUploadAcknowledgement) -> Self {
         Self { acknowledgement }
     }
+
+    fn quiet_and_track_upload(
+        self,
+        kitty_output_media_cache: &mut KittyOutputMediaCache,
+        client_id: ClientId,
+        image_id: u32,
+        generation: u64,
+    ) -> u8 {
+        match self.acknowledgement {
+            KittyUploadAcknowledgement::None => 2,
+            KittyUploadAcknowledgement::TrackWithoutRequesting => {
+                kitty_output_media_cache
+                    .mark_pending_upload(client_id, image_id, generation, false);
+                2
+            },
+            KittyUploadAcknowledgement::Request => {
+                kitty_output_media_cache.mark_pending_upload(client_id, image_id, generation, true);
+                0
+            },
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -453,7 +474,12 @@ impl ImageOutput {
     }
 
     fn transport_supports_upload_ack_tracking(transport: KittyImageOutputTransport) -> bool {
-        matches!(transport, KittyImageOutputTransport::File)
+        matches!(
+            transport,
+            KittyImageOutputTransport::File
+                | KittyImageOutputTransport::TemporaryFile
+                | KittyImageOutputTransport::SharedMemory
+        )
     }
 
     fn client_can_track_upload_acks(&self, client_id: ClientId) -> bool {
@@ -758,19 +784,12 @@ impl ImageOutput {
             if let Ok(path) = kitty_output_media_cache
                 .ensure_regular_file_for_asset(image_id, generation, asset_data)
             {
-                let quiet = match upload_policy.acknowledgement {
-                    KittyUploadAcknowledgement::None => 2,
-                    KittyUploadAcknowledgement::TrackWithoutRequesting => {
-                        kitty_output_media_cache
-                            .mark_pending_upload(client_id, image_id, generation, false);
-                        2
-                    },
-                    KittyUploadAcknowledgement::Request => {
-                        kitty_output_media_cache
-                            .mark_pending_upload(client_id, image_id, generation, true);
-                        0
-                    },
-                };
+                let quiet = upload_policy.quiet_and_track_upload(
+                    &mut kitty_output_media_cache,
+                    client_id,
+                    image_id,
+                    generation,
+                );
                 return Some(KittyImageState::serialize_asset_data_from_file(
                     image_id, asset_data, &path, quiet,
                 ));
@@ -785,14 +804,20 @@ impl ImageOutput {
         image_id: u32,
         generation: u64,
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
-        _upload_policy: KittyUploadSerializationPolicy,
+        upload_policy: KittyUploadSerializationPolicy,
     ) -> Option<String> {
         let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
         let path = kitty_output_media_cache
             .create_temporary_file_for_asset(client_id, image_id, generation, asset_data)
             .ok()?;
+        let quiet = upload_policy.quiet_and_track_upload(
+            &mut kitty_output_media_cache,
+            client_id,
+            image_id,
+            generation,
+        );
         Some(KittyImageState::serialize_asset_data_from_temporary_file(
-            image_id, asset_data, &path, 2,
+            image_id, asset_data, &path, quiet,
         ))
     }
 
@@ -802,14 +827,20 @@ impl ImageOutput {
         image_id: u32,
         generation: u64,
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
-        _upload_policy: KittyUploadSerializationPolicy,
+        upload_policy: KittyUploadSerializationPolicy,
     ) -> Option<String> {
         let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
         let name = kitty_output_media_cache
             .create_shared_memory_for_asset(client_id, image_id, generation, asset_data)
             .ok()?;
+        let quiet = upload_policy.quiet_and_track_upload(
+            &mut kitty_output_media_cache,
+            client_id,
+            image_id,
+            generation,
+        );
         Some(KittyImageState::serialize_asset_data_from_shared_memory(
-            image_id, asset_data, &name, 2,
+            image_id, asset_data, &name, quiet,
         ))
     }
 

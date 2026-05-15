@@ -4,12 +4,14 @@ use std::{
     fs,
     io::{self, Write},
     path::PathBuf,
+    sync::atomic::{AtomicU64, Ordering},
 };
 #[cfg(unix)]
 use std::{ffi::CString, ptr};
 use zellij_utils::consts::ZELLIJ_SOCK_DIR;
 
 const RECENTLY_REFERENCED_RENDER_GENERATIONS: u64 = 240;
+static SHARED_MEMORY_OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KittyOutputMediaRetention {
@@ -32,12 +34,18 @@ struct PendingKittyUpload {
 
 #[derive(Clone, Debug)]
 struct TrackedTemporaryOutputFile {
+    client_id: ClientId,
+    image_id: u32,
+    generation: u64,
     path: PathBuf,
     last_referenced_render_generation: u64,
 }
 
 #[derive(Clone, Debug)]
 struct TrackedSharedMemoryOutput {
+    client_id: ClientId,
+    image_id: u32,
+    generation: u64,
     name: String,
     last_referenced_render_generation: u64,
 }
@@ -155,6 +163,9 @@ impl KittyOutputMediaCache {
             return Err(error);
         }
         self.temporary_files.push_back(TrackedTemporaryOutputFile {
+            client_id,
+            image_id,
+            generation,
             path: path.clone(),
             last_referenced_render_generation: self.render_generation,
         });
@@ -163,20 +174,22 @@ impl KittyOutputMediaCache {
 
     pub fn create_shared_memory_for_asset(
         &mut self,
-        _client_id: ClientId,
-        _image_id: u32,
-        _generation: u64,
+        client_id: ClientId,
+        image_id: u32,
+        generation: u64,
         asset_data: &mut KittyAssetData,
     ) -> io::Result<String> {
         let payload = asset_data.materialized_image_payload().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidData, "invalid kitty image data")
         })?;
-        let sequence = self.one_shot_media_sequence;
-        self.one_shot_media_sequence = self.one_shot_media_sequence.saturating_add(1);
+        let sequence = SHARED_MEMORY_OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let name = format!("/zk{:x}{:x}", std::process::id(), sequence);
         write_shared_memory_payload(&name, payload.bytes)?;
         self.shared_memory_objects
             .push_back(TrackedSharedMemoryOutput {
+                client_id,
+                image_id,
+                generation,
                 name: name.clone(),
                 last_referenced_render_generation: self.render_generation,
             });
@@ -199,6 +212,19 @@ impl KittyOutputMediaCache {
                     .map(|pending_upload| (pending_upload.image_id, pending_upload.generation))
             })
             .collect();
+        let pending_client_uploads: HashSet<(ClientId, u32, u64)> = self
+            .pending_uploads
+            .iter()
+            .flat_map(|(&client_id, pending_client_uploads)| {
+                pending_client_uploads.iter().map(move |pending_upload| {
+                    (
+                        client_id,
+                        pending_upload.image_id,
+                        pending_upload.generation,
+                    )
+                })
+            })
+            .collect();
         self.files.retain(|(image_id, generation), cached_file| {
             let was_recently_referenced = retention
                 == KittyOutputMediaRetention::KeepRecentlyReferenced
@@ -214,18 +240,30 @@ impl KittyOutputMediaCache {
         self.temporary_files.retain(|tracked_file| {
             let was_recently_referenced =
                 tracked_file.last_referenced_render_generation >= recently_referenced_cutoff;
-            if !was_recently_referenced {
+            let has_pending_upload = pending_client_uploads.contains(&(
+                tracked_file.client_id,
+                tracked_file.image_id,
+                tracked_file.generation,
+            ));
+            let should_keep = was_recently_referenced || has_pending_upload;
+            if !should_keep {
                 let _ = fs::remove_file(&tracked_file.path);
             }
-            was_recently_referenced && tracked_file.path.exists()
+            should_keep && tracked_file.path.exists()
         });
         self.shared_memory_objects.retain(|tracked_object| {
             let was_recently_referenced =
                 tracked_object.last_referenced_render_generation >= recently_referenced_cutoff;
-            if !was_recently_referenced {
+            let has_pending_upload = pending_client_uploads.contains(&(
+                tracked_object.client_id,
+                tracked_object.image_id,
+                tracked_object.generation,
+            ));
+            let should_keep = was_recently_referenced || has_pending_upload;
+            if !should_keep {
                 let _ = unlink_shared_memory_payload(&tracked_object.name);
             }
-            was_recently_referenced
+            should_keep
         });
     }
 

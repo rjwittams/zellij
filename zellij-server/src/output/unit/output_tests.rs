@@ -1309,6 +1309,77 @@ fn test_temp_file_output_preserves_raw_rgba_format_fields() {
     );
 }
 
+#[test]
+fn test_temp_file_output_can_request_acknowledgements() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(1, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_output_transports_for_client(
+        1,
+        vec![
+            KittyImageOutputTransport::TemporaryFile,
+            KittyImageOutputTransport::Direct,
+        ],
+    );
+    output.set_kitty_upload_acknowledgement_policy_for_client(
+        1,
+        KittyUploadAcknowledgementPolicy::Always,
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=1,q=0,f=100,t=t;"),
+        "always-ack temp-file uploads should request terminal acknowledgement, got {client_output:?}"
+    );
+}
+
+#[test]
+fn test_temp_file_output_watermark_requests_only_last_acknowledgement() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    let client_ids = create_test_clients(1);
+    let first_chunk = create_kitty_chunk(1, 2, 2);
+    let second_chunk = create_kitty_chunk(2, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_output_transports_for_client(
+        1,
+        vec![
+            KittyImageOutputTransport::TemporaryFile,
+            KittyImageOutputTransport::Direct,
+        ],
+    );
+    output.set_kitty_upload_acknowledgement_policy_for_client(
+        1,
+        KittyUploadAcknowledgementPolicy::Watermark,
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![first_chunk, second_chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert_eq!(client_output.matches("q=2,f=100,t=t;").count(), 1);
+    assert_eq!(client_output.matches("q=0,f=100,t=t;").count(), 1);
+}
+
 #[cfg(unix)]
 #[test]
 fn test_image_output_can_publish_resident_assets_as_shared_memory() {
@@ -1406,6 +1477,79 @@ fn test_shm_output_preserves_raw_rgba_format_fields() {
         .retain_files(KittyOutputMediaRetention::KeepRecentlyReferenced, |_, _| {
             false
         });
+}
+
+#[cfg(unix)]
+#[test]
+fn test_shm_output_can_request_acknowledgements() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    let client_ids = create_test_clients(1);
+    let chunk = create_kitty_chunk(1, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_output_transports_for_client(
+        1,
+        vec![
+            KittyImageOutputTransport::SharedMemory,
+            KittyImageOutputTransport::Direct,
+        ],
+    );
+    output.set_kitty_upload_acknowledgement_policy_for_client(
+        1,
+        KittyUploadAcknowledgementPolicy::Always,
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert!(
+        client_output.contains("a=t,i=1,q=0,f=100,t=s;"),
+        "always-ack shm uploads should request terminal acknowledgement, got {client_output:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_shm_output_watermark_requests_only_last_acknowledgement() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    let client_ids = create_test_clients(1);
+    let first_chunk = create_kitty_chunk(1, 2, 2);
+    let second_chunk = create_kitty_chunk(2, 2, 2);
+    let (mut output, _sixel_image_store, _kitty_asset_store, _character_cell_size) =
+        create_test_output_with_media_cache(media_cache);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_output_transports_for_client(
+        1,
+        vec![
+            KittyImageOutputTransport::SharedMemory,
+            KittyImageOutputTransport::Direct,
+        ],
+    );
+    output.set_kitty_upload_acknowledgement_policy_for_client(
+        1,
+        KittyUploadAcknowledgementPolicy::Watermark,
+    );
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![first_chunk, second_chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+    assert_eq!(client_output.matches("q=2,f=100,t=s;").count(), 1);
+    assert_eq!(client_output.matches("q=0,f=100,t=s;").count(), 1);
 }
 
 #[test]
@@ -1698,6 +1842,38 @@ fn test_output_media_cache_reaps_stale_temporary_files() {
     );
 }
 
+#[test]
+fn test_output_media_cache_keeps_pending_temporary_upload_until_acknowledged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let mut asset_data = KittyAssetData::Image(KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    });
+
+    let media_path = media_cache
+        .create_temporary_file_for_asset(1, 1, 1, &mut asset_data)
+        .expect("should write temporary test media file");
+    media_cache.mark_pending_upload(1, 1, 1, true);
+    for _ in 0..=240 {
+        media_cache.advance_render_generation();
+    }
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+    assert!(
+        media_path.exists(),
+        "pending temporary uploads should not be removed by defensive cleanup"
+    );
+
+    media_cache.acknowledge_upload(1, 1);
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+    assert!(
+        !media_path.exists(),
+        "acknowledged temporary uploads can be removed by defensive cleanup"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn test_output_media_cache_reaps_stale_shared_memory_objects() {
@@ -1728,6 +1904,39 @@ fn test_output_media_cache_reaps_stale_shared_memory_objects() {
     assert!(
         !test_shared_memory_exists(&name),
         "stale shared-memory output objects should be unlinked by retention"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_output_media_cache_keeps_pending_shared_memory_upload_until_acknowledged() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let mut asset_data = KittyAssetData::Image(KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    });
+
+    let name = media_cache
+        .create_shared_memory_for_asset(1, 1, 1, &mut asset_data)
+        .expect("should write shared-memory test media");
+    media_cache.mark_pending_upload(1, 1, 1, true);
+    for _ in 0..=240 {
+        media_cache.advance_render_generation();
+    }
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+    assert!(
+        test_shared_memory_exists(&name),
+        "pending shared-memory uploads should not be unlinked by defensive cleanup"
+    );
+
+    media_cache.acknowledge_upload(1, 1);
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+    assert!(
+        !test_shared_memory_exists(&name),
+        "acknowledged shared-memory uploads can be unlinked by defensive cleanup"
     );
 }
 
