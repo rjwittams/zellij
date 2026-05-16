@@ -71,7 +71,9 @@ impl TerminalApcParser {
 
 #[cfg(test)]
 mod tests {
-    use super::TerminalApcParser;
+    use super::{send_kitty_apcs_then_completed_forward, TerminalApcParser};
+    use crate::InputInstruction;
+    use zellij_utils::channels::{unbounded, SenderWithContext};
 
     #[test]
     fn terminal_apc_parser_extracts_complete_kitty_apc_and_passes_other_bytes_through() {
@@ -107,6 +109,49 @@ mod tests {
         let (passthrough, apcs) = parser.parse(b"[A");
         assert_eq!(passthrough, vec![b"\x1b[A".to_vec()]);
         assert!(apcs.is_empty());
+    }
+
+    #[test]
+    fn kitty_apc_responses_are_forwarded_before_the_da_barrier_completion() {
+        let (sender, receiver) = unbounded();
+        let sender = SenderWithContext::new(sender);
+
+        send_kitty_apcs_then_completed_forward(
+            sender,
+            vec![b"Gi=9;OK".to_vec()],
+            Some((9, Vec::new())),
+        );
+
+        let first = receiver.recv().unwrap().0;
+        let second = receiver.recv().unwrap().0;
+
+        assert!(matches!(
+            first,
+            InputInstruction::KittyImageTerminalResponse(ref payload)
+                if payload == b"Gi=9;OK"
+        ));
+        assert!(matches!(
+            second,
+            InputInstruction::ForwardedReplyFromHostComplete {
+                token: 9,
+                reply_bytes
+            } if reply_bytes.is_empty()
+        ));
+    }
+}
+
+fn send_kitty_apcs_then_completed_forward(
+    send_input_instructions: SenderWithContext<InputInstruction>,
+    kitty_apcs: Vec<Vec<u8>>,
+    completed_forward: Option<(u32, Vec<u8>)>,
+) {
+    for kitty_apc in kitty_apcs {
+        let _ =
+            send_input_instructions.send(InputInstruction::KittyImageTerminalResponse(kitty_apc));
+    }
+    if let Some((token, reply_bytes)) = completed_forward {
+        let _ = send_input_instructions
+            .send(InputInstruction::ForwardedReplyFromHostComplete { token, reply_bytes });
     }
 }
 
@@ -222,14 +267,7 @@ pub(crate) fn stdin_loop(
                                 InputInstruction::AnsiStdinInstructions(parse_output.replies),
                             );
                         }
-                        if let Some((token, reply_bytes)) = parse_output.completed_forward {
-                            let _ = send_input_instructions.send(
-                                InputInstruction::ForwardedReplyFromHostComplete {
-                                    token,
-                                    reply_bytes,
-                                },
-                            );
-                        }
+                        let completed_forward = parse_output.completed_forward;
                         for payload in parse_output.desktop_notifications {
                             let _ = send_input_instructions
                                 .send(InputInstruction::DesktopNotificationResponse(payload));
@@ -237,6 +275,11 @@ pub(crate) fn stdin_loop(
                         let has_partial = parse_output.has_partial_state;
                         let residue = parse_output.residue;
                         if residue.is_empty() {
+                            send_kitty_apcs_then_completed_forward(
+                                send_input_instructions.clone(),
+                                Vec::new(),
+                                completed_forward,
+                            );
                             // If all bytes were consumed by the host-reply
                             // parser, nothing to feed to the keyboard
                             // parser. But if the host-reply parser is
@@ -251,10 +294,11 @@ pub(crate) fn stdin_loop(
                             continue;
                         }
                         let (passthrough_chunks, kitty_apcs) = terminal_apc_parser.parse(&residue);
-                        for kitty_apc in kitty_apcs {
-                            let _ = send_input_instructions
-                                .send(InputInstruction::KittyImageTerminalResponse(kitty_apc));
-                        }
+                        send_kitty_apcs_then_completed_forward(
+                            send_input_instructions.clone(),
+                            kitty_apcs,
+                            completed_forward,
+                        );
                         if passthrough_chunks.is_empty() && !residue.is_empty() {
                             needs_finalization = true;
                             continue;

@@ -1582,7 +1582,9 @@ impl Drop for KittyCapabilityProbeMediaFixture {
     }
 }
 
-const KITTY_CAPABILITY_PROBE_PIXEL: &[u8] = &[0, 0, 0];
+const KITTY_CAPABILITY_PROBE_RGBA_2X2: &[u8] = &[
+    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+];
 static KITTY_CAPABILITY_PROBE_MEDIA_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn build_kitty_capability_probe_bytes(
@@ -1594,7 +1596,10 @@ fn build_kitty_capability_probe_bytes(
     match transport {
         KittyCapabilityProbeTransport::Direct
         | KittyCapabilityProbeTransport::OutputTransport(KittyImageOutputTransport::Direct) => {
-            command.push_str(&format!("i={probe_image_id},s=1,v=1,a=q,t=d,f=24;AAAA"));
+            command.push_str(&format!(
+                "i={probe_image_id},s=2,v=2,a=q,t=d,f=32;{}",
+                base64::encode(KITTY_CAPABILITY_PROBE_RGBA_2X2)
+            ));
         },
         KittyCapabilityProbeTransport::OutputTransport(output_transport) => {
             let medium = match output_transport {
@@ -1605,7 +1610,7 @@ fn build_kitty_capability_probe_bytes(
             };
             let media_ref = media_ref?;
             command.push_str(&format!(
-                "i={probe_image_id},s=1,v=1,a=q,t={medium},f=24,S=3,O=0;{}",
+                "i={probe_image_id},s=2,v=2,a=q,t={medium},f=32;{}",
                 base64::encode(media_ref.as_bytes())
             ));
         },
@@ -1617,7 +1622,7 @@ fn build_kitty_capability_probe_bytes(
 fn write_kitty_capability_probe_file(path: &std::path::Path) -> io::Result<()> {
     let write_result = (|| -> io::Result<()> {
         let mut file = fs::File::create(path)?;
-        file.write_all(KITTY_CAPABILITY_PROBE_PIXEL)?;
+        file.write_all(KITTY_CAPABILITY_PROBE_RGBA_2X2)?;
         Ok(())
     })();
     if write_result.is_err() {
@@ -3096,7 +3101,7 @@ impl Screen {
             },
             KittyImageOutputTransport::File => {
                 let path = std::env::temp_dir().join(format!(
-                    "zellij-kitty-capability-probe-{}-{sequence}.rgb",
+                    "zellij-kitty-capability-probe-{}-{sequence}.rgba",
                     std::process::id(),
                 ));
                 write_kitty_capability_probe_file(&path)?;
@@ -3105,7 +3110,7 @@ impl Screen {
             },
             KittyImageOutputTransport::TemporaryFile => {
                 let path = std::env::temp_dir().join(format!(
-                    "tty-graphics-protocol-zellij-capability-probe-{}-{sequence}.rgb",
+                    "tty-graphics-protocol-zellij-capability-probe-{}-{sequence}.rgba",
                     std::process::id(),
                 ));
                 write_kitty_capability_probe_file(&path)?;
@@ -3113,7 +3118,7 @@ impl Screen {
                 Ok((KittyCapabilityProbeMediaFixture::File { path }, media_ref))
             },
             KittyImageOutputTransport::SharedMemory => {
-                let name = write_shared_memory_payload(KITTY_CAPABILITY_PROBE_PIXEL)?;
+                let name = write_shared_memory_payload(KITTY_CAPABILITY_PROBE_RGBA_2X2)?;
                 Ok((
                     KittyCapabilityProbeMediaFixture::SharedMemory { name: name.clone() },
                     name,

@@ -2276,6 +2276,40 @@ fn test_image_output_pre_vte_clear_invalidates_assumed_kitty_scene() {
 }
 
 #[test]
+fn test_disabled_kitty_output_suppresses_pre_vte_kitty_clear() {
+    let client_ids = create_test_clients(1);
+    let mut chunk = create_kitty_chunk(1, 2, 2);
+    chunk.placement_id = Some(pid(10));
+
+    let mut output = create_test_output();
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output.set_kitty_output_transports_for_client(1, vec![]);
+    output.set_last_rendered_image_states(HashMap::from([(
+        1,
+        create_rendered_image_state(vec![chunk.clone()], vec![]),
+    )]));
+    output.add_display_clearing_pre_vte_instruction_to_client(1, "\u{1b}[2J");
+    output.add_pane_image_output_to_client(
+        1,
+        pane_image_output_with_kitty_scene(vec![chunk]),
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let client_output = serialized.get(&1).unwrap();
+
+    assert!(
+        !client_output.contains("\u{1b}_G"),
+        "disabled kitty output must not emit kitty clears or uploads"
+    );
+    assert!(
+        output.last_rendered_image_state_for_client(1).is_some(),
+        "suppressed kitty scene state should remain available for later capability completion"
+    );
+}
+
+#[test]
 fn test_image_output_pane_kitty_clear_resets_host_state_before_rebuild() {
     let client_ids = create_test_clients(1);
     let mut chunk = create_kitty_chunk(1, 2, 2);

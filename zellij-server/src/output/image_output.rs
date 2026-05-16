@@ -1294,8 +1294,17 @@ impl ImageOutput {
         let mut fragments = vec![];
         fragments.extend(sixel_chunks.iter().cloned().map(ImageFragment::Sixel));
 
+        let before_text_vte = if self
+            .kitty_output_transports_for_client(client_id)
+            .is_empty()
+        {
+            None
+        } else {
+            prepared_kitty_render_plan.before_text_vte
+        };
+
         PreparedImageOutput {
-            before_text_vte: prepared_kitty_render_plan.before_text_vte,
+            before_text_vte,
             after_text: PreparedAfterTextImages {
                 client_id,
                 fragments,

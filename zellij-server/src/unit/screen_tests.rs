@@ -61,6 +61,10 @@ use std::rc::Rc;
 use zellij_utils::data::{PaneContents, PaneRenderReport};
 use zellij_utils::ipc::ExitReason;
 
+const KITTY_CAPABILITY_TEST_CARD: &[u8] = &[
+    255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+];
+
 fn take_snapshot_and_cursor_coordinates(
     ansi_instructions: &str,
     grid: &mut Grid,
@@ -5591,10 +5595,10 @@ fn kitty_capability_probe_serializes_direct_query() {
     assert!(probe.contains("i=41"));
     assert!(probe.contains("a=q"));
     assert!(probe.contains("t=d"));
-    assert!(probe.contains("f=24"));
-    assert!(probe.contains("s=1"));
-    assert!(probe.contains("v=1"));
-    assert!(probe.contains(";AAAA"));
+    assert!(probe.contains("f=32"));
+    assert!(probe.contains("s=2"));
+    assert!(probe.contains("v=2"));
+    assert!(probe.contains(&format!(";{}", base64::encode(KITTY_CAPABILITY_TEST_CARD))));
 }
 
 #[test]
@@ -5610,11 +5614,11 @@ fn kitty_capability_probe_serializes_regular_file_query() {
     assert!(probe.contains("i=42"));
     assert!(probe.contains("a=q"));
     assert!(probe.contains("t=f"));
-    assert!(probe.contains("f=24"));
-    assert!(probe.contains("s=1"));
-    assert!(probe.contains("v=1"));
-    assert!(probe.contains("S=3"));
-    assert!(probe.contains("O=0"));
+    assert!(probe.contains("f=32"));
+    assert!(probe.contains("s=2"));
+    assert!(probe.contains("v=2"));
+    assert!(!probe.contains("S="));
+    assert!(!probe.contains("O="));
     assert!(probe.contains(&base64::encode("/tmp/kitty-probe-rgb")));
 }
 
@@ -5633,6 +5637,11 @@ fn kitty_capability_probe_serializes_temporary_file_query() {
     assert!(probe.contains("i=43"));
     assert!(probe.contains("a=q"));
     assert!(probe.contains("t=t"));
+    assert!(probe.contains("f=32"));
+    assert!(probe.contains("s=2"));
+    assert!(probe.contains("v=2"));
+    assert!(!probe.contains("S="));
+    assert!(!probe.contains("O="));
     assert!(probe.contains(&base64::encode(
         "/tmp/tty-graphics-protocol/kitty-probe-rgb"
     )));
@@ -5653,6 +5662,11 @@ fn kitty_capability_probe_serializes_shared_memory_query() {
     assert!(probe.contains("i=44"));
     assert!(probe.contains("a=q"));
     assert!(probe.contains("t=s"));
+    assert!(probe.contains("f=32"));
+    assert!(probe.contains("s=2"));
+    assert!(probe.contains("v=2"));
+    assert!(!probe.contains("S="));
+    assert!(!probe.contains("O="));
     assert!(probe.contains(&base64::encode("/zellij-kitty-probe")));
 }
 
@@ -5798,7 +5812,7 @@ fn kitty_capability_regular_file_probe_fixture_is_removed_on_barrier() {
         .expect("regular-file fixture should have a path")
         .to_path_buf();
 
-    assert_eq!(std::fs::read(&path).unwrap(), vec![0, 0, 0]);
+    assert_eq!(std::fs::read(&path).unwrap(), KITTY_CAPABILITY_TEST_CARD);
     assert_eq!(media_ref, path.to_string_lossy());
 
     screen.register_pending_kitty_capability_probe_with_fixture(
@@ -5833,7 +5847,7 @@ fn kitty_capability_temporary_file_probe_fixture_is_removed_on_barrier() {
         media_ref.contains("tty-graphics-protocol"),
         "temp-file probe path must be in a kitty-approved temp path"
     );
-    assert_eq!(std::fs::read(&path).unwrap(), vec![0, 0, 0]);
+    assert_eq!(std::fs::read(&path).unwrap(), KITTY_CAPABILITY_TEST_CARD);
 
     screen.register_pending_kitty_capability_probe_with_fixture(
         82,
@@ -6332,6 +6346,75 @@ fn kitty_capability_completion_forces_render_of_previously_suppressed_images() {
     assert!(
         second_render.contains("\u{1b}_G") && second_render.contains("a=t"),
         "forced render should emit the previously suppressed kitty image, got: {second_render:?}"
+    );
+}
+
+#[test]
+fn attaching_unprobed_client_does_not_clear_existing_client_kitty_scene_without_rebuild() {
+    let size = Size { cols: 80, rows: 20 };
+    let (mut screen, capture) = create_new_screen_with_forward_capture(size);
+    screen.kitty_image_output_transports = vec![KittyImageOutputTransport::TemporaryFile];
+    screen.connected_clients.borrow_mut().insert(1, false);
+    screen.set_client_size(1, size);
+    mark_kitty_capabilities_supported(
+        &mut screen,
+        1,
+        vec![KittyImageOutputTransport::TemporaryFile],
+    );
+    new_tab(&mut screen, 1, 0);
+
+    let image_bytes = b"\x1b_Ga=T,f=24,s=1,v=1,c=1,r=1,i=88;AAAA\x1b\\".to_vec();
+    screen
+        .get_active_tab_mut(1)
+        .unwrap()
+        .handle_pty_bytes(1, image_bytes)
+        .unwrap();
+
+    screen.render_to_clients().unwrap();
+    let first_render = capture
+        .drain_server_instructions()
+        .into_iter()
+        .find_map(|instruction| match instruction {
+            ServerInstruction::Render(Some(output)) => output.get(&1).cloned(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    assert!(
+        first_render.contains("a=t") && first_render.contains("a=p"),
+        "initial render should display the kitty image, got: {first_render:?}"
+    );
+
+    screen.add_client(2, false).unwrap();
+    screen.set_client_size(2, Size { cols: 72, rows: 18 });
+    screen.recompute_tab_size(0).unwrap();
+
+    screen.render_to_clients().unwrap();
+    let attach_render_by_client = capture
+        .drain_server_instructions()
+        .into_iter()
+        .find_map(|instruction| match instruction {
+            ServerInstruction::Render(Some(output)) => Some(output),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let attach_render = attach_render_by_client.get(&1).cloned().unwrap_or_default();
+    let attached_client_render = attach_render_by_client.get(&2).cloned().unwrap_or_default();
+
+    assert!(
+        attach_render.contains("\u{1b}[2J"),
+        "attach resize should exercise the display-clear path, got: {attach_render:?}"
+    );
+    assert!(
+        attach_render.contains("\u{1b}_Ga=d,d=A\u{1b}\\"),
+        "existing client should clear its host kitty state before text clear, got: {attach_render:?}"
+    );
+    assert!(
+        attach_render.contains("a=t") && attach_render.contains("a=p"),
+        "existing client must rebuild its kitty scene after attach-triggered display clear, got: {attach_render:?}"
+    );
+    assert!(
+        !attached_client_render.contains("\u{1b}_G"),
+        "unprobed attached client should not receive kitty output during the attach render, got: {attached_client_render:?}"
     );
 }
 
