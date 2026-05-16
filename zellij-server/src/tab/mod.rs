@@ -3314,13 +3314,10 @@ impl Tab {
     ) -> Result<()> {
         let err_context = || "failed to render tab".to_string();
 
-        let mut connected_clients: HashSet<ClientId> =
-            { self.connected_clients.borrow().iter().copied().collect() };
-
-        // If we have a client_id_override (for watcher rendering), add it temporarily
-        if let Some(override_id) = client_id_override {
-            connected_clients.insert(override_id);
-        }
+        let connected_clients: HashSet<ClientId> = match client_id_override {
+            Some(override_id) => HashSet::from([override_id]),
+            None => self.connected_clients.borrow().iter().copied().collect(),
+        };
 
         if connected_clients.is_empty() || !self.tiled_panes.has_active_panes() {
             return Ok(());
@@ -3361,18 +3358,20 @@ impl Tab {
                 .with_context(err_context)?;
         }
 
-        self.render_cursor(output);
+        self.render_cursor(output, &connected_clients);
         if output.has_rendered_assets() {
-            self.hide_cursor_and_clear_display_as_needed(output);
+            self.hide_cursor_and_clear_display_as_needed(output, &connected_clients);
         }
 
         Ok(())
     }
 
-    fn hide_cursor_and_clear_display_as_needed(&mut self, output: &mut Output) {
+    fn hide_cursor_and_clear_display_as_needed(
+        &mut self,
+        output: &mut Output,
+        connected_clients: &HashSet<ClientId>,
+    ) {
         let hide_cursor = "\u{1b}[?25l";
-        let connected_clients: Vec<ClientId> =
-            { self.connected_clients.borrow().iter().copied().collect() };
         output.add_pre_vte_instruction_to_multiple_clients(
             connected_clients.iter().copied(),
             hide_cursor,
@@ -3386,14 +3385,12 @@ impl Tab {
             self.should_clear_display_before_rendering = false;
         }
     }
-    fn render_cursor(&mut self, output: &mut Output) {
-        let connected_clients: Vec<ClientId> =
-            { self.connected_clients.borrow().iter().copied().collect() };
+    fn render_cursor(&mut self, output: &mut Output, connected_clients: &HashSet<ClientId>) {
         for client_id in connected_clients {
-            match self.get_active_terminal_cursor_position(client_id) {
+            match self.get_active_terminal_cursor_position(*client_id) {
                 Some((cursor_position_x, cursor_position_y, is_cursor_visible)) => {
                     let active_pane_z_index = self
-                        .get_active_pane_id(client_id)
+                        .get_active_pane_id(*client_id)
                         .and_then(|pane_id| self.floating_panes.get_pane_z_index(pane_id));
                     let not_occluded = output.cursor_is_visible(
                         cursor_position_x,
@@ -3401,7 +3398,7 @@ impl Tab {
                         active_pane_z_index,
                     );
                     let active_terminal_is_mid_frame = self
-                        .active_terminal_is_mid_frame(client_id)
+                        .active_terminal_is_mid_frame(*client_id)
                         .unwrap_or(false);
 
                     if active_terminal_is_mid_frame {
@@ -3410,12 +3407,12 @@ impl Tab {
                         // want to render it
                     } else if not_occluded && is_cursor_visible {
                         let desired_cursor_shape = self
-                            .get_active_pane(client_id)
+                            .get_active_pane(*client_id)
                             .map(|ap| ap.cursor_shape_csi())
                             .unwrap_or_default();
                         let cursor_changed_position_or_shape = self
                             .cursor_positions_and_shape
-                            .get(&client_id)
+                            .get(client_id)
                             .map(|(previous_x, previous_y, previous_shape)| {
                                 previous_x != &cursor_position_x
                                     || previous_y != &cursor_position_y
@@ -3430,13 +3427,13 @@ impl Tab {
                                 cursor_position_x + 1,
                                 desired_cursor_shape
                             ); // goto row/col
-                            output.add_post_vte_instruction_to_client(client_id, show_cursor);
+                            output.add_post_vte_instruction_to_client(*client_id, show_cursor);
                             output.add_post_vte_instruction_to_client(
-                                client_id,
+                                *client_id,
                                 goto_cursor_position,
                             );
                             self.cursor_positions_and_shape.insert(
-                                client_id,
+                                *client_id,
                                 (cursor_position_x, cursor_position_y, desired_cursor_shape),
                             );
                         }
@@ -3451,16 +3448,16 @@ impl Tab {
                             cursor_position_y + 1,
                             cursor_position_x + 1,
                         );
-                        output.add_post_vte_instruction_to_client(client_id, hide_cursor);
-                        output.add_post_vte_instruction_to_client(client_id, goto_cursor_position);
+                        output.add_post_vte_instruction_to_client(*client_id, hide_cursor);
+                        output.add_post_vte_instruction_to_client(*client_id, goto_cursor_position);
                     } else {
                         let hide_cursor = "\u{1b}[?25l";
-                        output.add_post_vte_instruction_to_client(client_id, hide_cursor);
+                        output.add_post_vte_instruction_to_client(*client_id, hide_cursor);
                     }
                 },
                 None => {
                     let hide_cursor = "\u{1b}[?25l";
-                    output.add_post_vte_instruction_to_client(client_id, hide_cursor);
+                    output.add_post_vte_instruction_to_client(*client_id, hide_cursor);
                 },
             }
         }

@@ -2206,6 +2206,37 @@ pub(crate) fn route_thread_main(
                                 )
                                 .with_context(err_context)?;
                             },
+                            ClientToServerMsg::ForwardedReplyFromHost { token, reply_bytes } => {
+                                // Watchers are read-only for pane input, but
+                                // their terminal still answers targeted host
+                                // queries such as kitty capability probes.
+                                session_state
+                                    .write()
+                                    .unwrap()
+                                    .clear_forward_in_flight(*token);
+                                send_to_screen_or_retry_queue!(
+                                    senders,
+                                    ScreenInstruction::ForwardedReplyFromHost {
+                                        token: *token,
+                                        reply_bytes: reply_bytes.clone(),
+                                    },
+                                    instruction.clone(),
+                                    retry_queue
+                                )
+                                .with_context(err_context)?;
+                            },
+                            ClientToServerMsg::KittyImageTerminalResponse { raw_bytes } => {
+                                send_to_screen_or_retry_queue!(
+                                    senders,
+                                    ScreenInstruction::KittyImageTerminalResponse(
+                                        raw_bytes.clone(),
+                                        client_id,
+                                    ),
+                                    instruction.clone(),
+                                    retry_queue
+                                )
+                                .with_context(err_context)?;
+                            },
                             _ => {
                                 // Ignore all input from watcher clients
                             },

@@ -460,6 +460,34 @@ impl Output {
         }
     }
 
+    pub(crate) fn clone_for_client(&self, client_id: ClientId) -> Self {
+        let mut pre_vte_instructions = HashMap::new();
+        if let Some(instructions) = self.pre_vte_instructions.get(&client_id) {
+            pre_vte_instructions.insert(client_id, instructions.clone());
+        }
+        let mut post_vte_instructions = HashMap::new();
+        if let Some(instructions) = self.post_vte_instructions.get(&client_id) {
+            post_vte_instructions.insert(client_id, instructions.clone());
+        }
+        let mut client_character_chunks = HashMap::new();
+        if let Some(chunks) = self.client_character_chunks.get(&client_id) {
+            client_character_chunks.insert(client_id, chunks.clone());
+        }
+        Self {
+            pre_vte_instructions,
+            post_vte_instructions,
+            client_character_chunks,
+            link_handler: self.link_handler.clone(),
+            image_output: self.image_output.clone_for_client(client_id),
+            floating_panes_stack: self.floating_panes_stack.clone(),
+            styled_underlines: self.styled_underlines,
+            osc8_hyperlinks: self.osc8_hyperlinks,
+            pane_render_report: PaneRenderReport::default(),
+            collect_ansi_pane_contents: self.collect_ansi_pane_contents,
+            cursor_coordinates: self.cursor_coordinates,
+        }
+    }
+
     pub fn set_last_rendered_image_states<T>(
         &mut self,
         last_rendered_image_states: HashMap<ClientId, T>,

@@ -1466,6 +1466,7 @@ pub(crate) struct Screen {
     pending_kitty_capability_probe_tokens_by_response_key: HashMap<(ClientId, u32), u32>,
     kitty_capability_probe_queues: HashMap<ClientId, VecDeque<KittyImageOutputTransport>>,
     kitty_client_graphics_capabilities: HashMap<ClientId, KittyClientGraphicsCapabilities>,
+    selected_kitty_output_transports: HashMap<ClientId, Vec<KittyImageOutputTransport>>,
     /// Serialization queue for forwarded queries. Invariant: at most one
     /// forward is in flight to the client at a time (enforced by
     /// `forward_in_flight`). When the reply (or timeout) closes the
@@ -1781,6 +1782,7 @@ impl Screen {
             pending_kitty_capability_probe_tokens_by_response_key: HashMap::new(),
             kitty_capability_probe_queues: HashMap::new(),
             kitty_client_graphics_capabilities: HashMap::new(),
+            selected_kitty_output_transports: HashMap::new(),
             forward_queue: VecDeque::new(),
             forward_in_flight_token: None,
             host_terminal_theme_mode: None,
@@ -2738,7 +2740,7 @@ impl Screen {
         followed_client_id: ClientId,
         watcher_size: Size,
     ) -> Result<Option<String>> {
-        let mut watcher_specific_output = watcher_output.clone();
+        let mut watcher_specific_output = watcher_output.clone_for_client(followed_client_id);
         watcher_specific_output.set_last_rendered_image_state_for_client(
             followed_client_id,
             self.watcher_last_rendered_image_state
@@ -2800,7 +2802,9 @@ impl Screen {
             KittyImageFileLifetime::Watermark => KittyUploadAcknowledgementPolicy::Watermark,
             KittyImageFileLifetime::AlwaysAck => KittyUploadAcknowledgementPolicy::Always,
         };
-        let transports = self.effective_kitty_output_transports_for_client(capability_client_id);
+        let transports = self
+            .selected_kitty_output_transports_for_client(capability_client_id)
+            .to_vec();
         output.set_kitty_output_transports_for_client(render_client_id, transports.clone());
         if transports.is_empty() {
             output.set_kitty_upload_acknowledgement_policy_for_client(
@@ -2813,6 +2817,16 @@ impl Screen {
                 acknowledgement_policy,
             );
         }
+    }
+
+    fn selected_kitty_output_transports_for_client(
+        &self,
+        client_id: ClientId,
+    ) -> &[KittyImageOutputTransport] {
+        self.selected_kitty_output_transports
+            .get(&client_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     fn effective_kitty_output_transports_for_client(
@@ -2830,6 +2844,30 @@ impl Screen {
             .copied()
             .filter(|transport| capabilities.transports.contains(transport))
             .collect()
+    }
+
+    fn update_selected_kitty_output_transports_for_client(&mut self, client_id: ClientId) {
+        let effective_transports = self.effective_kitty_output_transports_for_client(client_id);
+        let previous_transports = self
+            .selected_kitty_output_transports
+            .get(&client_id)
+            .cloned()
+            .unwrap_or_default();
+        if effective_transports == previous_transports {
+            return;
+        }
+        if effective_transports.is_empty() {
+            self.selected_kitty_output_transports.remove(&client_id);
+        } else {
+            self.selected_kitty_output_transports
+                .insert(client_id, effective_transports.clone());
+        }
+        log::info!(
+            target: "zellij::kitty_images",
+            "client {client_id} selected kitty output transports changed from {:?} to {:?}",
+            previous_transports,
+            effective_transports,
+        );
     }
 
     fn ensure_kitty_capability_probe_started(&mut self, client_id: ClientId) {
@@ -3116,12 +3154,14 @@ impl Screen {
                 }
             },
         }
+        self.update_selected_kitty_output_transports_for_client(client_id);
         Some(client_id)
     }
 
     fn remove_kitty_client_capability_state(&mut self, client_id: ClientId) {
         self.kitty_client_graphics_capabilities.remove(&client_id);
         self.kitty_capability_probe_queues.remove(&client_id);
+        self.selected_kitty_output_transports.remove(&client_id);
 
         let removed_probe_tokens: Vec<u32> = self
             .pending_kitty_capability_probes

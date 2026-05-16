@@ -557,6 +557,34 @@ fn test_add_clients() {
 }
 
 #[test]
+fn test_clone_for_client_keeps_only_requested_render_slot() {
+    let mut output = create_test_output();
+    let client_ids = create_test_clients(2);
+    let link_handler = Rc::new(RefCell::new(LinkHandler::new()));
+    output.add_clients(&client_ids, link_handler, None);
+    output
+        .add_character_chunks_to_client(1, vec![create_character_chunk_from_str("one", 0, 0)], None)
+        .unwrap();
+    output
+        .add_character_chunks_to_client(2, vec![create_character_chunk_from_str("two", 0, 0)], None)
+        .unwrap();
+    output.add_pane_image_output_to_client(
+        2,
+        pane_image_output_with_kitty_scene(vec![create_kitty_chunk(2, 2, 2)]),
+        None,
+    );
+
+    let mut cloned = output.clone_for_client(1);
+    let serialized = cloned.serialize().unwrap();
+
+    assert_eq!(serialized.len(), 1);
+    assert!(serialized.contains_key(&1));
+    assert!(!serialized.contains_key(&2));
+    assert!(serialized.get(&1).unwrap().contains("one"));
+    assert!(!serialized.get(&1).unwrap().contains("two"));
+}
+
+#[test]
 fn test_is_dirty_with_empty_output() {
     let output = create_test_output();
     assert!(!output.is_dirty(), "Empty output should not be dirty");
@@ -1898,6 +1926,32 @@ fn test_output_media_cache_keeps_pending_temporary_upload_until_acknowledged() {
     );
 }
 
+#[test]
+fn test_output_media_cache_expires_unacknowledged_temporary_uploads() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let mut asset_data = KittyAssetData::Image(KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    });
+
+    let media_path = media_cache
+        .create_temporary_file_for_asset(1, 1, 1, &mut asset_data)
+        .expect("should write temporary test media file");
+    media_cache.mark_pending_upload(1, 1, 1, true);
+    for _ in 0..=(240 * 4) {
+        media_cache.advance_render_generation();
+    }
+    media_cache.retain_files(KittyOutputMediaRetention::OnlyExplicitlyKept, |_, _| false);
+
+    assert!(
+        !media_path.exists(),
+        "stale unacknowledged temporary uploads should eventually expire"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn test_output_media_cache_reaps_stale_shared_memory_objects() {
@@ -1988,6 +2042,42 @@ fn test_output_media_cache_keeps_pending_shared_memory_upload_until_acknowledged
     assert!(
         !test_shared_memory_exists(&name),
         "acknowledged shared-memory uploads can be unlinked by defensive cleanup"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn test_output_media_cache_expires_unacknowledged_shared_memory_uploads() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let mut media_cache = KittyOutputMediaCache::new(media_dir);
+    let mut asset_data = KittyAssetData::Image(KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    });
+
+    let first_name = media_cache
+        .create_shared_memory_for_asset(1, 1, 1, &mut asset_data)
+        .expect("should write first shared-memory test media");
+    media_cache.mark_pending_upload(1, 1, 1, true);
+    let second_name = media_cache
+        .create_shared_memory_for_asset(1, 2, 1, &mut asset_data)
+        .expect("should write second shared-memory test media");
+    for _ in 0..=(240 * 4) {
+        media_cache.advance_render_generation();
+    }
+    media_cache.retain_files(KittyOutputMediaRetention::KeepRecentlyReferenced, |_, _| {
+        false
+    });
+
+    assert!(
+        !test_shared_memory_exists(&first_name),
+        "stale unacknowledged shared-memory uploads should eventually expire"
+    );
+    assert!(
+        !test_shared_memory_exists(&second_name),
+        "expired front pending uploads should not block later stale shared-memory cleanup"
     );
 }
 

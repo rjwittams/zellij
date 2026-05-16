@@ -385,15 +385,13 @@ impl FloatingPanes {
         help_text_visible: &HashMap<ClientId, bool>,
     ) -> Result<()> {
         let err_context = || "failed to render output";
-        let mut connected_clients: HashSet<ClientId> =
-            { self.connected_clients.borrow().iter().copied().collect() };
-
-        // If we have a client_id_override (for watcher rendering), add it temporarily
-        if let Some(override_id) = client_id_override {
-            connected_clients.insert(override_id);
-        }
-
-        let connected_clients: Vec<ClientId> = connected_clients.into_iter().collect();
+        let connected_clients: Vec<ClientId> = match client_id_override {
+            Some(override_id) => vec![override_id],
+            None => self.connected_clients.borrow().iter().copied().collect(),
+        };
+        let should_render_client = |client_id: &ClientId| {
+            client_id_override.is_none_or(|override_id| *client_id == override_id)
+        };
         let active_panes = if self.panes_are_visible() {
             self.active_panes.clone_active_panes()
         } else {
@@ -454,7 +452,7 @@ impl FloatingPanes {
             let mut active_panes = active_panes.clone();
             let multiple_users_exist_in_session =
                 { self.connected_clients_in_app.borrow().len() > 1 };
-            active_panes.retain(|c_id, _| self.connected_clients.borrow().contains(c_id));
+            active_panes.retain(|c_id, _| should_render_client(c_id));
             let pane_is_selectable = pane.selectable();
             let show_help_text = active_panes.iter().any(|(client_id, pane_id)| {
                 pane_id == &pane.pid() && help_text_visible.get(client_id).copied().unwrap_or(false)

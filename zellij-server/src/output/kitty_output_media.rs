@@ -11,6 +11,8 @@ use std::{ffi::CString, ptr};
 use zellij_utils::consts::ZELLIJ_SOCK_DIR;
 
 const RECENTLY_REFERENCED_RENDER_GENERATIONS: u64 = 240;
+const PENDING_UPLOAD_ACK_TIMEOUT_RENDER_GENERATIONS: u64 =
+    RECENTLY_REFERENCED_RENDER_GENERATIONS * 4;
 const SHARED_MEMORY_OUTPUT_CREATE_ATTEMPTS: usize = 16;
 static SHARED_MEMORY_OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -31,6 +33,7 @@ struct PendingKittyUpload {
     image_id: u32,
     generation: u64,
     requested_acknowledgement: bool,
+    registered_render_generation: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -199,31 +202,23 @@ impl KittyOutputMediaCache {
     where
         F: FnMut(u32, u64) -> bool,
     {
+        self.expire_stale_pending_uploads();
         let recently_referenced_cutoff = self
             .render_generation
             .saturating_sub(RECENTLY_REFERENCED_RENDER_GENERATIONS);
-        let pending_uploads: HashSet<(u32, u64)> = self
-            .pending_uploads
-            .values()
-            .flat_map(|pending_client_uploads| {
-                pending_client_uploads
-                    .iter()
-                    .map(|pending_upload| (pending_upload.image_id, pending_upload.generation))
-            })
-            .collect();
-        let pending_client_uploads: HashSet<(ClientId, u32, u64)> = self
-            .pending_uploads
-            .iter()
-            .flat_map(|(&client_id, pending_client_uploads)| {
-                pending_client_uploads.iter().map(move |pending_upload| {
-                    (
-                        client_id,
-                        pending_upload.image_id,
-                        pending_upload.generation,
-                    )
+        let has_pending_uploads = !self.pending_uploads.is_empty();
+        let pending_uploads: HashSet<(u32, u64)> = if has_pending_uploads {
+            self.pending_uploads
+                .values()
+                .flat_map(|pending_client_uploads| {
+                    pending_client_uploads
+                        .iter()
+                        .map(|pending_upload| (pending_upload.image_id, pending_upload.generation))
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            HashSet::new()
+        };
         self.files.retain(|(image_id, generation), cached_file| {
             let was_recently_referenced = retention
                 == KittyOutputMediaRetention::KeepRecentlyReferenced
@@ -236,33 +231,71 @@ impl KittyOutputMediaCache {
             }
             should_keep
         });
-        self.temporary_files.retain(|tracked_file| {
-            let was_recently_referenced =
-                tracked_file.last_referenced_render_generation >= recently_referenced_cutoff;
-            let has_pending_upload = pending_client_uploads.contains(&(
-                tracked_file.client_id,
-                tracked_file.image_id,
-                tracked_file.generation,
-            ));
-            let should_keep = was_recently_referenced || has_pending_upload;
-            if !should_keep {
-                let _ = fs::remove_file(&tracked_file.path);
+        self.reap_ordered_one_shot_media(retention, recently_referenced_cutoff);
+    }
+
+    fn reap_ordered_one_shot_media(
+        &mut self,
+        retention: KittyOutputMediaRetention,
+        recently_referenced_cutoff: u64,
+    ) {
+        while self
+            .temporary_files
+            .front()
+            .map(|tracked_file| {
+                !self.has_pending_upload_for(
+                    tracked_file.client_id,
+                    tracked_file.image_id,
+                    tracked_file.generation,
+                ) && (retention == KittyOutputMediaRetention::OnlyExplicitlyKept
+                    || tracked_file.last_referenced_render_generation < recently_referenced_cutoff
+                    || !tracked_file.path.exists())
+            })
+            .unwrap_or(false)
+        {
+            if let Some(tracked_file) = self.temporary_files.pop_front() {
+                let _ = fs::remove_file(tracked_file.path);
             }
-            should_keep && tracked_file.path.exists()
-        });
-        self.shared_memory_objects.retain(|tracked_object| {
-            let was_recently_referenced =
-                tracked_object.last_referenced_render_generation >= recently_referenced_cutoff;
-            let has_pending_upload = pending_client_uploads.contains(&(
-                tracked_object.client_id,
-                tracked_object.image_id,
-                tracked_object.generation,
-            ));
-            let should_keep = was_recently_referenced || has_pending_upload;
-            if !should_keep {
+        }
+        while self
+            .shared_memory_objects
+            .front()
+            .map(|tracked_object| {
+                !self.has_pending_upload_for(
+                    tracked_object.client_id,
+                    tracked_object.image_id,
+                    tracked_object.generation,
+                ) && (retention == KittyOutputMediaRetention::OnlyExplicitlyKept
+                    || tracked_object.last_referenced_render_generation
+                        < recently_referenced_cutoff)
+            })
+            .unwrap_or(false)
+        {
+            if let Some(tracked_object) = self.shared_memory_objects.pop_front() {
                 let _ = unlink_shared_memory_payload(&tracked_object.name);
             }
-            should_keep
+        }
+    }
+
+    fn has_pending_upload_for(&self, client_id: ClientId, image_id: u32, generation: u64) -> bool {
+        self.pending_uploads
+            .get(&client_id)
+            .map(|pending_client_uploads| {
+                pending_client_uploads.iter().any(|pending_upload| {
+                    pending_upload.image_id == image_id && pending_upload.generation == generation
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn expire_stale_pending_uploads(&mut self) {
+        let render_generation = self.render_generation;
+        self.pending_uploads.retain(|_, pending_client_uploads| {
+            pending_client_uploads.retain(|pending_upload| {
+                render_generation.saturating_sub(pending_upload.registered_render_generation)
+                    < PENDING_UPLOAD_ACK_TIMEOUT_RENDER_GENERATIONS
+            });
+            !pending_client_uploads.is_empty()
         });
     }
 
@@ -294,6 +327,7 @@ impl KittyOutputMediaCache {
                 image_id,
                 generation,
                 requested_acknowledgement,
+                registered_render_generation: self.render_generation,
             });
     }
 

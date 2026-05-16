@@ -420,6 +420,35 @@ impl ImageOutput {
         }
     }
 
+    pub(super) fn clone_for_client(&self, client_id: ClientId) -> Self {
+        let mut client_image_states = HashMap::new();
+        if let Some(client_state) = self.client_image_states.get(&client_id) {
+            client_image_states.insert(client_id, client_state.clone());
+        }
+        let mut client_kitty_output_transports = HashMap::new();
+        if let Some(transports) = self.client_kitty_output_transports.get(&client_id) {
+            client_kitty_output_transports.insert(client_id, transports.clone());
+        }
+        let mut kitty_output_disabled_clients = HashSet::new();
+        if self.kitty_output_disabled_clients.contains(&client_id) {
+            kitty_output_disabled_clients.insert(client_id);
+        }
+        let mut kitty_upload_acknowledgement_policies = HashMap::new();
+        if let Some(policy) = self.kitty_upload_acknowledgement_policies.get(&client_id) {
+            kitty_upload_acknowledgement_policies.insert(client_id, *policy);
+        }
+        Self {
+            client_image_states,
+            client_kitty_output_transports,
+            kitty_output_disabled_clients,
+            kitty_upload_acknowledgement_policies,
+            sixel_image_store: Rc::clone(&self.sixel_image_store),
+            kitty_asset_store: Rc::clone(&self.kitty_asset_store),
+            kitty_output_media_cache: Rc::clone(&self.kitty_output_media_cache),
+            character_cell_size: Rc::clone(&self.character_cell_size),
+        }
+    }
+
     pub fn set_kitty_output_transports_for_client(
         &mut self,
         client_id: ClientId,
@@ -797,18 +826,26 @@ impl ImageOutput {
     ) -> Option<String> {
         {
             let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
-            if let Ok(path) = kitty_output_media_cache
+            match kitty_output_media_cache
                 .ensure_regular_file_for_asset(image_id, generation, asset_data)
             {
-                let quiet = upload_policy.quiet_and_track_upload(
-                    &mut kitty_output_media_cache,
-                    client_id,
-                    image_id,
-                    generation,
-                );
-                return Some(KittyImageState::serialize_asset_data_from_file(
-                    image_id, asset_data, &path, quiet,
-                ));
+                Ok(path) => {
+                    let quiet = upload_policy.quiet_and_track_upload(
+                        &mut kitty_output_media_cache,
+                        client_id,
+                        image_id,
+                        generation,
+                    );
+                    return Some(KittyImageState::serialize_asset_data_from_file(
+                        image_id, asset_data, &path, quiet,
+                    ));
+                },
+                Err(error) => {
+                    log::debug!(
+                        target: "zellij::kitty_images",
+                        "kitty regular-file output failed for client {client_id}, image {image_id}, generation {generation}: {error}"
+                    );
+                },
             }
         }
         None
@@ -823,9 +860,18 @@ impl ImageOutput {
         upload_policy: KittyUploadSerializationPolicy,
     ) -> Option<String> {
         let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
-        let path = kitty_output_media_cache
+        let path = match kitty_output_media_cache
             .create_temporary_file_for_asset(client_id, image_id, generation, asset_data)
-            .ok()?;
+        {
+            Ok(path) => path,
+            Err(error) => {
+                log::debug!(
+                    target: "zellij::kitty_images",
+                    "kitty temporary-file output failed for client {client_id}, image {image_id}, generation {generation}: {error}"
+                );
+                return None;
+            },
+        };
         let quiet = upload_policy.quiet_and_track_upload(
             &mut kitty_output_media_cache,
             client_id,
@@ -846,9 +892,18 @@ impl ImageOutput {
         upload_policy: KittyUploadSerializationPolicy,
     ) -> Option<String> {
         let mut kitty_output_media_cache = kitty_output_media_cache.borrow_mut();
-        let name = kitty_output_media_cache
+        let name = match kitty_output_media_cache
             .create_shared_memory_for_asset(client_id, image_id, generation, asset_data)
-            .ok()?;
+        {
+            Ok(name) => name,
+            Err(error) => {
+                log::debug!(
+                    target: "zellij::kitty_images",
+                    "kitty shared-memory output failed for client {client_id}, image {image_id}, generation {generation}: {error}"
+                );
+                return None;
+            },
+        };
         let quiet = upload_policy.quiet_and_track_upload(
             &mut kitty_output_media_cache,
             client_id,

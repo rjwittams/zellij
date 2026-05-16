@@ -5906,6 +5906,7 @@ fn mark_kitty_capabilities_supported(
             transports,
         },
     );
+    screen.update_selected_kitty_output_transports_for_client(client_id);
 }
 
 #[test]
@@ -6278,6 +6279,122 @@ fn kitty_capability_transport_success_adds_transport_after_barrier() {
         ]
     );
     assert!(capture.drain_targeted_forward_queries().is_empty());
+}
+
+#[test]
+fn kitty_capability_completion_updates_cached_selected_transports() {
+    let (mut screen, capture) = create_new_screen_with_forward_capture(Size { cols: 80, rows: 20 });
+    screen.kitty_image_output_transports = vec![
+        KittyImageOutputTransport::TemporaryFile,
+        KittyImageOutputTransport::Direct,
+    ];
+    screen.connected_clients.borrow_mut().insert(1, false);
+
+    let mut output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+    screen.configure_kitty_file_output_for_regular_clients(&mut output);
+    let direct_probe = capture.drain_targeted_forward_queries();
+    screen.handle_kitty_image_terminal_response(b"Gi=1;OK", 1);
+    screen
+        .handle_forwarded_reply_from_host(direct_probe[0].1, Vec::new())
+        .unwrap();
+
+    assert_eq!(
+        screen.selected_kitty_output_transports_for_client(1),
+        &[KittyImageOutputTransport::Direct],
+        "direct success should immediately select the currently known effective transport"
+    );
+    let temp_probe = capture.drain_targeted_forward_queries();
+    screen.handle_kitty_image_terminal_response(b"Gi=2;OK", 1);
+    screen
+        .handle_forwarded_reply_from_host(temp_probe[0].1, Vec::new())
+        .unwrap();
+
+    assert_eq!(
+        screen.selected_kitty_output_transports_for_client(1),
+        &[
+            KittyImageOutputTransport::TemporaryFile,
+            KittyImageOutputTransport::Direct,
+        ],
+        "later transport probe success should update the cached selected transport list"
+    );
+}
+
+#[test]
+fn render_configuration_uses_cached_selected_transports() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    screen.kitty_image_output_transports = vec![
+        KittyImageOutputTransport::TemporaryFile,
+        KittyImageOutputTransport::Direct,
+    ];
+    screen.connected_clients.borrow_mut().insert(1, false);
+    screen.kitty_client_graphics_capabilities.insert(
+        1,
+        super::KittyClientGraphicsCapabilities {
+            protocol: super::KittyProtocolCapability::Supported,
+            transports: vec![
+                KittyImageOutputTransport::TemporaryFile,
+                KittyImageOutputTransport::Direct,
+            ],
+        },
+    );
+    screen
+        .selected_kitty_output_transports
+        .insert(1, vec![KittyImageOutputTransport::Direct]);
+
+    let chunk = test_kitty_chunk(77, 1);
+    screen.kitty_asset_store.borrow_mut().insert_asset(
+        chunk.image_id,
+        KittyImageData::Png {
+            data: vec![1, 2, 3, 4],
+            width: 1,
+            height: 1,
+        },
+    );
+
+    let mut output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+    output.add_clients(
+        &HashSet::from([1]),
+        Rc::new(RefCell::new(LinkHandler::new())),
+        None,
+    );
+    screen.configure_kitty_file_output_for_regular_clients(&mut output);
+    output.add_pane_image_output_to_client(
+        1,
+        PaneImageRenderOutput {
+            kitty_scene: KittyRenderBundle {
+                explicit_chunks: vec![chunk],
+                placeholder_renders: vec![],
+            },
+            ..Default::default()
+        },
+        None,
+    );
+
+    let serialized = output.serialize().unwrap();
+    let regular_client_output = serialized.get(&1).unwrap();
+    assert!(
+        regular_client_output.contains("AQIDBA=="),
+        "render config should use cached direct transport, not recompute temp-file from raw capabilities"
+    );
+    assert!(
+        !regular_client_output.contains("t=t;"),
+        "temp-file should not be selected until the cached selected transport list changes"
+    );
 }
 
 #[test]

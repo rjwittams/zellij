@@ -514,6 +514,24 @@ fn remove_client_and_flush_forwards(
 ) {
     let _ = os_input.remove_client(client_id);
     let stuck_tokens = session_state.write().unwrap().remove_client(client_id);
+    flush_stuck_forward_tokens(stuck_tokens, session_data);
+}
+
+fn remove_watcher_and_flush_forwards(
+    client_id: ClientId,
+    os_input: &mut Box<dyn ServerOsApi>,
+    session_state: &Arc<RwLock<SessionState>>,
+    session_data: &Arc<RwLock<Option<SessionMetaData>>>,
+) {
+    let _ = os_input.remove_client(client_id);
+    let stuck_tokens = session_state.write().unwrap().remove_watcher(client_id);
+    flush_stuck_forward_tokens(stuck_tokens, session_data);
+}
+
+fn flush_stuck_forward_tokens(
+    stuck_tokens: Vec<u32>,
+    session_data: &Arc<RwLock<Option<SessionMetaData>>>,
+) {
     if stuck_tokens.is_empty() {
         return;
     }
@@ -541,9 +559,13 @@ macro_rules! remove_client {
 }
 
 macro_rules! remove_watcher {
-    ($client_id:expr, $os_input:expr, $session_state:expr) => {
-        $os_input.remove_client($client_id).unwrap();
-        $session_state.write().unwrap().remove_watcher($client_id);
+    ($client_id:expr, $os_input:expr, $session_state:expr, $session_data:expr) => {
+        $crate::remove_watcher_and_flush_forwards(
+            $client_id,
+            &mut $os_input,
+            &$session_state,
+            &$session_data,
+        );
     };
 }
 
@@ -566,7 +588,11 @@ macro_rules! send_to_client {
             // Log it so it isn't lost
             Err::<(), _>(e).context(context).non_fatal();
             // failed to send to client, remove it
-            remove_client!($client_id, $os_input, $session_state, $session_data);
+            if $session_state.read().unwrap().is_watcher(&$client_id) {
+                remove_watcher!($client_id, $os_input, $session_state, $session_data);
+            } else {
+                remove_client!($client_id, $os_input, $session_state, $session_data);
+            }
         }
     };
 }
@@ -698,8 +724,18 @@ impl SessionState {
     pub fn is_watcher(&self, client_id: &ClientId) -> bool {
         self.watchers.get(client_id).is_some()
     }
-    pub fn remove_watcher(&mut self, client_id: ClientId) {
+    pub fn remove_watcher(&mut self, client_id: ClientId) -> Vec<u32> {
         self.watchers.remove(&client_id);
+        self.clear_last_active_client(client_id);
+        let stuck: Vec<u32> = self
+            .forwards_in_flight
+            .iter()
+            .filter_map(|(token, owner)| (*owner == client_id).then_some(*token))
+            .collect();
+        for token in &stuck {
+            self.forwards_in_flight.remove(token);
+        }
+        stuck
     }
     pub fn set_last_active_client(&mut self, client_id: ClientId) {
         self.last_active_client = Some(client_id);
@@ -732,7 +768,8 @@ impl SessionState {
     }
 
     pub fn pick_specific_forward_target(&self, client_id: ClientId) -> Option<ClientId> {
-        self.clients.contains_key(&client_id).then_some(client_id)
+        (self.clients.contains_key(&client_id) || self.watchers.contains_key(&client_id))
+            .then_some(client_id)
     }
 }
 
@@ -787,12 +824,25 @@ mod session_state_tests {
     }
 
     #[test]
-    fn pick_specific_forward_target_none_when_requested_client_is_not_regular() {
+    fn pick_specific_forward_target_accepts_requested_watcher() {
         let mut s = SessionState::new();
         s.clients.insert(1, None);
         s.convert_client_to_watcher(1, false);
 
-        assert_eq!(s.pick_specific_forward_target(1), None);
+        assert_eq!(s.pick_specific_forward_target(1), Some(1));
+    }
+
+    #[test]
+    fn remove_watcher_returns_stuck_forward_tokens() {
+        let mut s = SessionState::new();
+        s.clients.insert(1, None);
+        s.convert_client_to_watcher(1, false);
+        s.mark_forward_in_flight(10, 1);
+        s.clients.insert(2, None);
+        s.mark_forward_in_flight(11, 2);
+
+        assert_eq!(s.remove_watcher(1), vec![10]);
+        assert_eq!(s.forwards_in_flight.get(&11), Some(&2));
     }
 
     #[test]
@@ -1293,8 +1343,9 @@ pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
                 // Check if this is a watcher
                 let is_watcher = session_state.read().unwrap().is_watcher(&client_id);
                 if is_watcher {
-                    // Remove from SessionState watchers set
-                    session_state.write().unwrap().remove_watcher(client_id);
+                    // Remove from SessionState watchers set and release any
+                    // in-flight host-query forward held by this watcher.
+                    remove_watcher!(client_id, os_input, session_state, session_data);
 
                     // Also notify Screen to remove watcher
                     if let Some(session_data) = session_data.write().unwrap().as_ref() {
@@ -1302,8 +1353,6 @@ pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
                             .senders
                             .send_to_screen(ScreenInstruction::RemoveWatcherClient(client_id));
                     }
-
-                    os_input.remove_client(client_id).unwrap();
                 } else {
                     // Handle regular client removal
                     remove_client!(client_id, os_input, session_state, session_data);
@@ -1357,8 +1406,9 @@ pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
                 // Check if this is a watcher
                 let is_watcher = session_state.read().unwrap().is_watcher(&client_id);
                 if is_watcher {
-                    // Remove from SessionState watchers set
-                    session_state.write().unwrap().remove_watcher(client_id);
+                    // Remove from SessionState watchers set and release any
+                    // in-flight host-query forward held by this watcher.
+                    remove_watcher!(client_id, os_input, session_state, session_data);
 
                     // Also notify Screen to remove watcher
                     if let Some(session_data) = session_data.write().unwrap().as_ref() {
@@ -1366,8 +1416,6 @@ pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
                             .senders
                             .send_to_screen(ScreenInstruction::RemoveWatcherClient(client_id));
                     }
-
-                    os_input.remove_client(client_id).unwrap();
                 } else {
                     // Handle regular client removal
                     remove_client!(client_id, os_input, session_state, session_data);
@@ -1782,7 +1830,7 @@ pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
                                     exit_reason: ExitReason::WebClientsForbidden,
                                 },
                             );
-                            remove_watcher!(client_id, os_input, session_state);
+                            remove_watcher!(client_id, os_input, session_state, session_data);
                         }
 
                         session_data
