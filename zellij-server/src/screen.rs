@@ -1522,9 +1522,10 @@ impl Default for KittyClientGraphicsCapabilities {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum KittyProtocolCapability {
     Unknown,
+    Probing,
     Supported,
     Unsupported,
 }
@@ -2349,10 +2350,7 @@ impl Screen {
         let token = self.next_forward_token;
         // Skip over the reserved sentinel (0) on wrap; allocate a fresh
         // u32 for every forward.
-        self.next_forward_token = self.next_forward_token.wrapping_add(1);
-        if self.next_forward_token == STARTUP_SENTINEL_TOKEN {
-            self.next_forward_token = 1;
-        }
+        self.advance_forward_token();
         if self.forward_in_flight_token.is_some() {
             self.forward_queue.push_back(PendingForward {
                 token,
@@ -2363,6 +2361,19 @@ impl Screen {
             self.dispatch_forward(token, pane_id, query);
         }
         token
+    }
+
+    fn next_host_forward_token(&mut self) -> u32 {
+        let token = self.next_forward_token;
+        self.advance_forward_token();
+        token
+    }
+
+    fn advance_forward_token(&mut self) {
+        self.next_forward_token = self.next_forward_token.wrapping_add(1);
+        if self.next_forward_token == STARTUP_SENTINEL_TOKEN {
+            self.next_forward_token = 1;
+        }
     }
 
     /// Synthesise the DSR 997 reply to a `CSI ? 996 n` query from
@@ -2426,14 +2437,7 @@ impl Screen {
             .bus
             .senders
             .send_to_server(ServerInstruction::ForwardQueryToHost(token, query_bytes));
-        let senders = self.bus.senders.clone();
-        crate::global_async_runtime::get_tokio_runtime().spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(SERVER_FORWARD_TIMEOUT_MS)).await;
-            let _ = senders.send_to_screen(ScreenInstruction::ForwardedReplyFromHost {
-                token,
-                reply_bytes: Vec::new(),
-            });
-        });
+        self.schedule_forward_timeout(token);
     }
 
     fn dispatch_forward_query_bytes_to_client(
@@ -2450,6 +2454,17 @@ impl Screen {
                 token,
                 query_bytes,
             });
+    }
+
+    fn schedule_forward_timeout(&self, token: u32) {
+        let senders = self.bus.senders.clone();
+        crate::global_async_runtime::get_tokio_runtime().spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(SERVER_FORWARD_TIMEOUT_MS)).await;
+            let _ = senders.send_to_screen(ScreenInstruction::ForwardedReplyFromHost {
+                token,
+                reply_bytes: Vec::new(),
+            });
+        });
     }
 
     /// Handle a host-reply observed by the client for token `token`.
@@ -2699,12 +2714,22 @@ impl Screen {
         Ok(serialized_output.remove(&followed_client_id))
     }
 
-    fn configure_kitty_file_output_for_regular_clients(&self, output: &mut Output) {
+    fn configure_kitty_file_output_for_regular_clients(&mut self, output: &mut Output) {
         if self.kitty_image_output_transports.is_empty() {
             return;
         }
-        for (client_id, is_web_client) in self.connected_clients.borrow().iter() {
-            if !*is_web_client && !self.watcher_clients.contains_key(client_id) {
+        let regular_client_ids: Vec<ClientId> = self
+            .connected_clients
+            .borrow()
+            .iter()
+            .filter_map(|(client_id, is_web_client)| {
+                (!*is_web_client && !self.watcher_clients.contains_key(client_id))
+                    .then_some(*client_id)
+            })
+            .collect();
+        for client_id in regular_client_ids {
+            self.ensure_kitty_capability_probe_started(client_id);
+            {
                 let acknowledgement_policy = match self.kitty_image_file_lifetime {
                     KittyImageFileLifetime::GraceWindow => KittyUploadAcknowledgementPolicy::None,
                     KittyImageFileLifetime::Watermark => {
@@ -2712,16 +2737,16 @@ impl Screen {
                     },
                     KittyImageFileLifetime::AlwaysAck => KittyUploadAcknowledgementPolicy::Always,
                 };
-                let transports = self.effective_kitty_output_transports_for_client(*client_id);
-                output.set_kitty_output_transports_for_client(*client_id, transports.clone());
+                let transports = self.effective_kitty_output_transports_for_client(client_id);
+                output.set_kitty_output_transports_for_client(client_id, transports.clone());
                 if transports.is_empty() {
                     output.set_kitty_upload_acknowledgement_policy_for_client(
-                        *client_id,
+                        client_id,
                         KittyUploadAcknowledgementPolicy::None,
                     );
                 } else {
                     output.set_kitty_upload_acknowledgement_policy_for_client(
-                        *client_id,
+                        client_id,
                         acknowledgement_policy,
                     );
                 }
@@ -2744,6 +2769,45 @@ impl Screen {
             .copied()
             .filter(|transport| capabilities.transports.contains(transport))
             .collect()
+    }
+
+    fn ensure_kitty_capability_probe_started(&mut self, client_id: ClientId) {
+        if self.forward_in_flight_token.is_some() {
+            return;
+        }
+        let protocol = self
+            .kitty_client_graphics_capabilities
+            .get(&client_id)
+            .map(|capability| capability.protocol)
+            .unwrap_or(KittyProtocolCapability::Unknown);
+        if protocol != KittyProtocolCapability::Unknown {
+            return;
+        }
+        self.kitty_client_graphics_capabilities
+            .entry(client_id)
+            .or_default()
+            .protocol = KittyProtocolCapability::Probing;
+        let probe_image_id = self.next_kitty_capability_probe_image_id();
+        let Some(query_bytes) = build_kitty_capability_probe_bytes(
+            probe_image_id,
+            KittyCapabilityProbeTransport::Direct,
+            None,
+        ) else {
+            self.kitty_client_graphics_capabilities
+                .entry(client_id)
+                .or_default()
+                .protocol = KittyProtocolCapability::Unsupported;
+            return;
+        };
+        let token = self.next_host_forward_token();
+        self.register_pending_kitty_capability_probe(
+            token,
+            client_id,
+            probe_image_id,
+            KittyCapabilityProbeTransport::Direct,
+        );
+        self.dispatch_forward_query_bytes_to_client(client_id, token, query_bytes);
+        self.schedule_forward_timeout(token);
     }
 
     fn reap_stale_kitty_output_media_files(&mut self) {

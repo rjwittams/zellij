@@ -6123,6 +6123,57 @@ fn screen_disables_kitty_output_without_supported_configured_transport() {
 }
 
 #[test]
+fn screen_starts_direct_kitty_capability_probe_for_unknown_regular_client() {
+    let (mut screen, capture) = create_new_screen_with_forward_capture(Size { cols: 80, rows: 20 });
+    screen.connected_clients.borrow_mut().insert(1, false);
+
+    let mut output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+
+    screen.configure_kitty_file_output_for_regular_clients(&mut output);
+
+    let forwards = capture.drain_targeted_forward_queries();
+    assert_eq!(forwards.len(), 1);
+    assert_eq!(forwards[0].0, 1);
+    let probe = String::from_utf8(forwards[0].2.clone()).unwrap();
+    assert!(probe.contains("a=q"));
+    assert!(probe.contains("t=d"));
+    assert_eq!(
+        screen.kitty_client_graphics_capabilities(1).protocol,
+        super::KittyProtocolCapability::Probing
+    );
+}
+
+#[test]
+fn screen_does_not_start_kitty_capability_probe_for_web_client() {
+    let (mut screen, capture) = create_new_screen_with_forward_capture(Size { cols: 80, rows: 20 });
+    screen.connected_clients.borrow_mut().insert(1, true);
+
+    let mut output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+
+    screen.configure_kitty_file_output_for_regular_clients(&mut output);
+
+    assert!(capture.drain_targeted_forward_queries().is_empty());
+    assert_eq!(
+        screen.kitty_client_graphics_capabilities(1).protocol,
+        super::KittyProtocolCapability::Unknown
+    );
+}
+
+#[test]
 fn watcher_helper_round_trips_followed_client_image_state() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);
