@@ -2503,9 +2503,33 @@ impl Screen {
             );
             return Ok(());
         }
+        let had_effective_kitty_output_transport = self
+            .pending_kitty_capability_probes
+            .get(&token)
+            .map(|probe| {
+                !self
+                    .effective_kitty_output_transports_for_client(probe.client_id)
+                    .is_empty()
+            })
+            .unwrap_or(false);
         if let Some(client_id) = self.finalize_pending_kitty_capability_probe(token) {
+            let effective_transports = self.effective_kitty_output_transports_for_client(client_id);
+            let should_render_newly_enabled_kitty_output = self
+                .regular_last_rendered_image_state
+                .contains_key(&client_id)
+                && !had_effective_kitty_output_transport
+                && !effective_transports.is_empty();
             self.release_forward_slot_and_dispatch_next();
             self.start_next_kitty_capability_transport_probe(client_id);
+            if should_render_newly_enabled_kitty_output {
+                self.regular_last_rendered_image_state.remove(&client_id);
+                if let Some(active_tab_id) = self.active_tab_ids.get(&client_id).copied() {
+                    if let Some(tab) = self.tabs.get_mut(&active_tab_id) {
+                        tab.set_force_render();
+                    }
+                }
+                self.render(None)?;
+            }
             return Ok(());
         }
         if let Some(entry) = self.pending_forwarded_queries.remove(&token) {

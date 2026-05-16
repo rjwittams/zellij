@@ -193,6 +193,16 @@ fn kitty_retransmit_rgba_with_payload(
     format!("\u{1b}_Ga=t,f=32,s={width},v={height},i={image_id};{payload_b64}\u{1b}\\").into_bytes()
 }
 
+fn kitty_probe_image_id_from_query_bytes(query_bytes: &[u8]) -> u32 {
+    let probe_text = String::from_utf8(query_bytes.to_vec()).unwrap();
+    probe_text
+        .split([',', ';'])
+        .find_map(|part| part.trim_start_matches("\u{1b}_G").strip_prefix("i="))
+        .unwrap()
+        .parse::<u32>()
+        .unwrap()
+}
+
 fn kitty_display_placement(image_id: u32, placement_id: u32, cols: u32, rows: u32) -> Vec<u8> {
     format!("\u{1b}_Ga=p,i={image_id},p={placement_id},c={cols},r={rows}\u{1b}\\").into_bytes()
 }
@@ -6257,6 +6267,75 @@ fn kitty_capability_transport_success_adds_transport_after_barrier() {
 }
 
 #[test]
+fn kitty_capability_completion_forces_render_of_previously_suppressed_images() {
+    let size = Size { cols: 80, rows: 20 };
+    let (mut screen, capture) = create_new_screen_with_forward_capture(size);
+    screen.connected_clients.borrow_mut().insert(1, false);
+    new_tab(&mut screen, 1, 0);
+
+    let image_bytes = b"\x1b_Ga=T,f=24,s=1,v=1,c=1,r=1,i=88;AAAA\x1b\\".to_vec();
+    screen
+        .get_active_tab_mut(1)
+        .unwrap()
+        .handle_pty_bytes(1, image_bytes)
+        .unwrap();
+
+    screen.render_to_clients().unwrap();
+    let first_instructions = capture.drain_server_instructions();
+    let first_render = first_instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            ServerInstruction::Render(Some(output)) => output.get(&1).cloned(),
+            _ => None,
+        })
+        .unwrap_or_default();
+    let direct_probe = first_instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            ServerInstruction::ForwardQueryToHostForClient {
+                client_id,
+                token,
+                query_bytes,
+            } if *client_id == 1 => Some((*token, query_bytes.clone())),
+            _ => None,
+        })
+        .expect("initial render should start a direct capability probe");
+    let probe_image_id = kitty_probe_image_id_from_query_bytes(&direct_probe.1);
+
+    assert!(
+        !first_render.contains("a=t") && !first_render.contains("a=p"),
+        "kitty output should be suppressed until the client probe succeeds"
+    );
+    capture.drain_render_to_clients_requests();
+
+    screen.handle_kitty_image_terminal_response(format!("Gi={probe_image_id};OK").as_bytes(), 1);
+    screen
+        .handle_forwarded_reply_from_host(direct_probe.0, Vec::new())
+        .unwrap();
+
+    assert_eq!(
+        capture.drain_render_to_clients_requests(),
+        1,
+        "capability completion should schedule a fresh render"
+    );
+
+    screen.render_to_clients().unwrap();
+    let second_render = capture
+        .drain_server_instructions()
+        .into_iter()
+        .find_map(|instruction| match instruction {
+            ServerInstruction::Render(Some(output)) => output.get(&1).cloned(),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    assert!(
+        second_render.contains("\u{1b}_G") && second_render.contains("a=t"),
+        "forced render should emit the previously suppressed kitty image, got: {second_render:?}"
+    );
+}
+
+#[test]
 fn watcher_helper_round_trips_followed_client_image_state() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);
@@ -7434,6 +7513,39 @@ fn screen_kitty_shared_asset_replace_emits_updated_payloads() {
                 text_area_size: None,
             },
         ));
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::RenderToClients);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let (probe_token, probe_image_id) = {
+        let server_instructions = received_server_instructions.lock().unwrap();
+        server_instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                ServerInstruction::ForwardQueryToHostForClient {
+                    client_id,
+                    token,
+                    query_bytes,
+                } if *client_id == 1 => {
+                    Some((*token, kitty_probe_image_id_from_query_bytes(query_bytes)))
+                },
+                _ => None,
+            })
+            .expect("screen render should start a kitty capability probe")
+    };
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::KittyImageTerminalResponse(
+            format!("Gi={probe_image_id};OK").into_bytes(),
+            1,
+        ));
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::ForwardedReplyFromHost {
+            token: probe_token,
+            reply_bytes: Vec::new(),
+        });
     std::thread::sleep(std::time::Duration::from_millis(100));
 
     let mut initial_burst =
@@ -9839,9 +9951,18 @@ pub fn pty_bytes_and_hold_pane_buffered_before_new_pane() {
 struct ForwardCapture {
     server_rx: Receiver<(ServerInstruction, ErrorContext)>,
     pty_writer_rx: Receiver<(PtyWriteInstruction, ErrorContext)>,
+    background_jobs_rx: Receiver<(BackgroundJob, ErrorContext)>,
 }
 
 impl ForwardCapture {
+    fn drain_server_instructions(&self) -> Vec<ServerInstruction> {
+        let mut out = Vec::new();
+        while let Ok((instr, _ctx)) = self.server_rx.try_recv() {
+            out.push(instr);
+        }
+        out
+    }
+
     /// Drain every pending `ServerInstruction::ForwardQueryToHost` and
     /// return them as `(token, query_bytes)` pairs. Other variants are
     /// dropped — the forward path only ever emits this one.
@@ -9870,6 +9991,16 @@ impl ForwardCapture {
         out
     }
 
+    fn drain_render_to_clients_requests(&self) -> usize {
+        let mut count = 0;
+        while let Ok((instr, _ctx)) = self.background_jobs_rx.try_recv() {
+            if matches!(instr, BackgroundJob::RenderToClients) {
+                count += 1;
+            }
+        }
+        count
+    }
+
     /// Drain every pending `PtyWriteInstruction::Write`, returning
     /// `(bytes, terminal_id)` — the two fields the reply path sets.
     fn drain_pty_writes(&self) -> Vec<(Vec<u8>, u32)> {
@@ -9887,10 +10018,13 @@ fn create_new_screen_with_forward_capture(size: Size) -> (Screen, ForwardCapture
     let (server_tx, server_rx) = channels::unbounded::<(ServerInstruction, ErrorContext)>();
     let (pty_writer_tx, pty_writer_rx) =
         channels::unbounded::<(PtyWriteInstruction, ErrorContext)>();
+    let (background_jobs_tx, background_jobs_rx) =
+        channels::unbounded::<(BackgroundJob, ErrorContext)>();
 
     let mut bus: Bus<ScreenInstruction> = Bus::empty();
     bus.senders.to_server = Some(SenderWithContext::new(server_tx));
     bus.senders.to_pty_writer = Some(SenderWithContext::new(pty_writer_tx));
+    bus.senders.to_background_jobs = Some(SenderWithContext::new(background_jobs_tx));
     let fake_os_input = FakeInputOutput::default();
     bus.os_input = Some(Box::new(fake_os_input));
 
@@ -9962,6 +10096,7 @@ fn create_new_screen_with_forward_capture(size: Size) -> (Screen, ForwardCapture
         ForwardCapture {
             server_rx,
             pty_writer_rx,
+            background_jobs_rx,
         },
     )
 }
