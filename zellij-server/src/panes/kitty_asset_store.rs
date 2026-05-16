@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::output::KittyImageData;
+use crate::{output::KittyImageData, panes::kitty_image_id_allocator::KittyHostImageIdAllocator};
 
 const KITTY_TEMP_FILE_MARKER: &str = "tty-graphics-protocol";
 
@@ -443,7 +443,7 @@ pub struct KittyAsset {
 
 #[derive(Clone, Debug)]
 pub struct KittyAssetStore {
-    next_asset_id: u32,
+    image_id_allocator: KittyHostImageIdAllocator,
     assets: HashMap<u32, KittyAsset>,
     asset_order: Vec<u32>,
     placement_ref_counts: HashMap<u32, usize>,
@@ -454,7 +454,7 @@ pub struct KittyAssetStore {
 impl Default for KittyAssetStore {
     fn default() -> Self {
         Self {
-            next_asset_id: 1,
+            image_id_allocator: KittyHostImageIdAllocator::default(),
             assets: HashMap::new(),
             asset_order: Vec::new(),
             placement_ref_counts: HashMap::new(),
@@ -474,18 +474,11 @@ impl KittyAssetStore {
     }
 
     pub fn next_asset_id(&mut self) -> Option<u32> {
-        let start = self.next_asset_id.max(1);
-        let mut candidate = start;
-        loop {
-            self.next_asset_id = candidate.wrapping_add(1).max(1);
-            if !self.assets.contains_key(&candidate) && !self.has_placement_references(candidate) {
-                return Some(candidate);
-            }
-            candidate = self.next_asset_id;
-            if candidate == start {
-                return None;
-            }
-        }
+        Some(self.next_host_image_id())
+    }
+
+    pub fn next_host_image_id(&mut self) -> u32 {
+        self.image_id_allocator.next()
     }
 
     pub fn insert_asset(&mut self, image_id: u32, image_data: KittyImageData) -> Vec<u32> {
@@ -701,13 +694,12 @@ mod tests {
     }
 
     #[test]
-    fn next_asset_id_wraps_and_skips_live_asset_ids() {
+    fn next_asset_id_wraps_without_returning_zero() {
         let mut store = KittyAssetStore::default();
-        store.next_asset_id = u32::MAX;
-        store.insert_asset(u32::MAX, rgba(1, 1));
-        store.insert_asset(1, rgba(1, 1));
+        store.image_id_allocator = KittyHostImageIdAllocator::new(u32::MAX);
 
-        assert_eq!(store.next_asset_id(), Some(2));
+        assert_eq!(store.next_asset_id(), Some(u32::MAX));
+        assert_eq!(store.next_asset_id(), Some(1));
     }
 
     #[test]

@@ -5551,6 +5551,101 @@ fn test_kitty_chunk(image_id: u32, placement_id: u32) -> KittyImageChunk {
 }
 
 #[test]
+fn kitty_capability_probe_serializes_direct_query() {
+    let probe = super::build_kitty_capability_probe_bytes(
+        41,
+        super::KittyCapabilityProbeTransport::Direct,
+        None,
+    )
+    .expect("direct probe should not need external media");
+    let probe = String::from_utf8(probe).expect("probe should be utf8 APC bytes");
+
+    assert!(probe.starts_with("\u{1b}_G"));
+    assert!(probe.ends_with("\u{1b}\\"));
+    assert!(probe.contains("i=41"));
+    assert!(probe.contains("a=q"));
+    assert!(probe.contains("t=d"));
+    assert!(probe.contains("f=24"));
+    assert!(probe.contains("s=1"));
+    assert!(probe.contains("v=1"));
+    assert!(probe.contains(";AAAA"));
+}
+
+#[test]
+fn kitty_capability_probe_serializes_regular_file_query() {
+    let probe = super::build_kitty_capability_probe_bytes(
+        42,
+        super::KittyCapabilityProbeTransport::OutputTransport(KittyImageOutputTransport::File),
+        Some("/tmp/kitty-probe-rgb"),
+    )
+    .expect("file probe should serialize with media ref");
+    let probe = String::from_utf8(probe).expect("probe should be utf8 APC bytes");
+
+    assert!(probe.contains("i=42"));
+    assert!(probe.contains("a=q"));
+    assert!(probe.contains("t=f"));
+    assert!(probe.contains("f=24"));
+    assert!(probe.contains("s=1"));
+    assert!(probe.contains("v=1"));
+    assert!(probe.contains("S=3"));
+    assert!(probe.contains("O=0"));
+    assert!(probe.contains(&base64::encode("/tmp/kitty-probe-rgb")));
+}
+
+#[test]
+fn kitty_capability_probe_serializes_temporary_file_query() {
+    let probe = super::build_kitty_capability_probe_bytes(
+        43,
+        super::KittyCapabilityProbeTransport::OutputTransport(
+            KittyImageOutputTransport::TemporaryFile,
+        ),
+        Some("/tmp/tty-graphics-protocol/kitty-probe-rgb"),
+    )
+    .expect("temp-file probe should serialize with media ref");
+    let probe = String::from_utf8(probe).expect("probe should be utf8 APC bytes");
+
+    assert!(probe.contains("i=43"));
+    assert!(probe.contains("a=q"));
+    assert!(probe.contains("t=t"));
+    assert!(probe.contains(&base64::encode(
+        "/tmp/tty-graphics-protocol/kitty-probe-rgb"
+    )));
+}
+
+#[test]
+fn kitty_capability_probe_serializes_shared_memory_query() {
+    let probe = super::build_kitty_capability_probe_bytes(
+        44,
+        super::KittyCapabilityProbeTransport::OutputTransport(
+            KittyImageOutputTransport::SharedMemory,
+        ),
+        Some("/zellij-kitty-probe"),
+    )
+    .expect("shared-memory probe should serialize with media ref");
+    let probe = String::from_utf8(probe).expect("probe should be utf8 APC bytes");
+
+    assert!(probe.contains("i=44"));
+    assert!(probe.contains("a=q"));
+    assert!(probe.contains("t=s"));
+    assert!(probe.contains(&base64::encode("/zellij-kitty-probe")));
+}
+
+#[test]
+fn kitty_capability_probe_ids_share_host_image_id_allocator() {
+    let mut screen = create_new_screen(Size { cols: 80, rows: 20 }, true, true);
+
+    let probe_id = screen.next_kitty_capability_probe_image_id();
+    let asset_id = screen
+        .kitty_asset_store
+        .borrow_mut()
+        .next_asset_id()
+        .expect("host image id allocation should be available");
+
+    assert_eq!(probe_id, 1);
+    assert_eq!(asset_id, 2);
+}
+
+#[test]
 fn screen_enables_kitty_file_transport_for_regular_clients_only() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);

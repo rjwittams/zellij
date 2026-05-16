@@ -1494,6 +1494,41 @@ struct PendingForward {
     query: crate::host_query::HostQuery,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum KittyCapabilityProbeTransport {
+    Direct,
+    OutputTransport(KittyImageOutputTransport),
+}
+
+fn build_kitty_capability_probe_bytes(
+    probe_image_id: u32,
+    transport: KittyCapabilityProbeTransport,
+    media_ref: Option<&str>,
+) -> Option<Vec<u8>> {
+    let mut command = String::from("\u{1b}_G");
+    match transport {
+        KittyCapabilityProbeTransport::Direct
+        | KittyCapabilityProbeTransport::OutputTransport(KittyImageOutputTransport::Direct) => {
+            command.push_str(&format!("i={probe_image_id},s=1,v=1,a=q,t=d,f=24;AAAA"));
+        },
+        KittyCapabilityProbeTransport::OutputTransport(output_transport) => {
+            let medium = match output_transport {
+                KittyImageOutputTransport::File => "f",
+                KittyImageOutputTransport::TemporaryFile => "t",
+                KittyImageOutputTransport::SharedMemory => "s",
+                KittyImageOutputTransport::Direct => unreachable!(),
+            };
+            let media_ref = media_ref?;
+            command.push_str(&format!(
+                "i={probe_image_id},s=1,v=1,a=q,t={medium},f=24,S=3,O=0;{}",
+                base64::encode(media_ref.as_bytes())
+            ));
+        },
+    }
+    command.push_str("\u{1b}\\");
+    Some(command.into_bytes())
+}
+
 /// A forward currently in flight (dispatched to the client, waiting
 /// for a reply). Retains the `HostQuery` classification so we can
 /// fall back to cache-synthesized replies when the live reply is
@@ -2640,6 +2675,10 @@ impl Screen {
             response.is_ok,
             response.message,
         );
+    }
+
+    fn next_kitty_capability_probe_image_id(&mut self) -> u32 {
+        self.kitty_asset_store.borrow_mut().next_host_image_id()
     }
 
     pub fn render_to_clients(&mut self) -> Result<()> {
