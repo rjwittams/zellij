@@ -2712,16 +2712,38 @@ impl Screen {
                     },
                     KittyImageFileLifetime::AlwaysAck => KittyUploadAcknowledgementPolicy::Always,
                 };
-                output.set_kitty_output_transports_for_client(
-                    *client_id,
-                    self.kitty_image_output_transports.clone(),
-                );
-                output.set_kitty_upload_acknowledgement_policy_for_client(
-                    *client_id,
-                    acknowledgement_policy,
-                );
+                let transports = self.effective_kitty_output_transports_for_client(*client_id);
+                output.set_kitty_output_transports_for_client(*client_id, transports.clone());
+                if transports.is_empty() {
+                    output.set_kitty_upload_acknowledgement_policy_for_client(
+                        *client_id,
+                        KittyUploadAcknowledgementPolicy::None,
+                    );
+                } else {
+                    output.set_kitty_upload_acknowledgement_policy_for_client(
+                        *client_id,
+                        acknowledgement_policy,
+                    );
+                }
             }
         }
+    }
+
+    fn effective_kitty_output_transports_for_client(
+        &self,
+        client_id: ClientId,
+    ) -> Vec<KittyImageOutputTransport> {
+        let Some(capabilities) = self.kitty_client_graphics_capabilities.get(&client_id) else {
+            return Vec::new();
+        };
+        if capabilities.protocol != KittyProtocolCapability::Supported {
+            return Vec::new();
+        }
+        self.kitty_image_output_transports
+            .iter()
+            .copied()
+            .filter(|transport| capabilities.transports.contains(transport))
+            .collect()
     }
 
     fn reap_stale_kitty_output_media_files(&mut self) {

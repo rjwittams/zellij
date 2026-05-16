@@ -298,6 +298,7 @@ impl ClientImageRenderState {
 pub(crate) struct ImageOutput {
     client_image_states: HashMap<ClientId, ClientImageRenderState>,
     client_kitty_output_transports: HashMap<ClientId, Vec<KittyImageOutputTransport>>,
+    kitty_output_disabled_clients: HashSet<ClientId>,
     kitty_upload_acknowledgement_policies: HashMap<ClientId, KittyUploadAcknowledgementPolicy>,
     pub(crate) sixel_image_store: Rc<RefCell<SixelImageStore>>,
     pub(crate) kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
@@ -413,6 +414,7 @@ impl ImageOutput {
             );
         } else {
             self.client_kitty_output_transports.remove(&client_id);
+            self.kitty_output_disabled_clients.remove(&client_id);
             self.kitty_upload_acknowledgement_policies
                 .remove(&client_id);
         }
@@ -425,7 +427,9 @@ impl ImageOutput {
     ) {
         if transports.is_empty() {
             self.client_kitty_output_transports.remove(&client_id);
+            self.kitty_output_disabled_clients.insert(client_id);
         } else {
+            self.kitty_output_disabled_clients.remove(&client_id);
             self.client_kitty_output_transports
                 .insert(client_id, transports);
         }
@@ -467,6 +471,9 @@ impl ImageOutput {
         &self,
         client_id: ClientId,
     ) -> &[KittyImageOutputTransport] {
+        if self.kitty_output_disabled_clients.contains(&client_id) {
+            return &[];
+        }
         self.client_kitty_output_transports
             .get(&client_id)
             .map(|transports| transports.as_slice())
@@ -637,6 +644,12 @@ impl ImageOutput {
     }
 
     fn serialize_kitty_plan(&mut self, client_id: ClientId, kitty_plan: &KittyScenePlan) -> String {
+        if self
+            .kitty_output_transports_for_client(client_id)
+            .is_empty()
+        {
+            return String::new();
+        }
         let acknowledgement_policy = self.kitty_upload_acknowledgement_policy(client_id);
         match kitty_plan {
             KittyScenePlan::Diff {
@@ -727,6 +740,9 @@ impl ImageOutput {
         asset_data: &mut crate::panes::kitty_asset_store::KittyAssetData,
         upload_policy: KittyUploadSerializationPolicy,
     ) -> String {
+        if kitty_output_transports.is_empty() {
+            return String::new();
+        }
         for transport in kitty_output_transports {
             match transport {
                 KittyImageOutputTransport::File => {
