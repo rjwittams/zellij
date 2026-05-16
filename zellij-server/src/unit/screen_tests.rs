@@ -9352,6 +9352,21 @@ impl ForwardCapture {
         out
     }
 
+    fn drain_targeted_forward_queries(&self) -> Vec<(ClientId, u32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Ok((instr, _ctx)) = self.server_rx.try_recv() {
+            if let ServerInstruction::ForwardQueryToHostForClient {
+                client_id,
+                token,
+                query_bytes,
+            } = instr
+            {
+                out.push((client_id, token, query_bytes));
+            }
+        }
+        out
+    }
+
     /// Drain every pending `PtyWriteInstruction::Write`, returning
     /// `(bytes, terminal_id)` — the two fields the reply path sets.
     fn drain_pty_writes(&self) -> Vec<(Vec<u8>, u32)> {
@@ -9502,6 +9517,18 @@ fn forward_host_query_when_idle_dispatches_immediately() {
         forwards[0],
         (token, query.to_query_bytes()),
         "wire bytes must be derived from the HostQuery"
+    );
+}
+
+#[test]
+fn forward_host_query_to_client_dispatches_targeted_server_instruction() {
+    let (screen, capture) = create_new_screen_with_forward_capture(Size { cols: 80, rows: 20 });
+
+    screen.dispatch_forward_query_bytes_to_client(7, 42, b"probe".to_vec());
+
+    assert_eq!(
+        capture.drain_targeted_forward_queries(),
+        vec![(7, 42, b"probe".to_vec())]
     );
 }
 

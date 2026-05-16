@@ -2338,6 +2338,22 @@ impl Screen {
         });
     }
 
+    fn dispatch_forward_query_bytes_to_client(
+        &self,
+        client_id: ClientId,
+        token: u32,
+        query_bytes: Vec<u8>,
+    ) {
+        let _ = self
+            .bus
+            .senders
+            .send_to_server(ServerInstruction::ForwardQueryToHostForClient {
+                client_id,
+                token,
+                query_bytes,
+            });
+    }
+
     /// Handle a host-reply observed by the client for token `token`.
     /// Writes the bytes to the originating pane's pty (if still present)
     /// and releases the in-flight slot so the next queued forward can

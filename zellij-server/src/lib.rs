@@ -136,6 +136,13 @@ pub enum ServerInstruction {
     /// loop. The main loop writes `ServerToClientMsg::ForwardQueryToHost`
     /// to any connected regular client.
     ForwardQueryToHost(u32, Vec<u8>),
+    /// Relay a forwarded-query dispatch to a specific connected regular
+    /// client. Used for per-client host capability probing.
+    ForwardQueryToHostForClient {
+        client_id: ClientId,
+        token: u32,
+        query_bytes: Vec<u8>,
+    },
 }
 
 impl From<&ServerInstruction> for ServerContext {
@@ -184,7 +191,10 @@ impl From<&ServerInstruction> for ServerContext {
                 ServerContext::SendWebClientsForbidden
             },
             ServerInstruction::ClearMouseHelpText(..) => ServerContext::ClearMouseHelpText,
-            ServerInstruction::ForwardQueryToHost(..) => ServerContext::ForwardQueryToHost,
+            ServerInstruction::ForwardQueryToHost(..)
+            | ServerInstruction::ForwardQueryToHostForClient { .. } => {
+                ServerContext::ForwardQueryToHost
+            },
         }
     }
 }
@@ -720,6 +730,10 @@ impl SessionState {
         }
         self.clients.keys().copied().next()
     }
+
+    pub fn pick_specific_forward_target(&self, client_id: ClientId) -> Option<ClientId> {
+        self.clients.contains_key(&client_id).then_some(client_id)
+    }
 }
 
 #[cfg(test)]
@@ -760,6 +774,25 @@ mod session_state_tests {
     fn pick_forward_target_none_when_no_clients() {
         let s = SessionState::new();
         assert_eq!(s.pick_forward_target(), None);
+    }
+
+    #[test]
+    fn pick_specific_forward_target_uses_requested_connected_client() {
+        let mut s = SessionState::new();
+        s.clients.insert(1, None);
+        s.clients.insert(2, None);
+        s.set_last_active_client(1);
+
+        assert_eq!(s.pick_specific_forward_target(2), Some(2));
+    }
+
+    #[test]
+    fn pick_specific_forward_target_none_when_requested_client_is_not_regular() {
+        let mut s = SessionState::new();
+        s.clients.insert(1, None);
+        s.convert_client_to_watcher(1, false);
+
+        assert_eq!(s.pick_specific_forward_target(1), None);
     }
 
     #[test]
@@ -1830,6 +1863,43 @@ pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
                     log::warn!(
                         "No connected client to forward host query (token={}); returning empty reply",
                         token
+                    );
+                    if let Some(session) = session_data.read().unwrap().as_ref() {
+                        let _ = session.senders.send_to_screen(
+                            ScreenInstruction::ForwardedReplyFromHost {
+                                token,
+                                reply_bytes: Vec::new(),
+                            },
+                        );
+                    }
+                }
+            },
+            ServerInstruction::ForwardQueryToHostForClient {
+                client_id,
+                token,
+                query_bytes,
+            } => {
+                let target_client_id = {
+                    let mut session = session_state.write().unwrap();
+                    let picked = session.pick_specific_forward_target(client_id);
+                    if let Some(cid) = picked {
+                        session.mark_forward_in_flight(token, cid);
+                    }
+                    picked
+                };
+                if let Some(client_id) = target_client_id {
+                    send_to_client!(
+                        client_id,
+                        os_input,
+                        ServerToClientMsg::ForwardQueryToHost { token, query_bytes },
+                        session_state,
+                        session_data
+                    );
+                } else {
+                    log::warn!(
+                        "No connected target client to forward host query (token={}, client_id={}); returning empty reply",
+                        token,
+                        client_id
                     );
                     if let Some(session) = session_data.read().unwrap().as_ref() {
                         let _ = session.senders.send_to_screen(
