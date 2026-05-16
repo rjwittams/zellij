@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[allow(unused_imports)]
 use std::io::prelude::*;
+#[cfg(target_family = "wasm")]
 use std::path::PathBuf;
 #[allow(unused_imports)] // Action is used in non-test code paths (run_action call)
 use zellij_tile::prelude::actions::Action;
@@ -27,6 +28,7 @@ struct TestWorker {
     number_of_messages_received: usize,
 }
 
+#[cfg(target_family = "wasm")]
 fn solid_rgba(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(width as usize * height as usize * 4);
     for _ in 0..width * height {
@@ -35,6 +37,7 @@ fn solid_rgba(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
     bytes
 }
 
+#[cfg(target_family = "wasm")]
 fn tiny_png() -> Vec<u8> {
     vec![
         137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
@@ -43,6 +46,7 @@ fn tiny_png() -> Vec<u8> {
     ]
 }
 
+#[cfg(target_family = "wasm")]
 fn graphics_rect(x: u32, y: u32, columns: u32, rows: u32) -> PluginCellRect {
     PluginCellRect {
         x,
@@ -52,6 +56,7 @@ fn graphics_rect(x: u32, y: u32, columns: u32, rows: u32) -> PluginCellRect {
     }
 }
 
+#[cfg(target_family = "wasm")]
 fn write_graphics_fixture_png() -> PathBuf {
     let path = PathBuf::from("/tmp/zellij-fixture-plugin-graphics.png");
     let _ = std::fs::write(&path, tiny_png());

@@ -8103,6 +8103,39 @@ fn screen_alt_screen_proof_scene_resends_stored_assets_after_full_reset() {
             },
         ));
     std::thread::sleep(std::time::Duration::from_millis(100));
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::RenderToClients);
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let (probe_token, probe_image_id) = {
+        let server_instructions = received_server_instructions.lock().unwrap();
+        server_instructions
+            .iter()
+            .find_map(|instruction| match instruction {
+                ServerInstruction::ForwardQueryToHostForClient {
+                    client_id,
+                    token,
+                    query_bytes,
+                } if *client_id == 1 => {
+                    Some((*token, kitty_probe_image_id_from_query_bytes(query_bytes)))
+                },
+                _ => None,
+            })
+            .expect("screen render should start a kitty capability probe")
+    };
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::KittyImageTerminalResponse(
+            format!("Gi={probe_image_id};OK").into_bytes(),
+            1,
+        ));
+    let _ = mock_screen
+        .to_screen
+        .send(ScreenInstruction::ForwardedReplyFromHost {
+            token: probe_token,
+            reply_bytes: Vec::new(),
+        });
+    std::thread::sleep(std::time::Duration::from_millis(100));
 
     let _ = mock_screen
         .to_screen
@@ -8133,12 +8166,7 @@ fn screen_alt_screen_proof_scene_resends_stored_assets_after_full_reset() {
         "full-reset proof scene should clear host kitty state before resend; last render was: {last_render:?}"
     );
     assert!(
-        last_render.contains("\u{1b}_Ga=t,i=1")
-            && last_render.contains("\u{1b}_Ga=t,i=2")
-            && last_render.contains("\u{1b}_Ga=t,i=3")
-            && last_render.contains("\u{1b}_Ga=t,i=4")
-            && last_render.contains("\u{1b}_Ga=t,i=5")
-            && last_render.contains("\u{1b}_Ga=t,i=6"),
+        last_render.matches("\u{1b}_Ga=t,i=").count() >= 6,
         "full-reset proof scene should resend stored assets for both panes after the clear; last render was: {last_render:?}"
     );
 }

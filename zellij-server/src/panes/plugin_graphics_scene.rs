@@ -242,7 +242,8 @@ impl PluginGraphicsScene {
         }
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
         self.assets.is_empty() && self.placements.is_empty()
     }
 }
