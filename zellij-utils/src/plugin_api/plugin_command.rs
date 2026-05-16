@@ -13,7 +13,9 @@ pub use super::generated_api::api::{
         get_focused_pane_info_response, get_pane_cwd_response, get_pane_pid_response,
         get_pane_running_command_response, get_session_list_response, hide_floating_panes_response,
         highlight_style::Style as ProtobufHighlightStyleVariant, new_tab_response,
-        parse_layout_response, plugin_command::Payload, rename_layout_response,
+        parse_layout_response, plugin_command::Payload,
+        plugin_graphics_op::Op as ProtobufPluginGraphicsOpVariant,
+        plugin_image_source::Source as ProtobufPluginImageSourceVariant, rename_layout_response,
         save_layout_response, save_session_response, show_floating_panes_response,
         BreakPanesToNewTabPayload,
         BreakPanesToNewTabResponse as ProtobufBreakPanesToNewTabResponse,
@@ -93,6 +95,18 @@ pub use super::generated_api::api::{
         OpenPluginPaneFloatingPayload,
         OpenPluginPaneFloatingResponse as ProtobufOpenPluginPaneFloatingResponse,
         OpenPluginPaneInNewTabPayload as ProtobufOpenPluginPaneInNewTabPayload,
+        PluginCellRect as ProtobufPluginCellRect,
+        PluginGraphicsClearAssets as ProtobufPluginGraphicsClearAssets,
+        PluginGraphicsClearPlacements as ProtobufPluginGraphicsClearPlacements,
+        PluginGraphicsDeleteAsset as ProtobufPluginGraphicsDeleteAsset,
+        PluginGraphicsDeletePlacement as ProtobufPluginGraphicsDeletePlacement,
+        PluginGraphicsOp as ProtobufPluginGraphicsOp,
+        PluginGraphicsPlaceImage as ProtobufPluginGraphicsPlaceImage,
+        PluginGraphicsSetAsset as ProtobufPluginGraphicsSetAsset,
+        PluginGraphicsUpdatePayload as ProtobufPluginGraphicsUpdatePayload,
+        PluginImageSource as ProtobufPluginImageSource,
+        PluginPixelRect as ProtobufPluginPixelRect,
+        PluginRgbaBytes as ProtobufPluginRgbaBytes,
         OpenTerminalFloatingNearPluginPayload,
         OpenTerminalFloatingNearPluginResponse as ProtobufOpenTerminalFloatingNearPluginResponse,
         OpenTerminalFloatingResponse as ProtobufOpenTerminalFloatingResponse,
@@ -136,7 +150,8 @@ use crate::data::{
     DeleteLayoutResponse, EditLayoutResponse, FloatingPaneCoordinates, GetFocusedPaneInfoResponse,
     GetPaneCwdResponse, GetPanePidResponse, GetPaneRunningCommandResponse, GetSessionListResponse,
     HighlightLayer, HighlightStyle, HttpVerb, InputMode, KeyWithModifier, KillSessionsResponse,
-    MessageToPlugin, NewPluginArgs, PaneId, PermissionType, PluginCommand, RegexHighlight,
+    MessageToPlugin, NewPluginArgs, PaneId, PermissionType, PluginCellRect, PluginCommand,
+    PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource, PluginPixelRect, RegexHighlight,
     RenameLayoutResponse, SaveLayoutResponse, SessionInfo, SessionListSnapshot,
 };
 use crate::input::actions::Action;
@@ -657,6 +672,170 @@ fn key_to_unbind_to_plugin_command_assets(
             .ok()?,
         key_to_unbind.key?.try_into().ok()?,
     ))
+}
+
+fn plugin_cell_rect_from_protobuf(rect: ProtobufPluginCellRect) -> PluginCellRect {
+    PluginCellRect {
+        x: rect.x,
+        y: rect.y,
+        columns: rect.columns,
+        rows: rect.rows,
+    }
+}
+
+fn plugin_pixel_rect_from_protobuf(rect: ProtobufPluginPixelRect) -> PluginPixelRect {
+    PluginPixelRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+fn protobuf_plugin_cell_rect(rect: PluginCellRect) -> ProtobufPluginCellRect {
+    ProtobufPluginCellRect {
+        x: rect.x,
+        y: rect.y,
+        columns: rect.columns,
+        rows: rect.rows,
+    }
+}
+
+fn protobuf_plugin_pixel_rect(rect: PluginPixelRect) -> ProtobufPluginPixelRect {
+    ProtobufPluginPixelRect {
+        x: rect.x,
+        y: rect.y,
+        width: rect.width,
+        height: rect.height,
+    }
+}
+
+fn plugin_image_source_from_protobuf(
+    source: ProtobufPluginImageSource,
+) -> Result<PluginImageSource, &'static str> {
+    match source.source {
+        Some(ProtobufPluginImageSourceVariant::PngBytes(bytes)) => {
+            Ok(PluginImageSource::PngBytes(bytes))
+        },
+        Some(ProtobufPluginImageSourceVariant::RgbaBytes(rgba)) => {
+            Ok(PluginImageSource::RgbaBytes {
+                width: rgba.width,
+                height: rgba.height,
+                bytes: rgba.bytes,
+            })
+        },
+        Some(ProtobufPluginImageSourceVariant::PngFile(path)) => {
+            Ok(PluginImageSource::PngFile(PathBuf::from(path)))
+        },
+        None => Err("missing plugin image source"),
+    }
+}
+
+fn protobuf_plugin_image_source(source: PluginImageSource) -> ProtobufPluginImageSource {
+    let source = match source {
+        PluginImageSource::PngBytes(bytes) => ProtobufPluginImageSourceVariant::PngBytes(bytes),
+        PluginImageSource::RgbaBytes {
+            width,
+            height,
+            bytes,
+        } => ProtobufPluginImageSourceVariant::RgbaBytes(ProtobufPluginRgbaBytes {
+            width,
+            height,
+            bytes,
+        }),
+        PluginImageSource::PngFile(path) => {
+            ProtobufPluginImageSourceVariant::PngFile(path.to_string_lossy().into_owned())
+        },
+    };
+    ProtobufPluginImageSource {
+        source: Some(source),
+    }
+}
+
+fn plugin_graphics_op_from_protobuf(
+    op: ProtobufPluginGraphicsOp,
+) -> Result<PluginGraphicsOp, &'static str> {
+    match op.op {
+        Some(ProtobufPluginGraphicsOpVariant::SetAsset(set_asset)) => {
+            Ok(PluginGraphicsOp::SetAsset {
+                asset_id: set_asset.asset_id,
+                source: plugin_image_source_from_protobuf(
+                    set_asset.source.ok_or("missing plugin image source")?,
+                )?,
+            })
+        },
+        Some(ProtobufPluginGraphicsOpVariant::DeleteAsset(delete_asset)) => {
+            Ok(PluginGraphicsOp::DeleteAsset {
+                asset_id: delete_asset.asset_id,
+            })
+        },
+        Some(ProtobufPluginGraphicsOpVariant::PlaceImage(place_image)) => {
+            Ok(PluginGraphicsOp::PlaceImage {
+                placement_id: place_image.placement_id,
+                asset_id: place_image.asset_id,
+                destination: plugin_cell_rect_from_protobuf(
+                    place_image.destination.ok_or("missing plugin image destination")?,
+                ),
+                source: place_image.source.map(plugin_pixel_rect_from_protobuf),
+                z_index: place_image.z_index,
+            })
+        },
+        Some(ProtobufPluginGraphicsOpVariant::DeletePlacement(delete_placement)) => {
+            Ok(PluginGraphicsOp::DeletePlacement {
+                placement_id: delete_placement.placement_id,
+            })
+        },
+        Some(ProtobufPluginGraphicsOpVariant::ClearPlacements(_)) => {
+            Ok(PluginGraphicsOp::ClearPlacements)
+        },
+        Some(ProtobufPluginGraphicsOpVariant::ClearAssets(_)) => {
+            Ok(PluginGraphicsOp::ClearAssets)
+        },
+        None => Err("missing plugin graphics op"),
+    }
+}
+
+fn protobuf_plugin_graphics_op(op: PluginGraphicsOp) -> ProtobufPluginGraphicsOp {
+    let op = match op {
+        PluginGraphicsOp::SetAsset { asset_id, source } => {
+            ProtobufPluginGraphicsOpVariant::SetAsset(ProtobufPluginGraphicsSetAsset {
+                asset_id,
+                source: Some(protobuf_plugin_image_source(source)),
+            })
+        },
+        PluginGraphicsOp::DeleteAsset { asset_id } => {
+            ProtobufPluginGraphicsOpVariant::DeleteAsset(ProtobufPluginGraphicsDeleteAsset {
+                asset_id,
+            })
+        },
+        PluginGraphicsOp::PlaceImage {
+            placement_id,
+            asset_id,
+            destination,
+            source,
+            z_index,
+        } => ProtobufPluginGraphicsOpVariant::PlaceImage(ProtobufPluginGraphicsPlaceImage {
+            placement_id,
+            asset_id,
+            destination: Some(protobuf_plugin_cell_rect(destination)),
+            source: source.map(protobuf_plugin_pixel_rect),
+            z_index,
+        }),
+        PluginGraphicsOp::DeletePlacement { placement_id } => {
+            ProtobufPluginGraphicsOpVariant::DeletePlacement(
+                ProtobufPluginGraphicsDeletePlacement { placement_id },
+            )
+        },
+        PluginGraphicsOp::ClearPlacements => {
+            ProtobufPluginGraphicsOpVariant::ClearPlacements(
+                ProtobufPluginGraphicsClearPlacements {},
+            )
+        },
+        PluginGraphicsOp::ClearAssets => {
+            ProtobufPluginGraphicsOpVariant::ClearAssets(ProtobufPluginGraphicsClearAssets {})
+        },
+    };
+    ProtobufPluginGraphicsOp { op: Some(op) }
 }
 
 impl TryFrom<ProtobufPluginCommand> for PluginCommand {
@@ -2717,6 +2896,19 @@ impl TryFrom<ProtobufPluginCommand> for PluginCommand {
                 },
                 _ => Err("Mismatched payload for OpenPluginPaneFloating"),
             },
+            Some(CommandName::ApplyGraphicsUpdate) => match protobuf_plugin_command.payload {
+                Some(Payload::ApplyGraphicsUpdatePayload(payload)) => {
+                    let ops = payload
+                        .ops
+                        .into_iter()
+                        .map(plugin_graphics_op_from_protobuf)
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(PluginCommand::ApplyGraphicsUpdate(PluginGraphicsUpdate {
+                        ops,
+                    }))
+                },
+                _ => Err("Mismatched payload for ApplyGraphicsUpdate"),
+            },
             None => Err("Unrecognized plugin command"),
         }
     }
@@ -4426,6 +4618,18 @@ impl TryFrom<PluginCommand> for ProtobufPluginCommand {
                     )),
                 })
             },
+            PluginCommand::ApplyGraphicsUpdate(update) => Ok(ProtobufPluginCommand {
+                name: CommandName::ApplyGraphicsUpdate as i32,
+                payload: Some(Payload::ApplyGraphicsUpdatePayload(
+                    ProtobufPluginGraphicsUpdatePayload {
+                        ops: update
+                            .ops
+                            .into_iter()
+                            .map(protobuf_plugin_graphics_op)
+                            .collect(),
+                    },
+                )),
+            }),
         }
     }
 }
@@ -5051,5 +5255,178 @@ impl From<OpenPluginPaneFloatingResponse> for ProtobufOpenPluginPaneFloatingResp
         ProtobufOpenPluginPaneFloatingResponse {
             pane_id: response.map(|p| p.try_into().unwrap()),
         }
+    }
+}
+
+#[cfg(test)]
+mod plugin_graphics_tests {
+    use super::*;
+    use crate::data::{
+        PluginCellRect, PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource,
+        PluginPixelRect,
+    };
+    use crate::plugin_api::generated_api::api::plugin_command::plugin_graphics_op;
+    use std::path::PathBuf;
+
+    fn destination() -> PluginCellRect {
+        PluginCellRect {
+            x: 1,
+            y: 2,
+            columns: 3,
+            rows: 4,
+        }
+    }
+
+    fn source_rect() -> PluginPixelRect {
+        PluginPixelRect {
+            x: 5,
+            y: 6,
+            width: 7,
+            height: 8,
+        }
+    }
+
+    fn assert_roundtrip(update: PluginGraphicsUpdate) -> PluginGraphicsUpdate {
+        let command = PluginCommand::ApplyGraphicsUpdate(update);
+        let protobuf: ProtobufPluginCommand = command.try_into().unwrap();
+        match protobuf.try_into().unwrap() {
+            PluginCommand::ApplyGraphicsUpdate(roundtrip) => roundtrip,
+            other => panic!("unexpected command after roundtrip: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_graphics_update_roundtrips_png_bytes() {
+        let update = PluginGraphicsUpdate {
+            ops: vec![
+                PluginGraphicsOp::SetAsset {
+                    asset_id: 7,
+                    source: PluginImageSource::PngBytes(vec![1, 2, 3]),
+                },
+                PluginGraphicsOp::PlaceImage {
+                    placement_id: 8,
+                    asset_id: 7,
+                    destination: destination(),
+                    source: Some(source_rect()),
+                    z_index: -3,
+                },
+            ],
+        };
+
+        let roundtrip = assert_roundtrip(update);
+
+        assert_eq!(roundtrip.ops.len(), 2);
+        match &roundtrip.ops[0] {
+            PluginGraphicsOp::SetAsset { asset_id, source } => {
+                assert_eq!(*asset_id, 7);
+                assert_eq!(*source, PluginImageSource::PngBytes(vec![1, 2, 3]));
+            },
+            other => panic!("unexpected op: {other:?}"),
+        }
+        match &roundtrip.ops[1] {
+            PluginGraphicsOp::PlaceImage {
+                placement_id,
+                asset_id,
+                destination,
+                source,
+                z_index,
+            } => {
+                assert_eq!(*placement_id, 8);
+                assert_eq!(*asset_id, 7);
+                assert_eq!(*destination, self::destination());
+                assert_eq!(*source, Some(source_rect()));
+                assert_eq!(*z_index, -3);
+            },
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_graphics_update_roundtrips_rgba_bytes() {
+        let update = PluginGraphicsUpdate {
+            ops: vec![PluginGraphicsOp::SetAsset {
+                asset_id: 9,
+                source: PluginImageSource::RgbaBytes {
+                    width: 2,
+                    height: 1,
+                    bytes: vec![0, 1, 2, 3, 4, 5, 6, 7],
+                },
+            }],
+        };
+
+        let roundtrip = assert_roundtrip(update);
+
+        match &roundtrip.ops[0] {
+            PluginGraphicsOp::SetAsset { asset_id, source } => {
+                assert_eq!(*asset_id, 9);
+                assert_eq!(
+                    *source,
+                    PluginImageSource::RgbaBytes {
+                        width: 2,
+                        height: 1,
+                        bytes: vec![0, 1, 2, 3, 4, 5, 6, 7],
+                    }
+                );
+            },
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_graphics_update_roundtrips_png_file_path() {
+        let update = PluginGraphicsUpdate {
+            ops: vec![PluginGraphicsOp::SetAsset {
+                asset_id: 10,
+                source: PluginImageSource::PngFile(PathBuf::from("icons/tab.png")),
+            }],
+        };
+
+        let roundtrip = assert_roundtrip(update);
+
+        match &roundtrip.ops[0] {
+            PluginGraphicsOp::SetAsset { asset_id, source } => {
+                assert_eq!(*asset_id, 10);
+                assert_eq!(
+                    *source,
+                    PluginImageSource::PngFile(PathBuf::from("icons/tab.png"))
+                );
+            },
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_graphics_update_rejects_missing_op() {
+        let protobuf = ProtobufPluginCommand {
+            name: CommandName::ApplyGraphicsUpdate as i32,
+            payload: Some(Payload::ApplyGraphicsUpdatePayload(
+                ProtobufPluginGraphicsUpdatePayload {
+                    ops: vec![ProtobufPluginGraphicsOp { op: None }],
+                },
+            )),
+        };
+
+        assert!(PluginCommand::try_from(protobuf).is_err());
+    }
+
+    #[test]
+    fn plugin_graphics_update_rejects_missing_source() {
+        let protobuf = ProtobufPluginCommand {
+            name: CommandName::ApplyGraphicsUpdate as i32,
+            payload: Some(Payload::ApplyGraphicsUpdatePayload(
+                ProtobufPluginGraphicsUpdatePayload {
+                    ops: vec![ProtobufPluginGraphicsOp {
+                        op: Some(plugin_graphics_op::Op::SetAsset(
+                            ProtobufPluginGraphicsSetAsset {
+                                asset_id: 1,
+                                source: None,
+                            },
+                        )),
+                    }],
+                },
+            )),
+        };
+
+        assert!(PluginCommand::try_from(protobuf).is_err());
     }
 }

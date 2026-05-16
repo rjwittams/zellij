@@ -3,7 +3,7 @@
 pub struct PluginCommand {
     #[prost(enumeration="CommandName", tag="1")]
     pub name: i32,
-    #[prost(oneof="plugin_command::Payload", tags="2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163")]
+    #[prost(oneof="plugin_command::Payload", tags="2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164")]
     pub payload: ::core::option::Option<plugin_command::Payload>,
 }
 /// Nested message and enum types in `PluginCommand`.
@@ -309,7 +309,135 @@ pub mod plugin_command {
         KillSessionsAndReplyPayload(super::KillSessionsPayload),
         #[prost(string, tag="163")]
         DeleteDeadSessionAndReplyPayload(::prost::alloc::string::String),
+        #[prost(message, tag="164")]
+        ApplyGraphicsUpdatePayload(super::PluginGraphicsUpdatePayload),
     }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginGraphicsUpdatePayload {
+    #[prost(message, repeated, tag="1")]
+    pub ops: ::prost::alloc::vec::Vec<PluginGraphicsOp>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginGraphicsOp {
+    #[prost(oneof="plugin_graphics_op::Op", tags="1, 2, 3, 4, 5, 6")]
+    pub op: ::core::option::Option<plugin_graphics_op::Op>,
+}
+/// Nested message and enum types in `PluginGraphicsOp`.
+pub mod plugin_graphics_op {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Op {
+        #[prost(message, tag="1")]
+        SetAsset(super::PluginGraphicsSetAsset),
+        #[prost(message, tag="2")]
+        DeleteAsset(super::PluginGraphicsDeleteAsset),
+        #[prost(message, tag="3")]
+        PlaceImage(super::PluginGraphicsPlaceImage),
+        #[prost(message, tag="4")]
+        DeletePlacement(super::PluginGraphicsDeletePlacement),
+        #[prost(message, tag="5")]
+        ClearPlacements(super::PluginGraphicsClearPlacements),
+        #[prost(message, tag="6")]
+        ClearAssets(super::PluginGraphicsClearAssets),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginGraphicsSetAsset {
+    #[prost(uint32, tag="1")]
+    pub asset_id: u32,
+    #[prost(message, optional, tag="2")]
+    pub source: ::core::option::Option<PluginImageSource>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginGraphicsDeleteAsset {
+    #[prost(uint32, tag="1")]
+    pub asset_id: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginGraphicsPlaceImage {
+    #[prost(uint32, tag="1")]
+    pub placement_id: u32,
+    #[prost(uint32, tag="2")]
+    pub asset_id: u32,
+    #[prost(message, optional, tag="3")]
+    pub destination: ::core::option::Option<PluginCellRect>,
+    #[prost(message, optional, tag="4")]
+    pub source: ::core::option::Option<PluginPixelRect>,
+    #[prost(int32, tag="5")]
+    pub z_index: i32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginGraphicsDeletePlacement {
+    #[prost(uint32, tag="1")]
+    pub placement_id: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginGraphicsClearPlacements {
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginGraphicsClearAssets {
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginImageSource {
+    #[prost(oneof="plugin_image_source::Source", tags="1, 2, 3")]
+    pub source: ::core::option::Option<plugin_image_source::Source>,
+}
+/// Nested message and enum types in `PluginImageSource`.
+pub mod plugin_image_source {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Source {
+        #[prost(bytes, tag="1")]
+        PngBytes(::prost::alloc::vec::Vec<u8>),
+        #[prost(message, tag="2")]
+        RgbaBytes(super::PluginRgbaBytes),
+        #[prost(string, tag="3")]
+        PngFile(::prost::alloc::string::String),
+    }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginRgbaBytes {
+    #[prost(uint32, tag="1")]
+    pub width: u32,
+    #[prost(uint32, tag="2")]
+    pub height: u32,
+    #[prost(bytes="vec", tag="3")]
+    pub bytes: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginCellRect {
+    #[prost(uint32, tag="1")]
+    pub x: u32,
+    #[prost(uint32, tag="2")]
+    pub y: u32,
+    #[prost(uint32, tag="3")]
+    pub columns: u32,
+    #[prost(uint32, tag="4")]
+    pub rows: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginPixelRect {
+    #[prost(uint32, tag="1")]
+    pub x: u32,
+    #[prost(uint32, tag="2")]
+    pub y: u32,
+    #[prost(uint32, tag="3")]
+    pub width: u32,
+    #[prost(uint32, tag="4")]
+    pub height: u32,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2152,6 +2280,7 @@ pub enum CommandName {
     KillSessionsAndReply = 212,
     DeleteDeadSessionAndReply = 213,
     DeleteAllDeadSessionsAndReply = 214,
+    ApplyGraphicsUpdate = 215,
 }
 impl CommandName {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2354,6 +2483,7 @@ impl CommandName {
             CommandName::KillSessionsAndReply => "KillSessionsAndReply",
             CommandName::DeleteDeadSessionAndReply => "DeleteDeadSessionAndReply",
             CommandName::DeleteAllDeadSessionsAndReply => "DeleteAllDeadSessionsAndReply",
+            CommandName::ApplyGraphicsUpdate => "ApplyGraphicsUpdate",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2553,6 +2683,7 @@ impl CommandName {
             "KillSessionsAndReply" => Some(Self::KillSessionsAndReply),
             "DeleteDeadSessionAndReply" => Some(Self::DeleteDeadSessionAndReply),
             "DeleteAllDeadSessionsAndReply" => Some(Self::DeleteAllDeadSessionsAndReply),
+            "ApplyGraphicsUpdate" => Some(Self::ApplyGraphicsUpdate),
             _ => None,
         }
     }

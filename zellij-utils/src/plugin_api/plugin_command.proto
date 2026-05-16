@@ -207,6 +207,7 @@ enum CommandName {
   KillSessionsAndReply = 212;
   DeleteDeadSessionAndReply = 213;
   DeleteAllDeadSessionsAndReply = 214;
+  ApplyGraphicsUpdate = 215;
 }
 
 message PluginCommand {
@@ -361,7 +362,76 @@ message PluginCommand {
     GetSessionListPayload get_session_list_payload = 161;
     KillSessionsPayload kill_sessions_and_reply_payload = 162;
     string delete_dead_session_and_reply_payload = 163;
+    PluginGraphicsUpdatePayload apply_graphics_update_payload = 164;
   }
+}
+
+message PluginGraphicsUpdatePayload {
+  repeated PluginGraphicsOp ops = 1;
+}
+
+message PluginGraphicsOp {
+  oneof op {
+    PluginGraphicsSetAsset set_asset = 1;
+    PluginGraphicsDeleteAsset delete_asset = 2;
+    PluginGraphicsPlaceImage place_image = 3;
+    PluginGraphicsDeletePlacement delete_placement = 4;
+    PluginGraphicsClearPlacements clear_placements = 5;
+    PluginGraphicsClearAssets clear_assets = 6;
+  }
+}
+
+message PluginGraphicsSetAsset {
+  uint32 asset_id = 1;
+  PluginImageSource source = 2;
+}
+
+message PluginGraphicsDeleteAsset {
+  uint32 asset_id = 1;
+}
+
+message PluginGraphicsPlaceImage {
+  uint32 placement_id = 1;
+  uint32 asset_id = 2;
+  PluginCellRect destination = 3;
+  optional PluginPixelRect source = 4;
+  int32 z_index = 5;
+}
+
+message PluginGraphicsDeletePlacement {
+  uint32 placement_id = 1;
+}
+
+message PluginGraphicsClearPlacements {}
+
+message PluginGraphicsClearAssets {}
+
+message PluginImageSource {
+  oneof source {
+    bytes png_bytes = 1;
+    PluginRgbaBytes rgba_bytes = 2;
+    string png_file = 3;
+  }
+}
+
+message PluginRgbaBytes {
+  uint32 width = 1;
+  uint32 height = 2;
+  bytes bytes = 3;
+}
+
+message PluginCellRect {
+  uint32 x = 1;
+  uint32 y = 2;
+  uint32 columns = 3;
+  uint32 rows = 4;
+}
+
+message PluginPixelRect {
+  uint32 x = 1;
+  uint32 y = 2;
+  uint32 width = 3;
+  uint32 height = 4;
 }
 
 message NewTabPayload {

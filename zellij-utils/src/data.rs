@@ -3337,6 +3337,61 @@ impl NewPanePlacement {
 
 type Context = BTreeMap<String, String>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginGraphicsUpdate {
+    pub ops: Vec<PluginGraphicsOp>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PluginGraphicsOp {
+    SetAsset {
+        asset_id: u32,
+        source: PluginImageSource,
+    },
+    DeleteAsset {
+        asset_id: u32,
+    },
+    PlaceImage {
+        placement_id: u32,
+        asset_id: u32,
+        destination: PluginCellRect,
+        source: Option<PluginPixelRect>,
+        z_index: i32,
+    },
+    DeletePlacement {
+        placement_id: u32,
+    },
+    ClearPlacements,
+    ClearAssets,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PluginImageSource {
+    PngBytes(Vec<u8>),
+    RgbaBytes {
+        width: u32,
+        height: u32,
+        bytes: Vec<u8>,
+    },
+    PngFile(PathBuf),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginCellRect {
+    pub x: u32,
+    pub y: u32,
+    pub columns: u32,
+    pub rows: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginPixelRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Clone, EnumDiscriminants, Display)]
 #[strum_discriminants(derive(EnumString, Hash, Serialize, Deserialize))]
 #[strum_discriminants(name(CommandType))]
@@ -3345,6 +3400,7 @@ pub enum PluginCommand {
     Unsubscribe(HashSet<EventType>),
     SetSelectable(bool),
     ShowCursor(Option<(usize, usize)>),
+    ApplyGraphicsUpdate(PluginGraphicsUpdate),
     GetPluginIds,
     GetZellijVersion,
     OpenFile(FileToOpen, Context),
