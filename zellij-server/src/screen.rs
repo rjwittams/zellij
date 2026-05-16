@@ -2519,20 +2519,36 @@ impl Screen {
             .unwrap_or(false);
         if let Some(client_id) = self.finalize_pending_kitty_capability_probe(token) {
             let effective_transports = self.effective_kitty_output_transports_for_client(client_id);
-            let should_render_newly_enabled_kitty_output = self
+            let should_render_newly_enabled_regular_kitty_output = self
                 .regular_last_rendered_image_state
                 .contains_key(&client_id)
                 && !had_effective_kitty_output_transport
                 && !effective_transports.is_empty();
+            let should_render_newly_enabled_watcher_kitty_output = self
+                .watcher_last_rendered_image_state
+                .contains_key(&client_id)
+                && self.watcher_clients.contains_key(&client_id)
+                && !had_effective_kitty_output_transport
+                && !effective_transports.is_empty();
             self.release_forward_slot_and_dispatch_next();
             self.start_next_kitty_capability_transport_probe(client_id);
-            if should_render_newly_enabled_kitty_output {
+            if should_render_newly_enabled_regular_kitty_output {
                 self.regular_last_rendered_image_state.remove(&client_id);
                 if let Some(active_tab_id) = self.active_tab_ids.get(&client_id).copied() {
                     if let Some(tab) = self.tabs.get_mut(&active_tab_id) {
                         tab.set_force_render();
                     }
                 }
+            }
+            if should_render_newly_enabled_watcher_kitty_output {
+                self.watcher_last_rendered_image_state.remove(&client_id);
+                if let Some(watcher_state) = self.watcher_clients.get_mut(&client_id) {
+                    watcher_state.set_force_render();
+                }
+            }
+            if should_render_newly_enabled_regular_kitty_output
+                || should_render_newly_enabled_watcher_kitty_output
+            {
                 self.render(None)?;
             }
             return Ok(());
@@ -2730,6 +2746,11 @@ impl Screen {
                 .cloned()
                 .unwrap_or_default(),
         );
+        self.configure_kitty_output_for_render_client(
+            &mut watcher_specific_output,
+            watcher_id,
+            followed_client_id,
+        );
 
         let mut serialized_output =
             watcher_specific_output.serialize_with_size(Some(watcher_size), Some(self.size))?;
@@ -2760,29 +2781,37 @@ impl Screen {
             })
             .collect();
         for client_id in regular_client_ids {
-            self.ensure_kitty_capability_probe_started(client_id);
-            {
-                let acknowledgement_policy = match self.kitty_image_file_lifetime {
-                    KittyImageFileLifetime::GraceWindow => KittyUploadAcknowledgementPolicy::None,
-                    KittyImageFileLifetime::Watermark => {
-                        KittyUploadAcknowledgementPolicy::Watermark
-                    },
-                    KittyImageFileLifetime::AlwaysAck => KittyUploadAcknowledgementPolicy::Always,
-                };
-                let transports = self.effective_kitty_output_transports_for_client(client_id);
-                output.set_kitty_output_transports_for_client(client_id, transports.clone());
-                if transports.is_empty() {
-                    output.set_kitty_upload_acknowledgement_policy_for_client(
-                        client_id,
-                        KittyUploadAcknowledgementPolicy::None,
-                    );
-                } else {
-                    output.set_kitty_upload_acknowledgement_policy_for_client(
-                        client_id,
-                        acknowledgement_policy,
-                    );
-                }
-            }
+            self.configure_kitty_output_for_render_client(output, client_id, client_id);
+        }
+    }
+
+    fn configure_kitty_output_for_render_client(
+        &mut self,
+        output: &mut Output,
+        capability_client_id: ClientId,
+        render_client_id: ClientId,
+    ) {
+        if self.kitty_image_output_transports.is_empty() {
+            return;
+        }
+        self.ensure_kitty_capability_probe_started(capability_client_id);
+        let acknowledgement_policy = match self.kitty_image_file_lifetime {
+            KittyImageFileLifetime::GraceWindow => KittyUploadAcknowledgementPolicy::None,
+            KittyImageFileLifetime::Watermark => KittyUploadAcknowledgementPolicy::Watermark,
+            KittyImageFileLifetime::AlwaysAck => KittyUploadAcknowledgementPolicy::Always,
+        };
+        let transports = self.effective_kitty_output_transports_for_client(capability_client_id);
+        output.set_kitty_output_transports_for_client(render_client_id, transports.clone());
+        if transports.is_empty() {
+            output.set_kitty_upload_acknowledgement_policy_for_client(
+                render_client_id,
+                KittyUploadAcknowledgementPolicy::None,
+            );
+        } else {
+            output.set_kitty_upload_acknowledgement_policy_for_client(
+                render_client_id,
+                acknowledgement_policy,
+            );
         }
     }
 
@@ -3088,6 +3117,33 @@ impl Screen {
             },
         }
         Some(client_id)
+    }
+
+    fn remove_kitty_client_capability_state(&mut self, client_id: ClientId) {
+        self.kitty_client_graphics_capabilities.remove(&client_id);
+        self.kitty_capability_probe_queues.remove(&client_id);
+
+        let removed_probe_tokens: Vec<u32> = self
+            .pending_kitty_capability_probes
+            .iter()
+            .filter_map(|(&token, probe)| (probe.client_id == client_id).then_some(token))
+            .collect();
+        let removed_probe_token_set: HashSet<u32> = removed_probe_tokens.iter().copied().collect();
+
+        self.pending_kitty_capability_probe_tokens_by_response_key
+            .retain(|(probe_client_id, _), token| {
+                *probe_client_id != client_id && !removed_probe_token_set.contains(token)
+            });
+
+        let removed_in_flight_probe = removed_probe_token_set
+            .iter()
+            .any(|token| self.forward_in_flight_token == Some(*token));
+        for token in removed_probe_tokens {
+            self.pending_kitty_capability_probes.remove(&token);
+        }
+        if removed_in_flight_probe {
+            self.release_forward_slot_and_dispatch_next();
+        }
     }
 
     fn create_kitty_capability_probe_media_fixture(
@@ -3849,6 +3905,7 @@ impl Screen {
         self.kitty_output_media_cache
             .borrow_mut()
             .remove_client(client_id);
+        self.remove_kitty_client_capability_state(client_id);
         // The vacated tab may have lost its smallest viewer; recompute so it
         // can grow back to fit the remaining clients (no-op if none remain).
         if let Some(prev_tab_id) = previously_active_tab_id {

@@ -6419,12 +6419,104 @@ fn attaching_unprobed_client_does_not_clear_existing_client_kitty_scene_without_
 }
 
 #[test]
+fn remove_client_drops_cached_kitty_capabilities() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    screen.connected_clients.borrow_mut().insert(1, false);
+    mark_kitty_capabilities_supported(
+        &mut screen,
+        1,
+        vec![KittyImageOutputTransport::TemporaryFile],
+    );
+
+    screen.remove_client(1).unwrap();
+
+    assert!(
+        !screen.kitty_client_graphics_capabilities.contains_key(&1),
+        "disconnect should not leave stale kitty capability state for a reused client id"
+    );
+}
+
+#[test]
+fn remove_client_cleans_pending_kitty_probe_and_releases_forward_slot() {
+    let size = Size { cols: 80, rows: 20 };
+    let (mut screen, capture) = create_new_screen_with_forward_capture(size);
+    screen.connected_clients.borrow_mut().insert(1, false);
+    screen
+        .kitty_client_graphics_capabilities
+        .entry(1)
+        .or_default()
+        .protocol = super::KittyProtocolCapability::Probing;
+    screen.kitty_capability_probe_queues.insert(
+        1,
+        std::collections::VecDeque::from([KittyImageOutputTransport::TemporaryFile]),
+    );
+    let (fixture, _) = screen
+        .create_kitty_capability_probe_media_fixture(KittyImageOutputTransport::File)
+        .unwrap();
+    let fixture_path = fixture
+        .path()
+        .expect("file probe fixture should have a path")
+        .to_path_buf();
+    assert!(fixture_path.exists());
+
+    screen.register_pending_kitty_capability_probe_with_fixture(
+        77,
+        1,
+        88,
+        super::KittyCapabilityProbeTransport::OutputTransport(KittyImageOutputTransport::File),
+        fixture,
+    );
+    let queued_token = screen.forward_host_query(PaneId::Terminal(99), bg_query());
+
+    screen.remove_client(1).unwrap();
+
+    assert!(
+        !fixture_path.exists(),
+        "disconnect should remove temporary media created for an in-flight capability probe"
+    );
+    assert!(
+        !screen.pending_kitty_capability_probes.contains_key(&77),
+        "disconnect should remove the pending probe record"
+    );
+    assert!(
+        !screen
+            .pending_kitty_capability_probe_tokens_by_response_key
+            .contains_key(&(1, 88)),
+        "disconnect should remove probe response-key mapping"
+    );
+    assert!(
+        !screen.kitty_capability_probe_queues.contains_key(&1),
+        "disconnect should remove queued transport probes"
+    );
+    assert!(
+        !screen.kitty_client_graphics_capabilities.contains_key(&1),
+        "disconnect should remove probing capability state"
+    );
+    assert_eq!(
+        screen.forward_in_flight_token,
+        Some(queued_token),
+        "removing an in-flight capability probe should release the global forward slot"
+    );
+    assert_eq!(
+        capture.drain_forward_queries(),
+        vec![(queued_token, bg_query().to_query_bytes())],
+        "releasing the probe slot should dispatch the next queued host query"
+    );
+}
+
+#[test]
 fn watcher_helper_round_trips_followed_client_image_state() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);
     let watcher_id = 2;
     let followed_client_id = 1;
     let current_chunk = test_kitty_chunk(92, 7);
+    mark_kitty_capabilities_supported(
+        &mut screen,
+        watcher_id,
+        vec![KittyImageOutputTransport::Direct],
+    );
 
     screen.kitty_asset_store.borrow_mut().insert_asset(
         current_chunk.image_id,
@@ -6493,6 +6585,178 @@ fn watcher_helper_round_trips_followed_client_image_state() {
     assert_eq!(
         watcher_state.resident_asset_generations().get(&92),
         Some(&1),
+    );
+}
+
+#[test]
+fn watcher_output_uses_watcher_terminal_capabilities_for_transport_selection() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    screen.kitty_image_output_transports = vec![
+        KittyImageOutputTransport::TemporaryFile,
+        KittyImageOutputTransport::Direct,
+    ];
+    let watcher_id = 2;
+    let followed_client_id = 1;
+    let current_chunk = test_kitty_chunk(92, 7);
+    mark_kitty_capabilities_supported(
+        &mut screen,
+        followed_client_id,
+        vec![KittyImageOutputTransport::Direct],
+    );
+    mark_kitty_capabilities_supported(
+        &mut screen,
+        watcher_id,
+        vec![
+            KittyImageOutputTransport::TemporaryFile,
+            KittyImageOutputTransport::Direct,
+        ],
+    );
+
+    screen.kitty_asset_store.borrow_mut().insert_asset(
+        current_chunk.image_id,
+        KittyImageData::Png {
+            data: vec![1, 2, 3, 4],
+            width: 1,
+            height: 1,
+        },
+    );
+
+    let mut watcher_output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+    watcher_output.add_pane_image_output_to_client(
+        followed_client_id,
+        PaneImageRenderOutput {
+            kitty_scene: KittyRenderBundle {
+                explicit_chunks: vec![current_chunk],
+                placeholder_renders: vec![],
+            },
+            ..Default::default()
+        },
+        None,
+    );
+
+    let rendered = screen
+        .serialize_watcher_output_for_client(&watcher_output, watcher_id, followed_client_id, size)
+        .unwrap()
+        .unwrap_or_default();
+
+    assert!(
+        rendered.contains("t=t;"),
+        "watcher output should use the watcher terminal's preferred supported transport, got: {rendered:?}"
+    );
+    assert!(
+        !rendered.contains("AQIDBA=="),
+        "watcher output should not inherit the followed client's direct-only capability"
+    );
+}
+
+#[test]
+fn watcher_output_is_suppressed_while_watcher_capability_probe_is_pending() {
+    let size = Size { cols: 80, rows: 20 };
+    let (mut screen, capture) = create_new_screen_with_forward_capture(size);
+    screen.kitty_image_output_transports = vec![KittyImageOutputTransport::Direct];
+    let watcher_id = 2;
+    let followed_client_id = 1;
+    let current_chunk = test_kitty_chunk(92, 7);
+    mark_kitty_capabilities_supported(
+        &mut screen,
+        followed_client_id,
+        vec![KittyImageOutputTransport::Direct],
+    );
+
+    screen.kitty_asset_store.borrow_mut().insert_asset(
+        current_chunk.image_id,
+        KittyImageData::Png {
+            data: vec![1, 2, 3, 4],
+            width: 1,
+            height: 1,
+        },
+    );
+
+    let mut watcher_output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+    watcher_output.add_pane_image_output_to_client(
+        followed_client_id,
+        PaneImageRenderOutput {
+            kitty_scene: KittyRenderBundle {
+                explicit_chunks: vec![current_chunk],
+                placeholder_renders: vec![],
+            },
+            ..Default::default()
+        },
+        None,
+    );
+
+    let rendered = screen
+        .serialize_watcher_output_for_client(&watcher_output, watcher_id, followed_client_id, size)
+        .unwrap()
+        .unwrap_or_default();
+    let probe = capture.drain_targeted_forward_queries();
+
+    assert!(
+        !rendered.contains("\u{1b}_G"),
+        "watcher kitty output should be suppressed until the watcher terminal probe succeeds"
+    );
+    assert_eq!(probe.len(), 1);
+    assert_eq!(probe[0].0, watcher_id);
+    assert!(
+        String::from_utf8(probe[0].2.clone())
+            .unwrap()
+            .contains("t=d"),
+        "watcher capability probe should target direct kitty support first"
+    );
+}
+
+#[test]
+fn watcher_capability_completion_forces_render_of_previously_suppressed_images() {
+    let size = Size { cols: 80, rows: 20 };
+    let (mut screen, capture) = create_new_screen_with_forward_capture(size);
+    let watcher_id = 2;
+    screen
+        .watcher_clients
+        .insert(watcher_id, super::WatcherState::new(size));
+    screen.watcher_last_rendered_image_state.insert(
+        watcher_id,
+        Rc::new(LastRenderedImageState::new(RenderedImageState {
+            resident_asset_generations: HashMap::from([(92, 1)]),
+            ..Default::default()
+        })),
+    );
+    screen.register_pending_kitty_capability_probe(
+        77,
+        watcher_id,
+        88,
+        super::KittyCapabilityProbeTransport::Direct,
+    );
+
+    screen.handle_kitty_image_terminal_response(b"Gi=88;OK", watcher_id);
+    screen
+        .handle_forwarded_reply_from_host(77, Vec::new())
+        .unwrap();
+
+    assert!(
+        !screen
+            .watcher_last_rendered_image_state
+            .contains_key(&watcher_id),
+        "newly enabled watcher kitty output should discard suppressed diff state before rerender"
+    );
+    assert_eq!(
+        capture.drain_render_to_clients_requests(),
+        1,
+        "watcher capability completion should schedule a fresh render"
     );
 }
 
