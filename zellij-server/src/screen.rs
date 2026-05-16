@@ -1458,6 +1458,9 @@ pub(crate) struct Screen {
     /// cached bg/fg/pixel/palette state to answer in the host's
     /// stead.
     pending_forwarded_queries: HashMap<u32, PendingForwardEntry>,
+    pending_kitty_capability_probes: HashMap<u32, PendingKittyCapabilityProbe>,
+    pending_kitty_capability_probe_tokens_by_response_key: HashMap<(ClientId, u32), u32>,
+    kitty_client_graphics_capabilities: HashMap<ClientId, KittyClientGraphicsCapabilities>,
     /// Serialization queue for forwarded queries. Invariant: at most one
     /// forward is in flight to the client at a time (enforced by
     /// `forward_in_flight`). When the reply (or timeout) closes the
@@ -1498,6 +1501,42 @@ struct PendingForward {
 enum KittyCapabilityProbeTransport {
     Direct,
     OutputTransport(KittyImageOutputTransport),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct KittyClientGraphicsCapabilities {
+    protocol: KittyProtocolCapability,
+    transports: Vec<KittyImageOutputTransport>,
+}
+
+impl Default for KittyClientGraphicsCapabilities {
+    fn default() -> Self {
+        Self {
+            protocol: KittyProtocolCapability::Unknown,
+            transports: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum KittyProtocolCapability {
+    Unknown,
+    Supported,
+    Unsupported,
+}
+
+#[derive(Clone, Debug)]
+struct PendingKittyCapabilityProbe {
+    client_id: ClientId,
+    probe_image_id: u32,
+    transport: KittyCapabilityProbeTransport,
+    response: Option<KittyProbeResponse>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct KittyProbeResponse {
+    ok: bool,
+    message: String,
 }
 
 fn build_kitty_capability_probe_bytes(
@@ -1675,6 +1714,9 @@ impl Screen {
             background_plugin_subscriptions: HashMap::new(),
             next_forward_token: 1, // 0 is reserved as the startup sentinel
             pending_forwarded_queries: HashMap::new(),
+            pending_kitty_capability_probes: HashMap::new(),
+            pending_kitty_capability_probe_tokens_by_response_key: HashMap::new(),
+            kitty_client_graphics_capabilities: HashMap::new(),
             forward_queue: VecDeque::new(),
             forward_in_flight_token: None,
             host_terminal_theme_mode: None,
@@ -2388,6 +2430,10 @@ impl Screen {
             );
             return Ok(());
         }
+        if self.finalize_pending_kitty_capability_probe(token) {
+            self.release_forward_slot_and_dispatch_next();
+            return Ok(());
+        }
         if let Some(entry) = self.pending_forwarded_queries.remove(&token) {
             let PendingForwardEntry { pane_id, query } = entry;
             match pane_id {
@@ -2413,12 +2459,15 @@ impl Screen {
                 },
             }
         }
-        // Release the slot and dispatch the next queued forward, if any.
+        self.release_forward_slot_and_dispatch_next();
+        Ok(())
+    }
+
+    fn release_forward_slot_and_dispatch_next(&mut self) {
         self.forward_in_flight_token = None;
         if let Some(next) = self.forward_queue.pop_front() {
             self.dispatch_forward(next.token, next.pane_id, next.query);
         }
-        Ok(())
     }
 
     /// Whether any tab owns `pane_id` AND the pane is currently
@@ -2678,6 +2727,14 @@ impl Screen {
             return;
         };
         if let Some(image_id) = response.image_id {
+            if self.record_kitty_capability_probe_response(
+                client_id,
+                image_id,
+                response.is_ok,
+                response.message.clone(),
+            ) {
+                return;
+            }
             self.kitty_output_media_cache
                 .borrow_mut()
                 .acknowledge_upload(client_id, image_id);
@@ -2695,6 +2752,95 @@ impl Screen {
 
     fn next_kitty_capability_probe_image_id(&mut self) -> u32 {
         self.kitty_asset_store.borrow_mut().next_host_image_id()
+    }
+
+    fn register_pending_kitty_capability_probe(
+        &mut self,
+        token: u32,
+        client_id: ClientId,
+        probe_image_id: u32,
+        transport: KittyCapabilityProbeTransport,
+    ) {
+        self.pending_kitty_capability_probes.insert(
+            token,
+            PendingKittyCapabilityProbe {
+                client_id,
+                probe_image_id,
+                transport,
+                response: None,
+            },
+        );
+        self.pending_kitty_capability_probe_tokens_by_response_key
+            .insert((client_id, probe_image_id), token);
+        self.forward_in_flight_token = Some(token);
+    }
+
+    fn kitty_client_graphics_capabilities(
+        &self,
+        client_id: ClientId,
+    ) -> KittyClientGraphicsCapabilities {
+        self.kitty_client_graphics_capabilities
+            .get(&client_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn record_kitty_capability_probe_response(
+        &mut self,
+        client_id: ClientId,
+        image_id: u32,
+        ok: bool,
+        message: String,
+    ) -> bool {
+        let Some(token) = self
+            .pending_kitty_capability_probe_tokens_by_response_key
+            .get(&(client_id, image_id))
+            .copied()
+        else {
+            return false;
+        };
+        if let Some(probe) = self.pending_kitty_capability_probes.get_mut(&token) {
+            probe.response = Some(KittyProbeResponse { ok, message });
+            return true;
+        }
+        false
+    }
+
+    fn finalize_pending_kitty_capability_probe(&mut self, token: u32) -> bool {
+        let Some(probe) = self.pending_kitty_capability_probes.remove(&token) else {
+            return false;
+        };
+        self.pending_kitty_capability_probe_tokens_by_response_key
+            .remove(&(probe.client_id, probe.probe_image_id));
+        let succeeded = probe.response.as_ref().is_some_and(|response| response.ok);
+        let capabilities = self
+            .kitty_client_graphics_capabilities
+            .entry(probe.client_id)
+            .or_default();
+        match probe.transport {
+            KittyCapabilityProbeTransport::Direct
+            | KittyCapabilityProbeTransport::OutputTransport(KittyImageOutputTransport::Direct) => {
+                capabilities.protocol = if succeeded {
+                    if !capabilities
+                        .transports
+                        .contains(&KittyImageOutputTransport::Direct)
+                    {
+                        capabilities
+                            .transports
+                            .push(KittyImageOutputTransport::Direct);
+                    }
+                    KittyProtocolCapability::Supported
+                } else {
+                    KittyProtocolCapability::Unsupported
+                };
+            },
+            KittyCapabilityProbeTransport::OutputTransport(transport) => {
+                if succeeded && !capabilities.transports.contains(&transport) {
+                    capabilities.transports.push(transport);
+                }
+            },
+        }
+        true
     }
 
     pub fn render_to_clients(&mut self) -> Result<()> {

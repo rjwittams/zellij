@@ -5646,6 +5646,122 @@ fn kitty_capability_probe_ids_share_host_image_id_allocator() {
 }
 
 #[test]
+fn kitty_capability_probe_direct_ok_marks_client_supported_on_barrier() {
+    let mut screen = create_new_screen(Size { cols: 80, rows: 20 }, true, true);
+    screen.register_pending_kitty_capability_probe(
+        77,
+        1,
+        41,
+        super::KittyCapabilityProbeTransport::Direct,
+    );
+
+    screen.handle_kitty_image_terminal_response(b"Gi=41;OK", 1);
+    screen
+        .handle_forwarded_reply_from_host(77, Vec::new())
+        .unwrap();
+
+    let capabilities = screen.kitty_client_graphics_capabilities(1);
+    assert_eq!(
+        capabilities.protocol,
+        super::KittyProtocolCapability::Supported
+    );
+    assert_eq!(
+        capabilities.transports,
+        vec![KittyImageOutputTransport::Direct]
+    );
+}
+
+#[test]
+fn kitty_capability_probe_without_apc_marks_client_unsupported_on_barrier() {
+    let mut screen = create_new_screen(Size { cols: 80, rows: 20 }, true, true);
+    screen.register_pending_kitty_capability_probe(
+        78,
+        1,
+        42,
+        super::KittyCapabilityProbeTransport::Direct,
+    );
+
+    screen
+        .handle_forwarded_reply_from_host(78, Vec::new())
+        .unwrap();
+
+    let capabilities = screen.kitty_client_graphics_capabilities(1);
+    assert_eq!(
+        capabilities.protocol,
+        super::KittyProtocolCapability::Unsupported
+    );
+    assert!(capabilities.transports.is_empty());
+}
+
+#[test]
+fn kitty_capability_probe_error_apc_marks_client_unsupported_on_barrier() {
+    let mut screen = create_new_screen(Size { cols: 80, rows: 20 }, true, true);
+    screen.register_pending_kitty_capability_probe(
+        79,
+        1,
+        43,
+        super::KittyCapabilityProbeTransport::Direct,
+    );
+
+    screen.handle_kitty_image_terminal_response(b"Gi=43;EINVAL:nope", 1);
+    screen
+        .handle_forwarded_reply_from_host(79, Vec::new())
+        .unwrap();
+
+    let capabilities = screen.kitty_client_graphics_capabilities(1);
+    assert_eq!(
+        capabilities.protocol,
+        super::KittyProtocolCapability::Unsupported
+    );
+    assert!(capabilities.transports.is_empty());
+}
+
+#[test]
+fn kitty_capability_probe_response_does_not_ack_output_media() {
+    let size = Size { cols: 80, rows: 20 };
+    let mut screen = create_new_screen(size, true, true);
+    let tempdir = tempfile::tempdir().unwrap();
+    let media_dir = tempdir.path().join("session-media/test/image");
+    let media_cache = Rc::new(RefCell::new(KittyOutputMediaCache::new(media_dir)));
+    screen.kitty_image_file_lifetime = KittyImageFileLifetime::AlwaysAck;
+    screen.kitty_output_media_cache = media_cache.clone();
+    screen.connected_clients.borrow_mut().insert(1, false);
+
+    let image_data = KittyImageData::Png {
+        data: vec![1, 2, 3, 4],
+        width: 1,
+        height: 1,
+    };
+    screen
+        .kitty_asset_store
+        .borrow_mut()
+        .insert_asset(250, image_data.clone());
+    let generation = screen.kitty_asset_store.borrow().generation(250).unwrap();
+    let media_path = media_cache
+        .borrow_mut()
+        .ensure_regular_file(250, generation, &image_data)
+        .unwrap();
+    media_cache
+        .borrow_mut()
+        .mark_pending_upload(1, 250, generation, true);
+    screen.kitty_asset_store.borrow_mut().remove_asset(250);
+    screen.register_pending_kitty_capability_probe(
+        80,
+        1,
+        250,
+        super::KittyCapabilityProbeTransport::Direct,
+    );
+
+    screen.handle_kitty_image_terminal_response(b"Gi=250;OK", 1);
+    screen.reap_stale_kitty_output_media_files();
+
+    assert!(
+        media_path.exists(),
+        "probe response must not be treated as an output upload acknowledgement"
+    );
+}
+
+#[test]
 fn screen_enables_kitty_file_transport_for_regular_clients_only() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);
