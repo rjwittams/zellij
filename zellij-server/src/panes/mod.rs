@@ -7,6 +7,7 @@ pub mod kitty_image_id_allocator;
 pub mod kitty_placeholder;
 pub mod link_handler;
 pub mod pane_image_scene;
+pub mod plugin_graphics_scene;
 pub mod selection;
 pub mod sixel;
 pub mod terminal_character;

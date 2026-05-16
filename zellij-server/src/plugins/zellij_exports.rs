@@ -37,8 +37,9 @@ use zellij_utils::data::{
     OpenPluginPaneFloatingResponse, OpenTerminalFloatingNearPluginResponse,
     OpenTerminalFloatingResponse, OpenTerminalInPlaceOfPluginResponse, OpenTerminalInPlaceResponse,
     OpenTerminalNearPluginResponse, OpenTerminalPaneInPlaceOfPaneIdResponse, OpenTerminalResponse,
-    OriginatingPlugin, PaneScrollbackResponse, PermissionStatus, PermissionType, PluginPermission,
-    RegexHighlight, RenameLayoutResponse, SaveLayoutResponse, TabMetadata,
+    OriginatingPlugin, PaneScrollbackResponse, PermissionStatus, PermissionType, PluginGraphicsOp,
+    PluginGraphicsUpdate, PluginImageSource, PluginPermission, RegexHighlight,
+    RenameLayoutResponse, SaveLayoutResponse, TabMetadata,
 };
 use zellij_utils::home::default_layout_dir;
 use zellij_utils::input::permission::PermissionCache;
@@ -177,6 +178,9 @@ fn host_run_plugin_command(mut caller: Caller<'_, PluginEnv>) {
                     PluginCommand::Unsubscribe(event_list) => unsubscribe(env, event_list)?,
                     PluginCommand::SetSelectable(selectable) => set_selectable(env, selectable),
                     PluginCommand::ShowCursor(cursor_position) => show_cursor(env, cursor_position),
+                    PluginCommand::ApplyGraphicsUpdate(update) => {
+                        apply_graphics_update(env, update)
+                    },
                     PluginCommand::GetPluginIds => get_plugin_ids(env),
                     PluginCommand::GetZellijVersion => get_zellij_version(env),
                     PluginCommand::GenerateRandomName => generate_random_name(env),
@@ -889,6 +893,30 @@ fn show_cursor(env: &PluginEnv, cursor_position: Option<(usize, usize)>) {
             )
         })
         .non_fatal();
+}
+
+fn apply_graphics_update(env: &PluginEnv, mut update: PluginGraphicsUpdate) {
+    translate_plugin_graphics_file_paths(env, &mut update);
+    env.senders
+        .send_to_screen(ScreenInstruction::ApplyPluginGraphicsUpdate {
+            plugin_id: env.plugin_id,
+            client_id: env.client_id,
+            update,
+        })
+        .with_context(|| format!("failed to apply plugin graphics update from {}", env.name()))
+        .non_fatal();
+}
+
+fn translate_plugin_graphics_file_paths(env: &PluginEnv, update: &mut PluginGraphicsUpdate) {
+    for op in &mut update.ops {
+        let PluginGraphicsOp::SetAsset { source, .. } = op else {
+            continue;
+        };
+        let PluginImageSource::PngFile(path) = source else {
+            continue;
+        };
+        *path = translate_plugin_path(env, path.clone());
+    }
 }
 
 fn request_permission(env: &PluginEnv, permissions: Vec<PermissionType>) -> Result<()> {
@@ -5474,6 +5502,19 @@ fn check_command_permission(
         },
         PluginCommand::OpenCommandPaneInNewTab(..) => PermissionType::RunCommands,
         PluginCommand::OpenEditorPaneInNewTab(..) => PermissionType::OpenFiles,
+        PluginCommand::ApplyGraphicsUpdate(update)
+            if update.ops.iter().any(|op| {
+                matches!(
+                    op,
+                    PluginGraphicsOp::SetAsset {
+                        source: PluginImageSource::PngFile(_),
+                        ..
+                    }
+                )
+            }) =>
+        {
+            PermissionType::OpenFiles
+        },
         _ => return (PermissionStatus::Granted, None),
     };
 

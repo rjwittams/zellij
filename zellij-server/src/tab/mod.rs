@@ -17,7 +17,7 @@ use uuid::Uuid;
 use zellij_utils::data::PaneContents;
 use zellij_utils::data::{
     Direction, KeyWithModifier, NewPanePlacement, PaneInfo, PermissionStatus, PermissionType,
-    PluginPermission, RegexHighlight, ResizeStrategy, Style, WebSharing,
+    PluginGraphicsUpdate, PluginPermission, RegexHighlight, ResizeStrategy, Style, WebSharing,
 };
 use zellij_utils::errors::prelude::*;
 use zellij_utils::input::command::RunCommand;
@@ -246,6 +246,7 @@ pub trait Pane {
     fn set_geom_override(&mut self, pane_geom: PaneGeom);
     fn handle_pty_bytes(&mut self, _bytes: VteBytes) {}
     fn handle_plugin_bytes(&mut self, _client_id: ClientId, _bytes: VteBytes) {}
+    fn apply_plugin_graphics_update(&mut self, _update: PluginGraphicsUpdate) {}
     fn show_cursor(&mut self, _client_id: ClientId, _cursor_position: Option<(usize, usize)>) {}
     /// Returns the cursor position and whether it is visible.
     /// The position is returned unconditionally (as long as the cursor is within
@@ -5158,6 +5159,21 @@ impl Tab {
             })
         {
             plugin_pane.show_cursor(client_id, cursor_position);
+        }
+    }
+    pub fn apply_plugin_graphics_update(&mut self, pid: u32, update: PluginGraphicsUpdate) {
+        if let Some(plugin_pane) = self
+            .tiled_panes
+            .get_pane_mut(PaneId::Plugin(pid))
+            .or_else(|| self.floating_panes.get_pane_mut(PaneId::Plugin(pid)))
+            .or_else(|| {
+                self.suppressed_panes
+                    .values_mut()
+                    .find(|s_p| s_p.1.pid() == PaneId::Plugin(pid))
+                    .map(|s_p| &mut s_p.1)
+            })
+        {
+            plugin_pane.apply_plugin_graphics_update(update);
         }
     }
     pub fn start_plugin_loading_indication(

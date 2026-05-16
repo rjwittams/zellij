@@ -95,18 +95,6 @@ pub use super::generated_api::api::{
         OpenPluginPaneFloatingPayload,
         OpenPluginPaneFloatingResponse as ProtobufOpenPluginPaneFloatingResponse,
         OpenPluginPaneInNewTabPayload as ProtobufOpenPluginPaneInNewTabPayload,
-        PluginCellRect as ProtobufPluginCellRect,
-        PluginGraphicsClearAssets as ProtobufPluginGraphicsClearAssets,
-        PluginGraphicsClearPlacements as ProtobufPluginGraphicsClearPlacements,
-        PluginGraphicsDeleteAsset as ProtobufPluginGraphicsDeleteAsset,
-        PluginGraphicsDeletePlacement as ProtobufPluginGraphicsDeletePlacement,
-        PluginGraphicsOp as ProtobufPluginGraphicsOp,
-        PluginGraphicsPlaceImage as ProtobufPluginGraphicsPlaceImage,
-        PluginGraphicsSetAsset as ProtobufPluginGraphicsSetAsset,
-        PluginGraphicsUpdatePayload as ProtobufPluginGraphicsUpdatePayload,
-        PluginImageSource as ProtobufPluginImageSource,
-        PluginPixelRect as ProtobufPluginPixelRect,
-        PluginRgbaBytes as ProtobufPluginRgbaBytes,
         OpenTerminalFloatingNearPluginPayload,
         OpenTerminalFloatingNearPluginResponse as ProtobufOpenTerminalFloatingNearPluginResponse,
         OpenTerminalFloatingResponse as ProtobufOpenTerminalFloatingResponse,
@@ -120,9 +108,20 @@ pub use super::generated_api::api::{
         OpenTerminalResponse as ProtobufOpenTerminalResponse, OverrideLayoutPayload,
         PageScrollDownInPaneIdPayload, PageScrollUpInPaneIdPayload, PaneId as ProtobufPaneId,
         PaneIdAndFloatingPaneCoordinates, PaneType as ProtobufPaneType, ParseLayoutPayload,
-        ParseLayoutResponse as ProtobufParseLayoutResponse, PluginCommand as ProtobufPluginCommand,
-        PluginMessagePayload, RebindKeysPayload, ReconfigurePayload,
-        RegexHighlight as ProtobufRegexHighlight, ReloadPluginPayload, RenameLayoutPayload,
+        ParseLayoutResponse as ProtobufParseLayoutResponse,
+        PluginCellRect as ProtobufPluginCellRect, PluginCommand as ProtobufPluginCommand,
+        PluginGraphicsClearAssets as ProtobufPluginGraphicsClearAssets,
+        PluginGraphicsClearPlacements as ProtobufPluginGraphicsClearPlacements,
+        PluginGraphicsDeleteAsset as ProtobufPluginGraphicsDeleteAsset,
+        PluginGraphicsDeletePlacement as ProtobufPluginGraphicsDeletePlacement,
+        PluginGraphicsOp as ProtobufPluginGraphicsOp,
+        PluginGraphicsPlaceImage as ProtobufPluginGraphicsPlaceImage,
+        PluginGraphicsSetAsset as ProtobufPluginGraphicsSetAsset,
+        PluginGraphicsUpdatePayload as ProtobufPluginGraphicsUpdatePayload,
+        PluginImageSource as ProtobufPluginImageSource, PluginMessagePayload,
+        PluginPixelRect as ProtobufPluginPixelRect, PluginRgbaBytes as ProtobufPluginRgbaBytes,
+        RebindKeysPayload, ReconfigurePayload, RegexHighlight as ProtobufRegexHighlight,
+        ReloadPluginPayload, RenameLayoutPayload,
         RenameLayoutResponse as ProtobufRenameLayoutResponse, RenameTabWithIdPayload,
         RenameWebLoginTokenPayload, RenameWebTokenResponse, ReplacePaneWithExistingPanePayload,
         RequestPluginPermissionPayload, RerunCommandPanePayload, ResizePaneIdWithDirectionPayload,
@@ -774,7 +773,9 @@ fn plugin_graphics_op_from_protobuf(
                 placement_id: place_image.placement_id,
                 asset_id: place_image.asset_id,
                 destination: plugin_cell_rect_from_protobuf(
-                    place_image.destination.ok_or("missing plugin image destination")?,
+                    place_image
+                        .destination
+                        .ok_or("missing plugin image destination")?,
                 ),
                 source: place_image.source.map(plugin_pixel_rect_from_protobuf),
                 z_index: place_image.z_index,
@@ -788,9 +789,7 @@ fn plugin_graphics_op_from_protobuf(
         Some(ProtobufPluginGraphicsOpVariant::ClearPlacements(_)) => {
             Ok(PluginGraphicsOp::ClearPlacements)
         },
-        Some(ProtobufPluginGraphicsOpVariant::ClearAssets(_)) => {
-            Ok(PluginGraphicsOp::ClearAssets)
-        },
+        Some(ProtobufPluginGraphicsOpVariant::ClearAssets(_)) => Ok(PluginGraphicsOp::ClearAssets),
         None => Err("missing plugin graphics op"),
     }
 }
@@ -826,11 +825,9 @@ fn protobuf_plugin_graphics_op(op: PluginGraphicsOp) -> ProtobufPluginGraphicsOp
                 ProtobufPluginGraphicsDeletePlacement { placement_id },
             )
         },
-        PluginGraphicsOp::ClearPlacements => {
-            ProtobufPluginGraphicsOpVariant::ClearPlacements(
-                ProtobufPluginGraphicsClearPlacements {},
-            )
-        },
+        PluginGraphicsOp::ClearPlacements => ProtobufPluginGraphicsOpVariant::ClearPlacements(
+            ProtobufPluginGraphicsClearPlacements {},
+        ),
         PluginGraphicsOp::ClearAssets => {
             ProtobufPluginGraphicsOpVariant::ClearAssets(ProtobufPluginGraphicsClearAssets {})
         },
@@ -5262,8 +5259,7 @@ impl From<OpenPluginPaneFloatingResponse> for ProtobufOpenPluginPaneFloatingResp
 mod plugin_graphics_tests {
     use super::*;
     use crate::data::{
-        PluginCellRect, PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource,
-        PluginPixelRect,
+        PluginCellRect, PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource, PluginPixelRect,
     };
     use crate::plugin_api::generated_api::api::plugin_command::plugin_graphics_op;
     use std::path::PathBuf;

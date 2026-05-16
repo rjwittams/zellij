@@ -88,6 +88,70 @@ pub fn show_cursor(cursor_position: Option<(usize, usize)>) {
     unsafe { host_run_plugin_command() };
 }
 
+pub fn apply_graphics_update(ops: Vec<PluginGraphicsOp>) {
+    let plugin_command = PluginCommand::ApplyGraphicsUpdate(PluginGraphicsUpdate { ops });
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+}
+
+pub fn set_png_asset(asset_id: u32, png: Vec<u8>) {
+    apply_graphics_update(vec![PluginGraphicsOp::SetAsset {
+        asset_id,
+        source: PluginImageSource::PngBytes(png),
+    }]);
+}
+
+pub fn set_rgba_asset(asset_id: u32, width: u32, height: u32, bytes: Vec<u8>) {
+    apply_graphics_update(vec![PluginGraphicsOp::SetAsset {
+        asset_id,
+        source: PluginImageSource::RgbaBytes {
+            width,
+            height,
+            bytes,
+        },
+    }]);
+}
+
+pub fn set_png_asset_from_file(asset_id: u32, path: PathBuf) {
+    apply_graphics_update(vec![PluginGraphicsOp::SetAsset {
+        asset_id,
+        source: PluginImageSource::PngFile(path),
+    }]);
+}
+
+pub fn place_image(
+    placement_id: u32,
+    asset_id: u32,
+    destination: PluginCellRect,
+    source: Option<PluginPixelRect>,
+    z_index: i32,
+) {
+    apply_graphics_update(vec![PluginGraphicsOp::PlaceImage {
+        placement_id,
+        asset_id,
+        destination,
+        source,
+        z_index,
+    }]);
+}
+
+pub fn delete_graphics_asset(asset_id: u32) {
+    apply_graphics_update(vec![PluginGraphicsOp::DeleteAsset { asset_id }]);
+}
+
+pub fn delete_graphics_placement(placement_id: u32) {
+    apply_graphics_update(vec![PluginGraphicsOp::DeletePlacement { placement_id }]);
+}
+
+pub fn clear_graphics_placements() {
+    apply_graphics_update(vec![PluginGraphicsOp::ClearPlacements]);
+}
+
+pub fn clear_graphics_assets() {
+    apply_graphics_update(vec![PluginGraphicsOp::ClearAssets]);
+}
+
 pub fn request_permission(permissions: &[PermissionType]) {
     let plugin_command = PluginCommand::RequestPluginPermissions(permissions.into());
     let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();

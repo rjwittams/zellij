@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[allow(unused_imports)]
 use std::io::prelude::*;
+use std::path::PathBuf;
 #[allow(unused_imports)] // Action is used in non-test code paths (run_action call)
 use zellij_tile::prelude::actions::Action;
 use zellij_tile::prelude::*;
@@ -24,6 +25,37 @@ struct State {
 #[derive(Default, Serialize, Deserialize)]
 struct TestWorker {
     number_of_messages_received: usize,
+}
+
+fn solid_rgba(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(width as usize * height as usize * 4);
+    for _ in 0..width * height {
+        bytes.extend_from_slice(&rgba);
+    }
+    bytes
+}
+
+fn tiny_png() -> Vec<u8> {
+    vec![
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207, 192, 240,
+        31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ]
+}
+
+fn graphics_rect(x: u32, y: u32, columns: u32, rows: u32) -> PluginCellRect {
+    PluginCellRect {
+        x,
+        y,
+        columns,
+        rows,
+    }
+}
+
+fn write_graphics_fixture_png() -> PathBuf {
+    let path = PathBuf::from("/tmp/zellij-fixture-plugin-graphics.png");
+    let _ = std::fs::write(&path, tiny_png());
+    path
 }
 
 impl<'de> ZellijWorker<'de> for TestWorker {
@@ -983,6 +1015,158 @@ impl ZellijPlugin for State {
             );
         } else if name == "message_to_plugin" {
             self.message_to_plugin_payload = payload.clone();
+        } else if name == "graphics:init-bytes" {
+            apply_graphics_update(vec![
+                PluginGraphicsOp::SetAsset {
+                    asset_id: 1,
+                    source: PluginImageSource::RgbaBytes {
+                        width: 8,
+                        height: 8,
+                        bytes: solid_rgba(8, 8, [0, 220, 120, 255]),
+                    },
+                },
+                PluginGraphicsOp::PlaceImage {
+                    placement_id: 1,
+                    asset_id: 1,
+                    destination: graphics_rect(1, 1, 4, 2),
+                    source: None,
+                    z_index: 0,
+                },
+            ]);
+            self.explicit_string_to_render = Some("graphics:init-bytes sent".to_owned());
+        } else if name == "graphics:init-file" {
+            let path = write_graphics_fixture_png();
+            apply_graphics_update(vec![
+                PluginGraphicsOp::SetAsset {
+                    asset_id: 2,
+                    source: PluginImageSource::PngFile(path),
+                },
+                PluginGraphicsOp::PlaceImage {
+                    placement_id: 2,
+                    asset_id: 2,
+                    destination: graphics_rect(1, 4, 2, 1),
+                    source: None,
+                    z_index: 0,
+                },
+            ]);
+            self.explicit_string_to_render = Some("graphics:init-file sent".to_owned());
+        } else if name == "graphics:replace-asset" {
+            set_rgba_asset(1, 8, 8, solid_rgba(8, 8, [240, 180, 0, 255]));
+            self.explicit_string_to_render = Some("graphics:replace-asset sent".to_owned());
+        } else if name == "graphics:move-placement" {
+            place_image(1, 1, graphics_rect(3, 2, 5, 2), None, 0);
+            self.explicit_string_to_render = Some("graphics:move-placement sent".to_owned());
+        } else if name == "graphics:delete-placement" {
+            delete_graphics_placement(1);
+            self.explicit_string_to_render = Some("graphics:delete-placement sent".to_owned());
+        } else if name == "graphics:delete-asset" {
+            delete_graphics_asset(1);
+            self.explicit_string_to_render = Some("graphics:delete-asset sent".to_owned());
+        } else if name == "graphics:clear-placements" {
+            clear_graphics_placements();
+            self.explicit_string_to_render = Some("graphics:clear-placements sent".to_owned());
+        } else if name == "graphics:clear-assets" {
+            clear_graphics_assets();
+            self.explicit_string_to_render = Some("graphics:clear-assets sent".to_owned());
+        } else if name == "graphics:bad-batch" {
+            apply_graphics_update(vec![
+                PluginGraphicsOp::SetAsset {
+                    asset_id: 1,
+                    source: PluginImageSource::RgbaBytes {
+                        width: 8,
+                        height: 8,
+                        bytes: solid_rgba(8, 8, [0, 220, 120, 255]),
+                    },
+                },
+                PluginGraphicsOp::PlaceImage {
+                    placement_id: 1,
+                    asset_id: 1,
+                    destination: graphics_rect(1, 1, 4, 2),
+                    source: None,
+                    z_index: 0,
+                },
+            ]);
+            apply_graphics_update(vec![
+                PluginGraphicsOp::SetAsset {
+                    asset_id: 3,
+                    source: PluginImageSource::RgbaBytes {
+                        width: 4,
+                        height: 4,
+                        bytes: solid_rgba(4, 4, [255, 0, 0, 255]),
+                    },
+                },
+                PluginGraphicsOp::PlaceImage {
+                    placement_id: 3,
+                    asset_id: 99,
+                    destination: graphics_rect(1, 1, 1, 1),
+                    source: None,
+                    z_index: 0,
+                },
+            ]);
+            self.explicit_string_to_render = Some("graphics:bad-batch sent".to_owned());
+        } else if name == "graphics:z-order" {
+            apply_graphics_update(vec![
+                PluginGraphicsOp::ClearAssets,
+                PluginGraphicsOp::SetAsset {
+                    asset_id: 4,
+                    source: PluginImageSource::RgbaBytes {
+                        width: 8,
+                        height: 8,
+                        bytes: solid_rgba(8, 8, [255, 0, 0, 180]),
+                    },
+                },
+                PluginGraphicsOp::SetAsset {
+                    asset_id: 5,
+                    source: PluginImageSource::RgbaBytes {
+                        width: 8,
+                        height: 8,
+                        bytes: solid_rgba(8, 8, [0, 0, 255, 180]),
+                    },
+                },
+                PluginGraphicsOp::PlaceImage {
+                    placement_id: 4,
+                    asset_id: 4,
+                    destination: graphics_rect(1, 1, 4, 2),
+                    source: None,
+                    z_index: -1,
+                },
+                PluginGraphicsOp::PlaceImage {
+                    placement_id: 5,
+                    asset_id: 5,
+                    destination: graphics_rect(2, 1, 4, 2),
+                    source: None,
+                    z_index: 1,
+                },
+            ]);
+            self.explicit_string_to_render = Some("graphics:z-order sent".to_owned());
+        } else if name == "graphics:crop-atlas" {
+            let mut atlas = solid_rgba(8, 4, [0, 0, 0, 0]);
+            for pixel in atlas.chunks_exact_mut(4).skip(16) {
+                pixel.copy_from_slice(&[255, 0, 255, 255]);
+            }
+            apply_graphics_update(vec![
+                PluginGraphicsOp::SetAsset {
+                    asset_id: 6,
+                    source: PluginImageSource::RgbaBytes {
+                        width: 8,
+                        height: 4,
+                        bytes: atlas,
+                    },
+                },
+                PluginGraphicsOp::PlaceImage {
+                    placement_id: 6,
+                    asset_id: 6,
+                    destination: graphics_rect(1, 1, 4, 2),
+                    source: Some(PluginPixelRect {
+                        x: 0,
+                        y: 2,
+                        width: 8,
+                        height: 2,
+                    }),
+                    z_index: 0,
+                },
+            ]);
+            self.explicit_string_to_render = Some("graphics:crop-atlas sent".to_owned());
         }
         let should_render = true;
         should_render

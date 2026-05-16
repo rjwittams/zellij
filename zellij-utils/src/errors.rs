@@ -427,6 +427,7 @@ pub enum ScreenContext {
     SetFollowedClient,
     WatcherTerminalResize,
     ClearMouseHelpText,
+    ApplyPluginGraphicsUpdate,
     SetPluginRegexHighlights,
     ClearPluginHighlights,
     DesktopNotificationResponse,

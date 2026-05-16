@@ -1,10 +1,12 @@
 use std::collections::{BTreeSet, HashMap};
+use std::path::Path;
 use std::time::Instant;
 
 use crate::output::{CharacterChunk, PaneImageRenderOutput, PaneRenderOutput};
 use crate::panes::{
     grid::Grid,
     kitty_asset_store::KittyAssetStore,
+    plugin_graphics_scene::PluginGraphicsScene,
     sixel::SixelImageStore,
     terminal_pane::{BRACKETED_PASTE_BEGIN, BRACKETED_PASTE_END},
     LinkHandler, PaneId,
@@ -20,10 +22,10 @@ use crate::ClientId;
 use std::cell::RefCell;
 use std::rc::Rc;
 use vte;
-use zellij_utils::data::PaneContents;
 use zellij_utils::data::{
     BareKey, KeyWithModifier, PermissionStatus, PermissionType, PluginPermission,
 };
+use zellij_utils::data::{PaneContents, PluginGraphicsUpdate};
 use zellij_utils::pane_size::{Offset, SizeInPixels};
 use zellij_utils::position::Position;
 use zellij_utils::{
@@ -89,6 +91,7 @@ pub(crate) struct PluginPane {
     pub style: Style,
     sixel_image_store: Rc<RefCell<SixelImageStore>>,
     kitty_asset_store: Rc<RefCell<KittyAssetStore>>,
+    plugin_graphics_scene: PluginGraphicsScene,
     terminal_emulator_colors: Rc<RefCell<Palette>>,
     terminal_emulator_color_codes: Rc<RefCell<HashMap<usize, String>>>,
     link_handler: Rc<RefCell<LinkHandler>>,
@@ -155,6 +158,7 @@ impl PluginPane {
             link_handler,
             character_cell_size,
             sixel_image_store,
+            plugin_graphics_scene: PluginGraphicsScene::new(kitty_asset_store.clone()),
             kitty_asset_store,
             vte_parsers: HashMap::new(),
             grids: HashMap::new(),
@@ -255,6 +259,14 @@ impl Pane for PluginPane {
         vte_parser.advance(grid, &vte_bytes);
 
         self.should_render.insert(client_id, true);
+    }
+    fn apply_plugin_graphics_update(&mut self, update: PluginGraphicsUpdate) {
+        if let Err(e) = self
+            .plugin_graphics_scene
+            .apply_update(update, Path::new("."))
+        {
+            log::warn!("failed to apply plugin graphics update: {e}");
+        }
     }
     fn cursor_coordinates(&self, client_id: Option<ClientId>) -> Option<(usize, usize, bool)> {
         let own_content_columns = self.get_content_columns();
@@ -410,13 +422,19 @@ impl Pane for PluginPane {
                 match grid.render(content_x, content_y, &self.style) {
                     Ok(rendered_assets) => {
                         self.should_render.insert(client_id, false);
-                        return Ok(rendered_assets);
+                        return Ok(self.merge_plugin_graphics_render_output(
+                            rendered_assets,
+                            content_x,
+                            content_y,
+                            columns,
+                            rows,
+                        ));
                     },
                     e => return e,
                 }
             }
         }
-        let image_output = self
+        let mut image_output = self
             .grids
             .get(&client_id)
             .map(|grid| PaneImageRenderOutput {
@@ -424,6 +442,17 @@ impl Pane for PluginPane {
                 ..Default::default()
             })
             .unwrap_or_default();
+        let plugin_graphics = self
+            .plugin_graphics_scene
+            .visible_kitty_render_bundle(content_x, content_y, columns, rows);
+        image_output
+            .kitty_scene
+            .explicit_chunks
+            .extend(plugin_graphics.explicit_chunks);
+        image_output
+            .kitty_scene
+            .placeholder_renders
+            .extend(plugin_graphics.placeholder_renders);
         if image_output.kitty_scene.explicit_chunks.is_empty()
             && image_output.kitty_scene.placeholder_renders.is_empty()
         {
@@ -922,6 +951,36 @@ impl Pane for PluginPane {
 }
 
 impl PluginPane {
+    fn merge_plugin_graphics_render_output(
+        &self,
+        mut render_output: Option<PaneRenderOutput>,
+        content_x: usize,
+        content_y: usize,
+        columns: usize,
+        rows: usize,
+    ) -> Option<PaneRenderOutput> {
+        let plugin_graphics = self
+            .plugin_graphics_scene
+            .visible_kitty_render_bundle(content_x, content_y, columns, rows);
+        if plugin_graphics.explicit_chunks.is_empty()
+            && plugin_graphics.placeholder_renders.is_empty()
+        {
+            return render_output;
+        }
+        let output = render_output.get_or_insert_with(PaneRenderOutput::default);
+        output
+            .image_output
+            .kitty_scene
+            .explicit_chunks
+            .extend(plugin_graphics.explicit_chunks);
+        output
+            .image_output
+            .kitty_scene
+            .placeholder_renders
+            .extend(plugin_graphics.placeholder_renders);
+        render_output
+    }
+
     fn resize_grids(&mut self) {
         let content_rows = self.get_content_rows();
         let content_columns = self.get_content_columns();

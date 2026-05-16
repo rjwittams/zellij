@@ -46,8 +46,8 @@ use zellij_utils::data::{
     CommandOrPlugin, Direction, EventType, FloatingPaneCoordinates, GetFocusedPaneInfoResponse,
     HostTerminalThemeMode, KeyWithModifier, LayoutInfo, LayoutWithError, ListPanesResponse,
     ListTabsResponse, NewPanePlacement, PaneContents, PaneInfo, PaneListEntry, PaneManifest,
-    PaneRenderReport, PaneScrollbackResponse, PluginPermission, RegexHighlight, Resize,
-    ResizeStrategy, SessionInfo, Styling, TabInfo, WebSharing,
+    PaneRenderReport, PaneScrollbackResponse, PluginGraphicsUpdate, PluginPermission,
+    RegexHighlight, Resize, ResizeStrategy, SessionInfo, Styling, TabInfo, WebSharing,
 };
 use zellij_utils::errors::prelude::*;
 use zellij_utils::input::command::RunCommand;
@@ -832,6 +832,11 @@ pub enum ScreenInstruction {
     SetFollowedClient(ClientId),
     WatcherTerminalResize(ClientId, Size),
     ClearMouseHelpText(ClientId),
+    ApplyPluginGraphicsUpdate {
+        plugin_id: PluginId,
+        client_id: ClientId,
+        update: PluginGraphicsUpdate,
+    },
     UpdateAvailableLayouts(Vec<LayoutInfo>, Vec<LayoutWithError>),
     SetPluginRegexHighlights {
         pane_id: PaneId,
@@ -1164,6 +1169,9 @@ impl From<&ScreenInstruction> for ScreenContext {
             ScreenInstruction::SetFollowedClient(..) => ScreenContext::SetFollowedClient,
             ScreenInstruction::WatcherTerminalResize(..) => ScreenContext::WatcherTerminalResize,
             ScreenInstruction::ClearMouseHelpText(..) => ScreenContext::ClearMouseHelpText,
+            ScreenInstruction::ApplyPluginGraphicsUpdate { .. } => {
+                ScreenContext::ApplyPluginGraphicsUpdate
+            },
             ScreenInstruction::UpdateAvailableLayouts(..) => ScreenContext::UpdateAvailableLayouts,
             ScreenInstruction::SetPluginRegexHighlights { .. } => {
                 ScreenContext::SetPluginRegexHighlights
@@ -10217,6 +10225,36 @@ pub(crate) fn screen_thread_main(
                     tab.clear_mouse_help_text(client_id);
                     screen.render(None)?;
                 }
+            },
+            ScreenInstruction::ApplyPluginGraphicsUpdate {
+                plugin_id,
+                client_id,
+                update,
+            } => {
+                let all_tabs = screen.get_tabs_mut();
+                let mut pending_update = Some(update);
+                let mut found_plugin = false;
+                for tab in all_tabs.values_mut() {
+                    if tab.has_plugin(plugin_id) {
+                        if let Some(update) = pending_update.take() {
+                            tab.apply_plugin_graphics_update(plugin_id, update);
+                        }
+                        found_plugin = true;
+                        break;
+                    }
+                }
+                if let Some(update) = pending_update {
+                    if !found_plugin {
+                        pending_events_waiting_for_tab.push(
+                            ScreenInstruction::ApplyPluginGraphicsUpdate {
+                                plugin_id,
+                                client_id,
+                                update,
+                            },
+                        );
+                    }
+                }
+                screen.render(None)?;
             },
             ScreenInstruction::SetPluginRegexHighlights {
                 pane_id,
