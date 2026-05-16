@@ -6174,6 +6174,89 @@ fn screen_does_not_start_kitty_capability_probe_for_web_client() {
 }
 
 #[test]
+fn kitty_capability_direct_success_starts_next_configured_transport_probe() {
+    let (mut screen, capture) = create_new_screen_with_forward_capture(Size { cols: 80, rows: 20 });
+    screen.kitty_image_output_transports = vec![
+        KittyImageOutputTransport::File,
+        KittyImageOutputTransport::Direct,
+    ];
+    screen.connected_clients.borrow_mut().insert(1, false);
+
+    let mut output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+    screen.configure_kitty_file_output_for_regular_clients(&mut output);
+    let direct_probe = capture.drain_targeted_forward_queries();
+    assert_eq!(direct_probe.len(), 1);
+    let direct_token = direct_probe[0].1;
+    assert!(String::from_utf8(direct_probe[0].2.clone())
+        .unwrap()
+        .contains("t=d"));
+
+    screen.handle_kitty_image_terminal_response(b"Gi=1;OK", 1);
+    screen
+        .handle_forwarded_reply_from_host(direct_token, Vec::new())
+        .unwrap();
+
+    let file_probe = capture.drain_targeted_forward_queries();
+    assert_eq!(file_probe.len(), 1);
+    assert_eq!(file_probe[0].0, 1);
+    let file_probe_bytes = String::from_utf8(file_probe[0].2.clone()).unwrap();
+    assert!(file_probe_bytes.contains("a=q"));
+    assert!(file_probe_bytes.contains("t=f"));
+}
+
+#[test]
+fn kitty_capability_transport_success_adds_transport_after_barrier() {
+    let (mut screen, capture) = create_new_screen_with_forward_capture(Size { cols: 80, rows: 20 });
+    screen.kitty_image_output_transports = vec![
+        KittyImageOutputTransport::File,
+        KittyImageOutputTransport::Direct,
+    ];
+    screen.connected_clients.borrow_mut().insert(1, false);
+
+    let mut output = Output::new(
+        screen.sixel_image_store.clone(),
+        screen.kitty_asset_store.clone(),
+        screen.kitty_output_media_cache.clone(),
+        screen.character_cell_size.clone(),
+        true,
+        true,
+    );
+    screen.configure_kitty_file_output_for_regular_clients(&mut output);
+    let direct_probe = capture.drain_targeted_forward_queries();
+    screen.handle_kitty_image_terminal_response(b"Gi=1;OK", 1);
+    screen
+        .handle_forwarded_reply_from_host(direct_probe[0].1, Vec::new())
+        .unwrap();
+    let file_probe = capture.drain_targeted_forward_queries();
+
+    screen.handle_kitty_image_terminal_response(b"Gi=2;OK", 1);
+    screen
+        .handle_forwarded_reply_from_host(file_probe[0].1, Vec::new())
+        .unwrap();
+
+    let capabilities = screen.kitty_client_graphics_capabilities(1);
+    assert_eq!(
+        capabilities.protocol,
+        super::KittyProtocolCapability::Supported
+    );
+    assert_eq!(
+        capabilities.transports,
+        vec![
+            KittyImageOutputTransport::Direct,
+            KittyImageOutputTransport::File
+        ]
+    );
+    assert!(capture.drain_targeted_forward_queries().is_empty());
+}
+
+#[test]
 fn watcher_helper_round_trips_followed_client_image_state() {
     let size = Size { cols: 80, rows: 20 };
     let mut screen = create_new_screen(size, true, true);

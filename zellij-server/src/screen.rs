@@ -1464,6 +1464,7 @@ pub(crate) struct Screen {
     pending_forwarded_queries: HashMap<u32, PendingForwardEntry>,
     pending_kitty_capability_probes: HashMap<u32, PendingKittyCapabilityProbe>,
     pending_kitty_capability_probe_tokens_by_response_key: HashMap<(ClientId, u32), u32>,
+    kitty_capability_probe_queues: HashMap<ClientId, VecDeque<KittyImageOutputTransport>>,
     kitty_client_graphics_capabilities: HashMap<ClientId, KittyClientGraphicsCapabilities>,
     /// Serialization queue for forwarded queries. Invariant: at most one
     /// forward is in flight to the client at a time (enforced by
@@ -1773,6 +1774,7 @@ impl Screen {
             pending_forwarded_queries: HashMap::new(),
             pending_kitty_capability_probes: HashMap::new(),
             pending_kitty_capability_probe_tokens_by_response_key: HashMap::new(),
+            kitty_capability_probe_queues: HashMap::new(),
             kitty_client_graphics_capabilities: HashMap::new(),
             forward_queue: VecDeque::new(),
             forward_in_flight_token: None,
@@ -2501,8 +2503,9 @@ impl Screen {
             );
             return Ok(());
         }
-        if self.finalize_pending_kitty_capability_probe(token) {
+        if let Some(client_id) = self.finalize_pending_kitty_capability_probe(token) {
             self.release_forward_slot_and_dispatch_next();
+            self.start_next_kitty_capability_transport_probe(client_id);
             return Ok(());
         }
         if let Some(entry) = self.pending_forwarded_queries.remove(&token) {
@@ -2787,6 +2790,8 @@ impl Screen {
             .entry(client_id)
             .or_default()
             .protocol = KittyProtocolCapability::Probing;
+        self.kitty_capability_probe_queues
+            .insert(client_id, self.configured_kitty_capability_probe_queue());
         let probe_image_id = self.next_kitty_capability_probe_image_id();
         let Some(query_bytes) = build_kitty_capability_probe_bytes(
             probe_image_id,
@@ -2808,6 +2813,56 @@ impl Screen {
         );
         self.dispatch_forward_query_bytes_to_client(client_id, token, query_bytes);
         self.schedule_forward_timeout(token);
+    }
+
+    fn configured_kitty_capability_probe_queue(&self) -> VecDeque<KittyImageOutputTransport> {
+        let mut queue = VecDeque::new();
+        for transport in self.kitty_image_output_transports.iter().copied() {
+            if transport != KittyImageOutputTransport::Direct && !queue.contains(&transport) {
+                queue.push_back(transport);
+            }
+        }
+        queue
+    }
+
+    fn start_next_kitty_capability_transport_probe(&mut self, client_id: ClientId) {
+        if self.forward_in_flight_token.is_some() {
+            return;
+        }
+        loop {
+            let Some(transport) = self
+                .kitty_capability_probe_queues
+                .get_mut(&client_id)
+                .and_then(VecDeque::pop_front)
+            else {
+                self.kitty_capability_probe_queues.remove(&client_id);
+                return;
+            };
+            let Ok((fixture, media_ref)) =
+                self.create_kitty_capability_probe_media_fixture(transport)
+            else {
+                continue;
+            };
+            let probe_image_id = self.next_kitty_capability_probe_image_id();
+            let Some(query_bytes) = build_kitty_capability_probe_bytes(
+                probe_image_id,
+                KittyCapabilityProbeTransport::OutputTransport(transport),
+                Some(&media_ref),
+            ) else {
+                continue;
+            };
+            let token = self.next_host_forward_token();
+            self.register_pending_kitty_capability_probe_with_fixture(
+                token,
+                client_id,
+                probe_image_id,
+                KittyCapabilityProbeTransport::OutputTransport(transport),
+                fixture,
+            );
+            self.dispatch_forward_query_bytes_to_client(client_id, token, query_bytes);
+            self.schedule_forward_timeout(token);
+            return;
+        }
     }
 
     fn reap_stale_kitty_output_media_files(&mut self) {
@@ -2966,10 +3021,11 @@ impl Screen {
         false
     }
 
-    fn finalize_pending_kitty_capability_probe(&mut self, token: u32) -> bool {
+    fn finalize_pending_kitty_capability_probe(&mut self, token: u32) -> Option<ClientId> {
         let Some(probe) = self.pending_kitty_capability_probes.remove(&token) else {
-            return false;
+            return None;
         };
+        let client_id = probe.client_id;
         probe.media_fixture.cleanup();
         self.pending_kitty_capability_probe_tokens_by_response_key
             .remove(&(probe.client_id, probe.probe_image_id));
@@ -2992,6 +3048,7 @@ impl Screen {
                     }
                     KittyProtocolCapability::Supported
                 } else {
+                    self.kitty_capability_probe_queues.remove(&probe.client_id);
                     KittyProtocolCapability::Unsupported
                 };
             },
@@ -3001,7 +3058,7 @@ impl Screen {
                 }
             },
         }
-        true
+        Some(client_id)
     }
 
     fn create_kitty_capability_probe_media_fixture(
