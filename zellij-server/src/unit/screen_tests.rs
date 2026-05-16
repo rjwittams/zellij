@@ -55,6 +55,8 @@ use crate::panes::pane_image_scene::KittyRenderBundle;
 use crate::panes::sixel::SixelImageStore;
 use std::cell::RefCell;
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::ffi::CString;
 use std::rc::Rc;
 use zellij_utils::data::{PaneContents, PaneRenderReport};
 use zellij_utils::ipc::ExitReason;
@@ -5550,6 +5552,20 @@ fn test_kitty_chunk(image_id: u32, placement_id: u32) -> KittyImageChunk {
     }
 }
 
+#[cfg(unix)]
+fn test_shared_memory_exists(name: &str) -> bool {
+    let c_name = CString::new(name).expect("test shm name should not contain nul");
+    let fd = unsafe { libc::shm_open(c_name.as_ptr(), libc::O_RDONLY, 0) };
+    if fd < 0 {
+        false
+    } else {
+        unsafe {
+            libc::close(fd);
+        }
+        true
+    }
+}
+
 #[test]
 fn kitty_capability_probe_serializes_direct_query() {
     let probe = super::build_kitty_capability_probe_bytes(
@@ -5758,6 +5774,99 @@ fn kitty_capability_probe_response_does_not_ack_output_media() {
     assert!(
         media_path.exists(),
         "probe response must not be treated as an output upload acknowledgement"
+    );
+}
+
+#[test]
+fn kitty_capability_regular_file_probe_fixture_is_removed_on_barrier() {
+    let mut screen = create_new_screen(Size { cols: 80, rows: 20 }, true, true);
+    let (fixture, media_ref) = screen
+        .create_kitty_capability_probe_media_fixture(KittyImageOutputTransport::File)
+        .expect("regular-file fixture should be created");
+    let path = fixture
+        .path()
+        .expect("regular-file fixture should have a path")
+        .to_path_buf();
+
+    assert_eq!(std::fs::read(&path).unwrap(), vec![0, 0, 0]);
+    assert_eq!(media_ref, path.to_string_lossy());
+
+    screen.register_pending_kitty_capability_probe_with_fixture(
+        81,
+        1,
+        45,
+        super::KittyCapabilityProbeTransport::OutputTransport(KittyImageOutputTransport::File),
+        fixture,
+    );
+    screen
+        .handle_forwarded_reply_from_host(81, Vec::new())
+        .unwrap();
+
+    assert!(
+        !path.exists(),
+        "regular-file probe fixture should be removed"
+    );
+}
+
+#[test]
+fn kitty_capability_temporary_file_probe_fixture_is_removed_on_barrier() {
+    let mut screen = create_new_screen(Size { cols: 80, rows: 20 }, true, true);
+    let (fixture, media_ref) = screen
+        .create_kitty_capability_probe_media_fixture(KittyImageOutputTransport::TemporaryFile)
+        .expect("temp-file fixture should be created");
+    let path = fixture
+        .path()
+        .expect("temp-file fixture should have a path")
+        .to_path_buf();
+
+    assert!(
+        media_ref.contains("tty-graphics-protocol"),
+        "temp-file probe path must be in a kitty-approved temp path"
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), vec![0, 0, 0]);
+
+    screen.register_pending_kitty_capability_probe_with_fixture(
+        82,
+        1,
+        46,
+        super::KittyCapabilityProbeTransport::OutputTransport(
+            KittyImageOutputTransport::TemporaryFile,
+        ),
+        fixture,
+    );
+    screen
+        .handle_forwarded_reply_from_host(82, Vec::new())
+        .unwrap();
+
+    assert!(!path.exists(), "temp-file probe fixture should be removed");
+}
+
+#[cfg(unix)]
+#[test]
+fn kitty_capability_shared_memory_probe_fixture_is_unlinked_on_barrier() {
+    let mut screen = create_new_screen(Size { cols: 80, rows: 20 }, true, true);
+    let (fixture, media_ref) = screen
+        .create_kitty_capability_probe_media_fixture(KittyImageOutputTransport::SharedMemory)
+        .expect("shared-memory fixture should be created");
+
+    assert!(test_shared_memory_exists(&media_ref));
+
+    screen.register_pending_kitty_capability_probe_with_fixture(
+        83,
+        1,
+        47,
+        super::KittyCapabilityProbeTransport::OutputTransport(
+            KittyImageOutputTransport::SharedMemory,
+        ),
+        fixture,
+    );
+    screen
+        .handle_forwarded_reply_from_host(83, Vec::new())
+        .unwrap();
+
+    assert!(
+        !test_shared_memory_exists(&media_ref),
+        "shared-memory probe fixture should be unlinked"
     );
 }
 

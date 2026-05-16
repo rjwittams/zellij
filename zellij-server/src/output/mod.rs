@@ -32,6 +32,9 @@ use self::image_fragment::PreparedImageOutput;
 use self::image_output::ImageOutput;
 pub(crate) use self::image_output::KittyUploadAcknowledgementPolicy;
 pub(crate) use self::kitty_host_placement_id::{placement_id_allocator, PlacementIdAllocator};
+pub(crate) use self::kitty_output_media::{
+    unlink_shared_memory_payload, write_shared_memory_payload,
+};
 pub use self::kitty_output_media::{KittyOutputMediaCache, KittyOutputMediaRetention};
 use crate::panes::pane_image_scene::KittyRenderBundle;
 use zellij_utils::pane_size::{PaneGeom, Size};

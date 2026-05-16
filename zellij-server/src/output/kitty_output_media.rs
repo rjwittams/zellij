@@ -404,7 +404,7 @@ pub(crate) fn next_shared_memory_output_name_for_tests() -> String {
 }
 
 #[cfg(unix)]
-fn write_shared_memory_payload(payload: &[u8]) -> io::Result<String> {
+pub(crate) fn write_shared_memory_payload(payload: &[u8]) -> io::Result<String> {
     for _ in 0..SHARED_MEMORY_OUTPUT_CREATE_ATTEMPTS {
         let name = next_shared_memory_output_name();
         match create_shared_memory_payload(&name, payload) {
@@ -476,7 +476,7 @@ fn write_shared_memory_payload_to_fd(fd: libc::c_int, payload: &[u8]) -> io::Res
 }
 
 #[cfg(not(unix))]
-fn write_shared_memory_payload(_payload: &[u8]) -> io::Result<String> {
+pub(crate) fn write_shared_memory_payload(_payload: &[u8]) -> io::Result<String> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "shared memory kitty output is unsupported on this platform",
@@ -484,7 +484,7 @@ fn write_shared_memory_payload(_payload: &[u8]) -> io::Result<String> {
 }
 
 #[cfg(unix)]
-fn unlink_shared_memory_payload(name: &str) -> io::Result<()> {
+pub(crate) fn unlink_shared_memory_payload(name: &str) -> io::Result<()> {
     let c_name = CString::new(name)
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid shared memory name"))?;
     if unsafe { libc::shm_unlink(c_name.as_ptr()) } == 0 {
@@ -495,7 +495,7 @@ fn unlink_shared_memory_payload(name: &str) -> io::Result<()> {
 }
 
 #[cfg(not(unix))]
-fn unlink_shared_memory_payload(_name: &str) -> io::Result<()> {
+pub(crate) fn unlink_shared_memory_payload(_name: &str) -> io::Result<()> {
     Ok(())
 }
 

@@ -30,10 +30,13 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::fs;
+use std::io::{self, Write};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::str;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::route::NotificationEnd;
@@ -77,8 +80,9 @@ use crate::session_layout_metadata::{PaneLayoutMetadata, SessionLayoutMetadata};
 
 use crate::{
     output::{
-        KittyOutputMediaCache, KittyOutputMediaRetention, KittyUploadAcknowledgementPolicy,
-        LastRenderedImageState, Output,
+        unlink_shared_memory_payload, write_shared_memory_payload, KittyOutputMediaCache,
+        KittyOutputMediaRetention, KittyUploadAcknowledgementPolicy, LastRenderedImageState,
+        Output,
     },
     panes::kitty_asset_store::KittyAssetStore,
     panes::sixel::SixelImageStore,
@@ -1531,6 +1535,7 @@ struct PendingKittyCapabilityProbe {
     probe_image_id: u32,
     transport: KittyCapabilityProbeTransport,
     response: Option<KittyProbeResponse>,
+    media_fixture: KittyCapabilityProbeMediaFixture,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1538,6 +1543,45 @@ struct KittyProbeResponse {
     ok: bool,
     message: String,
 }
+
+#[derive(Clone, Debug)]
+enum KittyCapabilityProbeMediaFixture {
+    None,
+    File { path: PathBuf },
+    SharedMemory { name: String },
+}
+
+impl KittyCapabilityProbeMediaFixture {
+    #[cfg(test)]
+    fn path(&self) -> Option<&std::path::Path> {
+        match self {
+            KittyCapabilityProbeMediaFixture::File { path } => Some(path),
+            KittyCapabilityProbeMediaFixture::None
+            | KittyCapabilityProbeMediaFixture::SharedMemory { .. } => None,
+        }
+    }
+
+    fn cleanup(&self) {
+        match self {
+            KittyCapabilityProbeMediaFixture::None => {},
+            KittyCapabilityProbeMediaFixture::File { path } => {
+                let _ = fs::remove_file(path);
+            },
+            KittyCapabilityProbeMediaFixture::SharedMemory { name } => {
+                let _ = unlink_shared_memory_payload(name);
+            },
+        }
+    }
+}
+
+impl Drop for KittyCapabilityProbeMediaFixture {
+    fn drop(&mut self) {
+        self.cleanup();
+    }
+}
+
+const KITTY_CAPABILITY_PROBE_PIXEL: &[u8] = &[0, 0, 0];
+static KITTY_CAPABILITY_PROBE_MEDIA_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn build_kitty_capability_probe_bytes(
     probe_image_id: u32,
@@ -1566,6 +1610,18 @@ fn build_kitty_capability_probe_bytes(
     }
     command.push_str("\u{1b}\\");
     Some(command.into_bytes())
+}
+
+fn write_kitty_capability_probe_file(path: &std::path::Path) -> io::Result<()> {
+    let write_result = (|| -> io::Result<()> {
+        let mut file = fs::File::create(path)?;
+        file.write_all(KITTY_CAPABILITY_PROBE_PIXEL)?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(path);
+    }
+    write_result
 }
 
 /// A forward currently in flight (dispatched to the client, waiting
@@ -2761,6 +2817,23 @@ impl Screen {
         probe_image_id: u32,
         transport: KittyCapabilityProbeTransport,
     ) {
+        self.register_pending_kitty_capability_probe_with_fixture(
+            token,
+            client_id,
+            probe_image_id,
+            transport,
+            KittyCapabilityProbeMediaFixture::None,
+        );
+    }
+
+    fn register_pending_kitty_capability_probe_with_fixture(
+        &mut self,
+        token: u32,
+        client_id: ClientId,
+        probe_image_id: u32,
+        transport: KittyCapabilityProbeTransport,
+        media_fixture: KittyCapabilityProbeMediaFixture,
+    ) {
         self.pending_kitty_capability_probes.insert(
             token,
             PendingKittyCapabilityProbe {
@@ -2768,6 +2841,7 @@ impl Screen {
                 probe_image_id,
                 transport,
                 response: None,
+                media_fixture,
             },
         );
         self.pending_kitty_capability_probe_tokens_by_response_key
@@ -2810,6 +2884,7 @@ impl Screen {
         let Some(probe) = self.pending_kitty_capability_probes.remove(&token) else {
             return false;
         };
+        probe.media_fixture.cleanup();
         self.pending_kitty_capability_probe_tokens_by_response_key
             .remove(&(probe.client_id, probe.probe_image_id));
         let succeeded = probe.response.as_ref().is_some_and(|response| response.ok);
@@ -2841,6 +2916,43 @@ impl Screen {
             },
         }
         true
+    }
+
+    fn create_kitty_capability_probe_media_fixture(
+        &self,
+        transport: KittyImageOutputTransport,
+    ) -> io::Result<(KittyCapabilityProbeMediaFixture, String)> {
+        let sequence = KITTY_CAPABILITY_PROBE_MEDIA_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        match transport {
+            KittyImageOutputTransport::Direct => {
+                Ok((KittyCapabilityProbeMediaFixture::None, String::new()))
+            },
+            KittyImageOutputTransport::File => {
+                let path = std::env::temp_dir().join(format!(
+                    "zellij-kitty-capability-probe-{}-{sequence}.rgb",
+                    std::process::id(),
+                ));
+                write_kitty_capability_probe_file(&path)?;
+                let media_ref = path.to_string_lossy().to_string();
+                Ok((KittyCapabilityProbeMediaFixture::File { path }, media_ref))
+            },
+            KittyImageOutputTransport::TemporaryFile => {
+                let path = std::env::temp_dir().join(format!(
+                    "tty-graphics-protocol-zellij-capability-probe-{}-{sequence}.rgb",
+                    std::process::id(),
+                ));
+                write_kitty_capability_probe_file(&path)?;
+                let media_ref = path.to_string_lossy().to_string();
+                Ok((KittyCapabilityProbeMediaFixture::File { path }, media_ref))
+            },
+            KittyImageOutputTransport::SharedMemory => {
+                let name = write_shared_memory_payload(KITTY_CAPABILITY_PROBE_PIXEL)?;
+                Ok((
+                    KittyCapabilityProbeMediaFixture::SharedMemory { name: name.clone() },
+                    name,
+                ))
+            },
+        }
     }
 
     pub fn render_to_clients(&mut self) -> Result<()> {
