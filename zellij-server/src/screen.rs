@@ -8152,6 +8152,10 @@ pub(crate) fn screen_thread_main(
             },
             ScreenInstruction::TerminalPixelDimensions(pixel_dimensions) => {
                 screen.update_pixel_dimensions(pixel_dimensions);
+                let terminal_pixel_cell_size = *screen.character_cell_size.borrow();
+                let _ = screen.bus.senders.send_to_plugin(
+                    PluginInstruction::UpdateTerminalPixelCellSize(terminal_pixel_cell_size),
+                );
             },
             ScreenInstruction::TerminalBackgroundColor(background_color_instruction) => {
                 screen.update_terminal_background_color(background_color_instruction);

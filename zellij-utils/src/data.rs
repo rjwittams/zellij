@@ -2803,6 +2803,7 @@ impl CommandToRun {
 pub struct MessageToPlugin {
     pub plugin_url: Option<String>,
     pub destination_plugin_id: Option<u32>,
+    pub destination_client_id: Option<u16>,
     pub plugin_config: BTreeMap<String, String>,
     pub message_name: String,
     pub message_payload: Option<String>,
@@ -2876,6 +2877,10 @@ impl MessageToPlugin {
     }
     pub fn with_destination_plugin_id(mut self, destination_plugin_id: u32) -> Self {
         self.destination_plugin_id = Some(destination_plugin_id);
+        self
+    }
+    pub fn with_destination_client_id(mut self, destination_client_id: u16) -> Self {
+        self.destination_client_id = Some(destination_client_id);
         self
     }
     pub fn with_plugin_config(mut self, plugin_config: BTreeMap<String, String>) -> Self {
@@ -3380,8 +3385,8 @@ pub enum PluginImageSource {
 pub struct PluginCellRect {
     pub x: u32,
     pub y: u32,
-    pub columns: u32,
-    pub rows: u32,
+    pub columns: Option<u32>,
+    pub rows: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -3631,6 +3636,7 @@ pub enum PluginCommand {
     ParseLayout(String), // String contains raw KDL layout
     GetLayoutDir,
     GetFocusedPaneInfo,
+    GetTerminalPixelCellSize,
     SaveSession,
     CurrentSessionLastSavedTime,
     GetPaneInfo(PaneId),

@@ -19,6 +19,7 @@ use zellij_utils::{
     input::keybinds::Keybinds,
     input::layout::{PluginUserConfiguration, RunPlugin, RunPluginLocation},
     input::plugins::PluginConfig,
+    pane_size::SizeInPixels,
 };
 use zellij_utils::{data::PermissionType, errors::prelude::*};
 
@@ -293,6 +294,7 @@ pub struct PluginEnv {
     pub subscriptions: Arc<Mutex<Subscriptions>>,
     pub stdin_pipe: Arc<Mutex<VecDeque<u8>>>,
     pub stdout_pipe: Arc<Mutex<VecDeque<u8>>>,
+    pub terminal_pixel_cell_size: Arc<Mutex<Option<SizeInPixels>>>,
     pub keybinds: Keybinds,
     pub intercepting_key_presses: bool,
     pub store_limits: StoreLimits,

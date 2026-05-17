@@ -105,7 +105,7 @@ use zellij_utils::{
             ProtobufOpenTerminalPaneInPlaceOfPaneIdResponse, ProtobufOpenTerminalResponse,
             ProtobufParseLayoutResponse, ProtobufPluginCommand, ProtobufRenameLayoutResponse,
             ProtobufSaveLayoutResponse, ProtobufSaveSessionResponse,
-            ProtobufShowFloatingPanesResponse,
+            ProtobufShowFloatingPanesResponse, ProtobufTerminalPixelCellSizeResponse,
         },
         plugin_ids::{ProtobufPluginIds, ProtobufZellijVersion},
     },
@@ -188,6 +188,7 @@ fn host_run_plugin_command(mut caller: Caller<'_, PluginEnv>) {
                     PluginCommand::ParseLayout(layout_string) => parse_layout(env, layout_string),
                     PluginCommand::GetLayoutDir => get_layout_dir(env),
                     PluginCommand::GetFocusedPaneInfo => get_focused_pane_info(env),
+                    PluginCommand::GetTerminalPixelCellSize => get_terminal_pixel_cell_size(env),
                     PluginCommand::SaveSession => save_session(env),
                     PluginCommand::CurrentSessionLastSavedTime => {
                         current_session_last_saved_time(env)
@@ -992,6 +993,19 @@ fn generate_random_name(env: &PluginEnv) {
         .with_context(|| {
             format!(
                 "failed to send generated random name to plugin {}",
+                env.name()
+            )
+        })
+        .non_fatal();
+}
+
+fn get_terminal_pixel_cell_size(env: &PluginEnv) {
+    let cell_size = *env.terminal_pixel_cell_size.lock().unwrap();
+    let response = ProtobufTerminalPixelCellSizeResponse::from(cell_size);
+    wasi_write_object(env, &response.encode_to_vec())
+        .with_context(|| {
+            format!(
+                "failed to query terminal pixel cell size from host for plugin {}",
                 env.name()
             )
         })
@@ -5469,6 +5483,7 @@ fn check_command_permission(
         | PluginCommand::GenerateRandomName
         | PluginCommand::GetLayoutDir
         | PluginCommand::GetFocusedPaneInfo
+        | PluginCommand::GetTerminalPixelCellSize
         | PluginCommand::DumpLayout(..)
         | PluginCommand::ParseLayout(..)
         | PluginCommand::SaveSession

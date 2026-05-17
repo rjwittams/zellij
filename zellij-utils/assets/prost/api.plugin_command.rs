@@ -422,10 +422,10 @@ pub struct PluginCellRect {
     pub x: u32,
     #[prost(uint32, tag="2")]
     pub y: u32,
-    #[prost(uint32, tag="3")]
-    pub columns: u32,
-    #[prost(uint32, tag="4")]
-    pub rows: u32,
+    #[prost(uint32, optional, tag="3")]
+    pub columns: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag="4")]
+    pub rows: ::core::option::Option<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -904,6 +904,8 @@ pub struct MessageToPluginPayload {
     pub destination_plugin_id: ::core::option::Option<u32>,
     #[prost(message, optional, tag="8")]
     pub floating_pane_coordinates: ::core::option::Option<FloatingPaneCoordinates>,
+    #[prost(uint32, optional, tag="9")]
+    pub destination_client_id: ::core::option::Option<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1361,6 +1363,20 @@ pub mod edit_layout_response {
 pub struct GenerateRandomNameResponse {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, Copy, PartialEq, Eq, ::prost::Message)]
+pub struct TerminalPixelCellSize {
+    #[prost(uint32, tag="1")]
+    pub width: u32,
+    #[prost(uint32, tag="2")]
+    pub height: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TerminalPixelCellSizeResponse {
+    #[prost(message, optional, tag="1")]
+    pub cell_size: ::core::option::Option<TerminalPixelCellSize>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -2281,6 +2297,7 @@ pub enum CommandName {
     DeleteDeadSessionAndReply = 213,
     DeleteAllDeadSessionsAndReply = 214,
     ApplyGraphicsUpdate = 215,
+    GetTerminalPixelCellSize = 216,
 }
 impl CommandName {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2484,6 +2501,7 @@ impl CommandName {
             CommandName::DeleteDeadSessionAndReply => "DeleteDeadSessionAndReply",
             CommandName::DeleteAllDeadSessionsAndReply => "DeleteAllDeadSessionsAndReply",
             CommandName::ApplyGraphicsUpdate => "ApplyGraphicsUpdate",
+            CommandName::GetTerminalPixelCellSize => "GetTerminalPixelCellSize",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2684,6 +2702,7 @@ impl CommandName {
             "DeleteDeadSessionAndReply" => Some(Self::DeleteDeadSessionAndReply),
             "DeleteAllDeadSessionsAndReply" => Some(Self::DeleteAllDeadSessionsAndReply),
             "ApplyGraphicsUpdate" => Some(Self::ApplyGraphicsUpdate),
+            "GetTerminalPixelCellSize" => Some(Self::GetTerminalPixelCellSize),
             _ => None,
         }
     }

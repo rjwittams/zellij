@@ -225,8 +225,8 @@ impl PluginGraphicsScene {
                 cell_y: projected.cell_y,
                 columns: projected.columns,
                 rows: projected.rows,
-                columns_specified: true,
-                rows_specified: true,
+                columns_specified: projected.columns_specified,
+                rows_specified: projected.rows_specified,
                 source_x: projected.source.x,
                 source_y: projected.source.y,
                 source_width: projected.source.width,
@@ -271,6 +271,8 @@ struct ProjectedPlacement {
     cell_y: usize,
     columns: usize,
     rows: usize,
+    columns_specified: bool,
+    rows_specified: bool,
     source: PluginPixelRect,
 }
 
@@ -358,7 +360,12 @@ fn decoded_size(width: u32, height: u32) -> Result<usize, PluginGraphicsError> {
 }
 
 fn validate_destination(destination: PluginCellRect) -> Result<(), PluginGraphicsError> {
-    if destination.columns == 0 || destination.rows == 0 {
+    if destination.columns.is_none() && destination.rows.is_none() {
+        return Err(PluginGraphicsError::new(
+            "plugin graphics destination must specify rows, columns, or both",
+        ));
+    }
+    if destination.columns == Some(0) || destination.rows == Some(0) {
         return Err(PluginGraphicsError::new(
             "plugin graphics destination must be non-zero",
         ));
@@ -400,8 +407,7 @@ fn project_placement(
 ) -> Option<ProjectedPlacement> {
     let dest_x = placement.destination.x as usize;
     let dest_y = placement.destination.y as usize;
-    let dest_columns = placement.destination.columns as usize;
-    let dest_rows = placement.destination.rows as usize;
+    let (dest_columns, dest_rows) = effective_destination_size(placement);
     let visible_left = dest_x.max(0);
     let visible_top = dest_y.max(0);
     let visible_right = dest_x.saturating_add(dest_columns).min(viewport_width);
@@ -427,8 +433,32 @@ fn project_placement(
         cell_y: content_y + visible_top,
         columns: visible_columns,
         rows: visible_rows,
+        columns_specified: placement.destination.columns.is_some(),
+        rows_specified: placement.destination.rows.is_some(),
         source,
     })
+}
+
+fn effective_destination_size(placement: &PluginGraphicsPlacement) -> (usize, usize) {
+    match (placement.destination.columns, placement.destination.rows) {
+        (Some(columns), Some(rows)) => (columns as usize, rows as usize),
+        (Some(columns), None) => (
+            columns as usize,
+            ceil_scale(columns, placement.source.height, placement.source.width) as usize,
+        ),
+        (None, Some(rows)) => (
+            ceil_scale(rows, placement.source.width, placement.source.height) as usize,
+            rows as usize,
+        ),
+        (None, None) => (0, 0),
+    }
+}
+
+fn ceil_scale(value: u32, numerator: u32, denominator: u32) -> u32 {
+    if denominator == 0 {
+        return 0;
+    }
+    (((value as u64) * (numerator as u64) + (denominator as u64) - 1) / (denominator as u64)) as u32
 }
 
 fn scale_u32(value: u32, numerator: usize, denominator: usize) -> u32 {
@@ -483,8 +513,8 @@ mod tests {
         PluginCellRect {
             x: 0,
             y: 0,
-            columns,
-            rows,
+            columns: Some(columns),
+            rows: Some(rows),
         }
     }
 
@@ -689,8 +719,8 @@ mod tests {
                             destination: PluginCellRect {
                                 x: 1,
                                 y: 2,
-                                columns: 3,
-                                rows: 4,
+                                columns: Some(3),
+                                rows: Some(4),
                             },
                             source: Some(PluginPixelRect {
                                 x: 2,
@@ -714,12 +744,59 @@ mod tests {
         assert_eq!(chunk.cell_y, 22);
         assert_eq!(chunk.columns, 3);
         assert_eq!(chunk.rows, 4);
+        assert!(chunk.columns_specified);
+        assert!(chunk.rows_specified);
         assert_eq!(chunk.source_x, 2);
         assert_eq!(chunk.source_y, 3);
         assert_eq!(chunk.source_width, 5);
         assert_eq!(chunk.source_height, 6);
         assert_eq!(chunk.z_index, -1);
         assert!(matches!(chunk.placement_id, Some(PlacementId::Protocol(_))));
+    }
+
+    #[test]
+    fn plugin_graphics_placement_preserves_unspecified_rows_for_kitty_aspect_ratio() {
+        let (mut scene, _) = scene();
+        scene
+            .apply_update(
+                PluginGraphicsUpdate {
+                    ops: vec![
+                        PluginGraphicsOp::SetAsset {
+                            asset_id: 1,
+                            source: rgba(10, 20),
+                        },
+                        PluginGraphicsOp::PlaceImage {
+                            placement_id: 2,
+                            asset_id: 1,
+                            destination: PluginCellRect {
+                                x: 1,
+                                y: 2,
+                                columns: Some(3),
+                                rows: None,
+                            },
+                            source: Some(PluginPixelRect {
+                                x: 2,
+                                y: 3,
+                                width: 5,
+                                height: 6,
+                            }),
+                            z_index: -1,
+                        },
+                    ],
+                },
+                Path::new("."),
+            )
+            .unwrap();
+
+        let bundle = scene.visible_kitty_render_bundle(10, 20, 80, 24);
+
+        let chunk = &bundle.explicit_chunks[0];
+        assert_eq!(chunk.cell_x, 11);
+        assert_eq!(chunk.cell_y, 22);
+        assert_eq!(chunk.columns, 3);
+        assert_eq!(chunk.rows, 4);
+        assert!(chunk.columns_specified);
+        assert!(!chunk.rows_specified);
     }
 
     #[test]
@@ -971,8 +1048,8 @@ mod tests {
                             destination: PluginCellRect {
                                 x: 2,
                                 y: 1,
-                                columns: 4,
-                                rows: 4,
+                                columns: Some(4),
+                                rows: Some(4),
                             },
                             source: None,
                             z_index: 0,

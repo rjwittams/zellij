@@ -51,8 +51,8 @@ fn graphics_rect(x: u32, y: u32, columns: u32, rows: u32) -> PluginCellRect {
     PluginCellRect {
         x,
         y,
-        columns,
-        rows,
+        columns: Some(columns),
+        rows: Some(rows),
     }
 }
 

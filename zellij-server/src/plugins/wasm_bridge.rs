@@ -47,7 +47,7 @@ use zellij_utils::{
         layout::{PluginUserConfiguration, RunPlugin, RunPluginLocation, RunPluginOrAlias},
         plugins::{PluginAliases, PluginConfig},
     },
-    pane_size::Size,
+    pane_size::{Size, SizeInPixels},
 };
 
 /// On Windows, colons in URL strings (e.g. `zellij:tab-bar`, `file:///...`)
@@ -109,6 +109,7 @@ pub struct LoadingContext {
     pub keybinds: Keybinds,
     pub plugin_dir: PathBuf,
     pub size: Size,
+    pub terminal_pixel_cell_size: Arc<Mutex<Option<SizeInPixels>>>,
 }
 
 impl LoadingContext {
@@ -158,6 +159,7 @@ impl LoadingContext {
             tab_index,
             plugin_dir: wasm_bridge.plugin_dir.clone(),
             size,
+            terminal_pixel_cell_size: wasm_bridge.terminal_pixel_cell_size.clone(),
         }
     }
     pub fn update_plugin_path(&mut self, new_path: PathBuf) {
@@ -200,6 +202,7 @@ pub struct WasmBridge {
     base_modes: HashMap<ClientId, InputMode>,
     downloader: Downloader,
     previous_pane_render_report: Option<PaneRenderReport>,
+    terminal_pixel_cell_size: Arc<Mutex<Option<SizeInPixels>>>,
     pub last_session_save_time: Arc<Mutex<Option<u64>>>, // milliseconds since UNIX epoch
 }
 
@@ -262,8 +265,12 @@ impl WasmBridge {
             base_modes: HashMap::new(),
             downloader,
             previous_pane_render_report: None,
+            terminal_pixel_cell_size: Arc::new(Mutex::new(None)),
             last_session_save_time: Arc::new(Mutex::new(None)),
         }
+    }
+    pub fn update_terminal_pixel_cell_size(&mut self, cell_size: Option<SizeInPixels>) {
+        *self.terminal_pixel_cell_size.lock().unwrap() = cell_size;
     }
     pub fn load_plugin(
         &mut self,
@@ -1850,6 +1857,7 @@ impl WasmBridge {
         cli_client_id: Option<ClientId>,
         floating_pane_coordinates: Option<FloatingPaneCoordinates>,
         should_focus: bool,
+        destination_client_id: Option<ClientId>,
     ) -> Vec<(PluginId, Option<ClientId>)> {
         let run_plugin = run_plugin_or_alias.get_run_plugin();
         match run_plugin {
@@ -1858,12 +1866,22 @@ impl WasmBridge {
                     &run_plugin.location,
                     &run_plugin.configuration,
                 );
-                if all_plugin_ids.is_empty() {
+                if let Some(destination_client_id) = destination_client_id {
+                    let matching_plugin_ids = all_plugin_ids
+                        .iter()
+                        .copied()
+                        .filter(|(_plugin_id, client_id)| *client_id == Some(destination_client_id))
+                        .collect::<Vec<_>>();
+                    if !matching_plugin_ids.is_empty() {
+                        return matching_plugin_ids;
+                    }
+                }
+                if all_plugin_ids.is_empty() || destination_client_id.is_some() {
                     if let Some(loading_plugin_id) = self.plugin_id_of_loading_plugin(
                         &run_plugin.location,
                         &run_plugin.configuration,
                     ) {
-                        return vec![(loading_plugin_id, None)];
+                        return vec![(loading_plugin_id, destination_client_id)];
                     }
                     match self.load_plugin(
                         &Some(run_plugin),
@@ -1871,7 +1889,7 @@ impl WasmBridge {
                         size,
                         cwd.clone(),
                         skip_cache,
-                        cli_client_id,
+                        destination_client_id.or(cli_client_id),
                     ) {
                         Ok((plugin_id, client_id)) => {
                             let start_suppressed = false;

@@ -25,8 +25,13 @@ use crate::{
 
 use zellij_utils::plugin_api::action::ProtobufPluginConfiguration;
 use zellij_utils::{
-    consts::ZELLIJ_TMP_DIR, data::InputMode, errors::prelude::*, input::command::TerminalAction,
-    input::keybinds::Keybinds, input::plugins::PluginConfig, pane_size::Size,
+    consts::ZELLIJ_TMP_DIR,
+    data::InputMode,
+    errors::prelude::*,
+    input::command::TerminalAction,
+    input::keybinds::Keybinds,
+    input::plugins::PluginConfig,
+    pane_size::{Size, SizeInPixels},
 };
 
 /// Open a directory as a `File` handle for WASI pre-opening.
@@ -76,6 +81,7 @@ pub struct PluginLoader<'a> {
     keybinds: Keybinds,
     plugin_dir: PathBuf,
     size: Size,
+    terminal_pixel_cell_size: Arc<Mutex<Option<SizeInPixels>>>,
     loading_indication: LoadingIndication,
     senders: ThreadSenders,
     engine: Engine,
@@ -117,6 +123,7 @@ impl<'a> PluginLoader<'a> {
             keybinds: loading_context.keybinds,
             plugin_dir: loading_context.plugin_dir,
             size: loading_context.size,
+            terminal_pixel_cell_size: loading_context.terminal_pixel_cell_size,
 
             skip_cache,
             senders,
@@ -280,6 +287,7 @@ impl<'a> PluginLoader<'a> {
             intercepting_key_presses: false,
             stdin_pipe,
             stdout_pipe,
+            terminal_pixel_cell_size: self.terminal_pixel_cell_size.clone(),
             store_limits: create_optimized_store_limits(),
         };
         let mut store = Store::new(&self.engine, plugin_env);
@@ -392,6 +400,7 @@ impl<'a> PluginLoader<'a> {
             intercepting_key_presses: false,
             stdin_pipe,
             stdout_pipe,
+            terminal_pixel_cell_size: self.terminal_pixel_cell_size.clone(),
             store_limits: create_optimized_store_limits(),
         };
         let mut store = Store::new(&self.engine, plugin_env);

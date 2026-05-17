@@ -136,7 +136,9 @@ pub use super::generated_api::api::{
         ShowFloatingPanesPayload as ProtobufShowFloatingPanesPayload,
         ShowFloatingPanesResponse as ProtobufShowFloatingPanesResponse, ShowPaneWithIdPayload,
         StackPanesPayload, SubscribePayload, SwitchSessionPayload, SwitchTabToIdPayload,
-        SwitchTabToPayload, TogglePaneBorderlessPayload, TogglePaneEmbedOrEjectForPaneIdPayload,
+        SwitchTabToPayload, TerminalPixelCellSize as ProtobufTerminalPixelCellSize,
+        TerminalPixelCellSizeResponse as ProtobufTerminalPixelCellSizeResponse,
+        TogglePaneBorderlessPayload, TogglePaneEmbedOrEjectForPaneIdPayload,
         TogglePaneIdFullscreenPayload, UnsubscribePayload, WebRequestPayload,
         WriteCharsToPaneIdPayload, WriteToPaneIdPayload,
     },
@@ -155,6 +157,7 @@ use crate::data::{
 };
 use crate::input::actions::Action;
 use crate::input::layout::PercentOrFixed;
+use crate::pane_size::SizeInPixels;
 
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
@@ -516,6 +519,27 @@ impl From<GetFocusedPaneInfoResponse> for ProtobufGetFocusedPaneInfoResponse {
                 result: Some(get_focused_pane_info_response::Result::Error(err)),
             },
         }
+    }
+}
+
+impl From<Option<SizeInPixels>> for ProtobufTerminalPixelCellSizeResponse {
+    fn from(cell_size: Option<SizeInPixels>) -> Self {
+        Self {
+            cell_size: cell_size.map(|cell_size| ProtobufTerminalPixelCellSize {
+                width: cell_size.width as u32,
+                height: cell_size.height as u32,
+            }),
+        }
+    }
+}
+
+impl TryFrom<ProtobufTerminalPixelCellSizeResponse> for Option<SizeInPixels> {
+    type Error = &'static str;
+    fn try_from(response: ProtobufTerminalPixelCellSizeResponse) -> Result<Self, &'static str> {
+        Ok(response.cell_size.map(|cell_size| SizeInPixels {
+            width: cell_size.width as usize,
+            height: cell_size.height as usize,
+        }))
     }
 }
 
@@ -1546,6 +1570,7 @@ impl TryFrom<ProtobufPluginCommand> for PluginCommand {
                     new_plugin_args,
                     destination_plugin_id,
                     floating_pane_coordinates,
+                    destination_client_id,
                 })) => {
                     let plugin_config: BTreeMap<String, String> = plugin_config
                         .into_iter()
@@ -1555,6 +1580,10 @@ impl TryFrom<ProtobufPluginCommand> for PluginCommand {
                         .into_iter()
                         .map(|e| (e.name, e.value))
                         .collect();
+                    let destination_client_id = destination_client_id
+                        .map(u16::try_from)
+                        .transpose()
+                        .map_err(|_| "Invalid destination client id")?;
                     Ok(PluginCommand::MessageToPlugin(MessageToPlugin {
                         plugin_url,
                         plugin_config,
@@ -1574,6 +1603,7 @@ impl TryFrom<ProtobufPluginCommand> for PluginCommand {
                             })
                         }),
                         destination_plugin_id,
+                        destination_client_id,
                         floating_pane_coordinates: floating_pane_coordinates
                             .and_then(|f| f.try_into().ok()),
                     }))
@@ -2588,6 +2618,13 @@ impl TryFrom<ProtobufPluginCommand> for PluginCommand {
             },
             Some(CommandName::GetLayoutDir) => Ok(PluginCommand::GetLayoutDir),
             Some(CommandName::GetFocusedPaneInfo) => Ok(PluginCommand::GetFocusedPaneInfo),
+            Some(CommandName::GetTerminalPixelCellSize) => {
+                if protobuf_plugin_command.payload.is_some() {
+                    Err("GetTerminalPixelCellSize should not have a payload")
+                } else {
+                    Ok(PluginCommand::GetTerminalPixelCellSize)
+                }
+            },
             Some(CommandName::SaveSession) => Ok(PluginCommand::SaveSession),
             Some(CommandName::CurrentSessionLastSavedTime) => {
                 Ok(PluginCommand::CurrentSessionLastSavedTime)
@@ -3455,6 +3492,9 @@ impl TryFrom<PluginCommand> for ProtobufPluginCommand {
                         floating_pane_coordinates: message_to_plugin
                             .floating_pane_coordinates
                             .and_then(|f| f.try_into().ok()),
+                        destination_client_id: message_to_plugin
+                            .destination_client_id
+                            .map(u32::from),
                     })),
                 })
             },
@@ -4327,6 +4367,10 @@ impl TryFrom<PluginCommand> for ProtobufPluginCommand {
                 payload: Some(Payload::GetFocusedPaneInfoPayload(
                     GetFocusedPaneInfoPayload {},
                 )),
+            }),
+            PluginCommand::GetTerminalPixelCellSize => Ok(ProtobufPluginCommand {
+                name: CommandName::GetTerminalPixelCellSize as i32,
+                payload: None,
             }),
             PluginCommand::SaveSession => Ok(ProtobufPluginCommand {
                 name: CommandName::SaveSession as i32,
@@ -5259,8 +5303,10 @@ impl From<OpenPluginPaneFloatingResponse> for ProtobufOpenPluginPaneFloatingResp
 mod plugin_graphics_tests {
     use super::*;
     use crate::data::{
-        PluginCellRect, PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource, PluginPixelRect,
+        PluginCellRect, PluginCommand, PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource,
+        PluginPixelRect,
     };
+    use crate::pane_size::SizeInPixels;
     use crate::plugin_api::generated_api::api::plugin_command::plugin_graphics_op;
     use std::path::PathBuf;
 
@@ -5268,8 +5314,8 @@ mod plugin_graphics_tests {
         PluginCellRect {
             x: 1,
             y: 2,
-            columns: 3,
-            rows: 4,
+            columns: Some(3),
+            rows: Some(4),
         }
     }
 
@@ -5287,6 +5333,51 @@ mod plugin_graphics_tests {
         let protobuf: ProtobufPluginCommand = command.try_into().unwrap();
         match protobuf.try_into().unwrap() {
             PluginCommand::ApplyGraphicsUpdate(roundtrip) => roundtrip,
+            other => panic!("unexpected command after roundtrip: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn terminal_pixel_cell_size_command_roundtrips_without_payload() {
+        let command = PluginCommand::GetTerminalPixelCellSize;
+        let protobuf: ProtobufPluginCommand = command.try_into().unwrap();
+        assert!(protobuf.payload.is_none());
+
+        match protobuf.try_into().unwrap() {
+            PluginCommand::GetTerminalPixelCellSize => {},
+            other => panic!("unexpected command after roundtrip: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn terminal_pixel_cell_size_response_roundtrips_some_and_none() {
+        let cell_size = Some(SizeInPixels {
+            width: 9,
+            height: 18,
+        });
+        let protobuf: ProtobufTerminalPixelCellSizeResponse = cell_size.into();
+        let roundtrip: Option<SizeInPixels> = protobuf.try_into().unwrap();
+        assert_eq!(roundtrip, cell_size);
+
+        let protobuf: ProtobufTerminalPixelCellSizeResponse = None.into();
+        let roundtrip: Option<SizeInPixels> = protobuf.try_into().unwrap();
+        assert_eq!(roundtrip, None);
+    }
+
+    #[test]
+    fn message_to_plugin_roundtrips_destination_client_id() {
+        let command = PluginCommand::MessageToPlugin(
+            MessageToPlugin::new("hello")
+                .with_destination_plugin_id(7)
+                .with_destination_client_id(3),
+        );
+        let protobuf: ProtobufPluginCommand = command.try_into().unwrap();
+
+        match protobuf.try_into().unwrap() {
+            PluginCommand::MessageToPlugin(message) => {
+                assert_eq!(message.destination_plugin_id, Some(7));
+                assert_eq!(message.destination_client_id, Some(3));
+            },
             other => panic!("unexpected command after roundtrip: {other:?}"),
         }
     }
@@ -5332,6 +5423,34 @@ mod plugin_graphics_tests {
                 assert_eq!(*destination, self::destination());
                 assert_eq!(*source, Some(source_rect()));
                 assert_eq!(*z_index, -3);
+            },
+            other => panic!("unexpected op: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn plugin_graphics_update_roundtrips_optional_cell_dimensions() {
+        let update = PluginGraphicsUpdate {
+            ops: vec![PluginGraphicsOp::PlaceImage {
+                placement_id: 8,
+                asset_id: 7,
+                destination: PluginCellRect {
+                    x: 1,
+                    y: 2,
+                    columns: Some(3),
+                    rows: None,
+                },
+                source: None,
+                z_index: 0,
+            }],
+        };
+
+        let roundtrip = assert_roundtrip(update);
+
+        match &roundtrip.ops[0] {
+            PluginGraphicsOp::PlaceImage { destination, .. } => {
+                assert_eq!(destination.columns, Some(3));
+                assert_eq!(destination.rows, None);
             },
             other => panic!("unexpected op: {other:?}"),
         }

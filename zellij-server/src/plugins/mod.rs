@@ -42,7 +42,7 @@ use zellij_utils::{
         layout::{FloatingPaneLayout, Layout, Run, RunPlugin, RunPluginOrAlias, TiledPaneLayout},
         plugins::PluginAliases,
     },
-    pane_size::Size,
+    pane_size::{Size, SizeInPixels},
     session_serialization,
 };
 
@@ -211,6 +211,7 @@ pub enum PluginInstruction {
     GetLastSessionSaveTime {
         response_channel: crossbeam::channel::Sender<Option<u64>>,
     },
+    UpdateTerminalPixelCellSize(Option<SizeInPixels>),
     DetectPluginConfigChanges(PluginAliases),
     HighlightClicked {
         plugin_id: u32,
@@ -280,6 +281,7 @@ impl From<&PluginInstruction> for PluginContext {
             PluginInstruction::GetLastSessionSaveTime { .. } => {
                 PluginContext::GetLastSessionSaveTime
             },
+            PluginInstruction::UpdateTerminalPixelCellSize(..) => PluginContext::Update,
             PluginInstruction::DetectPluginConfigChanges(..) => {
                 PluginContext::DetectPluginConfigChanges
             },
@@ -960,6 +962,7 @@ pub(crate) fn plugin_thread_main(
                             &plugin_aliases,
                             floating_pane_coordinates,
                             None,
+                            None,
                         );
                     },
                     None => {
@@ -971,6 +974,7 @@ pub(crate) fn plugin_thread_main(
                             &args,
                             &mut wasm_bridge,
                             &mut pipe_messages,
+                            None,
                         );
                     },
                 }
@@ -1024,6 +1028,7 @@ pub(crate) fn plugin_thread_main(
                                 &plugin_aliases,
                                 floating_pane_coordinates,
                                 None,
+                                None,
                             );
                         },
                         None => {
@@ -1035,6 +1040,7 @@ pub(crate) fn plugin_thread_main(
                                 &args,
                                 &mut wasm_bridge,
                                 &mut pipe_messages,
+                                None,
                             );
                         },
                     }
@@ -1072,6 +1078,7 @@ pub(crate) fn plugin_thread_main(
                     .as_ref()
                     .and_then(|n| n.pane_id_to_replace);
                 let floating_pane_coordinates = message.floating_pane_coordinates;
+                let destination_client_id = message.destination_client_id;
                 match (message.plugin_url, message.destination_plugin_id) {
                     (Some(plugin_url), None) => {
                         // send to specific plugin(s)
@@ -1094,13 +1101,14 @@ pub(crate) fn plugin_thread_main(
                             &plugin_aliases,
                             floating_pane_coordinates,
                             message.new_plugin_args.and_then(|n| n.should_focus),
+                            destination_client_id,
                         );
                     },
                     (None, Some(destination_plugin_id)) => {
                         let is_private = true;
                         pipe_messages.push((
                             Some(destination_plugin_id),
-                            None,
+                            destination_client_id,
                             PipeMessage::new(
                                 PipeSource::Plugin(source_plugin_id),
                                 message.message_name,
@@ -1115,7 +1123,7 @@ pub(crate) fn plugin_thread_main(
                         let is_private = true;
                         pipe_messages.push((
                             Some(destination_plugin_id),
-                            None,
+                            destination_client_id,
                             PipeMessage::new(
                                 PipeSource::Plugin(source_plugin_id),
                                 message.message_name,
@@ -1134,6 +1142,7 @@ pub(crate) fn plugin_thread_main(
                             &Some(message.message_args),
                             &mut wasm_bridge,
                             &mut pipe_messages,
+                            destination_client_id,
                         );
                     },
                 }
@@ -1244,6 +1253,9 @@ pub(crate) fn plugin_thread_main(
                 let timestamp = *wasm_bridge.last_session_save_time.lock().unwrap();
                 let _ = response_channel.send(timestamp);
             },
+            PluginInstruction::UpdateTerminalPixelCellSize(cell_size) => {
+                wasm_bridge.update_terminal_pixel_cell_size(cell_size);
+            },
             PluginInstruction::DetectPluginConfigChanges(new_plugins) => {
                 wasm_bridge
                     .detect_and_notify_plugin_config_changes(&new_plugins, shutdown_send.clone())?;
@@ -1331,10 +1343,14 @@ fn pipe_to_all_plugins(
     args: &Option<BTreeMap<String, String>>,
     wasm_bridge: &mut WasmBridge,
     pipe_messages: &mut Vec<(Option<PluginId>, Option<ClientId>, PipeMessage)>,
+    destination_client_id: Option<ClientId>,
 ) {
     let is_private = false;
     let all_plugin_ids = wasm_bridge.all_plugin_ids();
     for (plugin_id, client_id) in all_plugin_ids {
+        if destination_client_id.is_some() && destination_client_id != Some(client_id) {
+            continue;
+        }
         pipe_messages.push((
             Some(plugin_id),
             Some(client_id),
@@ -1362,6 +1378,7 @@ fn pipe_to_specific_plugins(
     plugin_aliases: &PluginAliases,
     floating_pane_coordinates: Option<FloatingPaneCoordinates>,
     should_focus: Option<bool>,
+    destination_client_id: Option<ClientId>,
 ) {
     let is_private = true;
     let size = Size::default();
@@ -1382,14 +1399,21 @@ fn pipe_to_specific_plugins(
                 pane_id_to_replace.is_some(),
                 pane_title.clone(),
                 pane_id_to_replace.clone(),
-                cli_client_id,
+                destination_client_id.or(cli_client_id),
                 floating_pane_coordinates,
                 should_focus.unwrap_or(false),
+                destination_client_id,
             );
             for (plugin_id, client_id) in all_plugin_ids {
+                if destination_client_id.is_some()
+                    && client_id.is_some()
+                    && destination_client_id != client_id
+                {
+                    continue;
+                }
                 pipe_messages.push((
                     Some(plugin_id),
-                    client_id,
+                    destination_client_id.or(client_id),
                     PipeMessage::new(pipe_source.clone(), name, payload, args, is_private),
                 ));
             }

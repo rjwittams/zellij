@@ -7,6 +7,7 @@ use std::{
 use zellij_utils::data::*;
 use zellij_utils::errors::prelude::*;
 use zellij_utils::input::actions::Action;
+use zellij_utils::pane_size::SizeInPixels;
 pub use zellij_utils::plugin_api;
 use zellij_utils::plugin_api::event::ProtobufPaneScrollbackResponse;
 use zellij_utils::plugin_api::generated_api::api::plugin_command::{
@@ -40,7 +41,8 @@ use zellij_utils::plugin_api::plugin_command::{
     ProtobufOpenTerminalPaneInPlaceOfPaneIdResponse, ProtobufOpenTerminalResponse,
     ProtobufParseLayoutResponse, ProtobufPluginCommand, ProtobufRenameLayoutResponse,
     ProtobufSaveLayoutResponse, ProtobufSaveSessionResponse, ProtobufShowFloatingPanesResponse,
-    RenameWebTokenResponse, RevokeAllWebTokensResponse, RevokeTokenResponse,
+    ProtobufTerminalPixelCellSizeResponse, RenameWebTokenResponse, RevokeAllWebTokensResponse,
+    RevokeTokenResponse,
 };
 use zellij_utils::plugin_api::plugin_ids::{ProtobufPluginIds, ProtobufZellijVersion};
 
@@ -180,6 +182,17 @@ pub fn get_zellij_version() -> String {
     let protobuf_zellij_version =
         ProtobufZellijVersion::decode(bytes_from_stdin().unwrap().as_slice()).unwrap();
     protobuf_zellij_version.version
+}
+
+/// Returns the host terminal's last known character cell size in pixels.
+pub fn terminal_pixel_cell_size() -> Option<SizeInPixels> {
+    let plugin_command = PluginCommand::GetTerminalPixelCellSize;
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+    let response = ProtobufTerminalPixelCellSizeResponse::decode(bytes_from_stdin().ok()?.as_slice())
+        .ok()?;
+    response.try_into().ok().flatten()
 }
 
 /// Generates a random human-readable name using Zellij's curated word lists.
