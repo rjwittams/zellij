@@ -47,6 +47,9 @@ zellij-utils = { workspace = true }
 zellij-tile = { workspace = true, optional = true }
 status-bar = { path = "../default-plugins/status-bar", optional = true }
 tab-bar = { path = "../default-plugins/tab-bar", optional = true }
+tabs-controller = { path = "../../zellij-scratch.native-tabs/crates/tabs-controller", optional = true }
+tabs-rail = { path = "../../zellij-scratch.native-tabs/crates/tabs-rail", optional = true }
+tabs-rail-config = { path = "../../zellij-scratch.native-tabs/crates/tabs-rail-config", optional = true }
 once_cell = "1.19"
 num_cpus = { workspace = true }
 
@@ -86,6 +89,11 @@ web_server_capability = ["zellij-utils/web_server_capability"]
 native-plugins = ["dep:zellij-tile"]
 native-status-bar = ["native-plugins", "dep:status-bar"]
 native-tab-bar = ["native-plugins", "dep:tab-bar"]
+native-tabs-controller = ["native-plugins", "dep:tabs-controller"]
+native-tabs-rail = ["native-plugins", "dep:tabs-rail"]
+native-tabs-rail-config = ["native-plugins", "dep:tabs-rail-config"]
+# All zellij-scratch / ardamento tabs plugins as natives — for profiling.
+native-tabs-all = ["native-tabs-controller", "native-tabs-rail", "native-tabs-rail-config"]
 # Convenience feature: enables every per-plugin native port available in this
 # build. Grows as plugins get ported.
 native-plugins-all = ["native-status-bar", "native-tab-bar"]

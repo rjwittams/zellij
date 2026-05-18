@@ -578,7 +578,7 @@ version = "0.1.0"
 dependencies = [
  "ansi_term",
  "colored",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
  "zellij-tile",
  "zellij-tile-utils",
 ]
@@ -612,7 +612,7 @@ dependencies = [
  "once_cell",
  "regex",
  "terminal_size",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
  "winapi",
 ]
 
@@ -1264,7 +1264,7 @@ version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14dbbfd5c71d70241ecf9e6f13737f7b5ce823821063188d7e46c41d371eebd5"
 dependencies = [
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -1873,9 +1873,9 @@ dependencies = [
 
 [[package]]
 name = "kdl"
-version = "4.5.0"
+version = "4.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8388a371e0e2ede18bbd94e476fcd45b4ac65cefcedf0c06fd13bd8389574a6"
+checksum = "e03e2e96c5926fe761088d66c8c2aee3a4352a2573f4eaca50043ad130af9117"
 dependencies = [
  "miette",
  "nom",
@@ -1909,7 +1909,7 @@ dependencies = [
  "fuzzy-matcher",
  "miette",
  "strip-ansi-escapes 0.2.1",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
  "zellij-tile",
 ]
 
@@ -2132,7 +2132,7 @@ dependencies = [
  "terminal_size",
  "textwrap",
  "thiserror 1.0.61",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -3156,7 +3156,7 @@ dependencies = [
  "chrono",
  "fuzzy-matcher",
  "humantime",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
  "uuid",
  "zellij-tile",
 ]
@@ -3353,7 +3353,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.61",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
  "zellij-tile",
  "zellij-tile-utils",
 ]
@@ -3370,7 +3370,7 @@ dependencies = [
  "serde",
  "serde_json",
  "strip-ansi-escapes 0.1.1",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
  "zellij-tile",
 ]
 
@@ -3544,9 +3544,50 @@ version = "0.1.0"
 dependencies = [
  "ansi_term",
  "colored",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
  "zellij-tile",
  "zellij-tile-utils",
+]
+
+[[package]]
+name = "tabs-controller"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tabs-shared",
+ "zellij-tile",
+]
+
+[[package]]
+name = "tabs-rail"
+version = "0.1.0"
+dependencies = [
+ "ansi_term",
+ "serde_json",
+ "tabs-shared",
+ "unicode-width 0.1.14",
+ "zellij-tile",
+ "zellij-tile-utils",
+]
+
+[[package]]
+name = "tabs-rail-config"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tabs-shared",
+ "unicode-width 0.1.14",
+ "zellij-tile",
+]
+
+[[package]]
+name = "tabs-shared"
+version = "0.1.0"
+dependencies = [
+ "kdl",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3588,7 +3629,7 @@ checksum = "b1141d4d61095b28419e22cb0bbf02755f5e54e0526f97f1e3d1d160e60885fb"
 dependencies = [
  "smawk",
  "unicode-linebreak",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
 ]
 
 [[package]]
@@ -4001,9 +4042,9 @@ dependencies = [
 
 [[package]]
 name = "unicode-width"
-version = "0.1.10"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0edd1e5b14653f783770bce4a4dabb4a5108a5370a5f5d8cfe8710c361f6c8b"
+checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unicode-width"
@@ -4915,10 +4956,13 @@ dependencies = [
  "status-bar",
  "sysinfo",
  "tab-bar",
+ "tabs-controller",
+ "tabs-rail",
+ "tabs-rail-config",
  "tempfile",
  "tokio",
  "typetag",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
  "url",
  "uuid",
  "vte 0.15.0",
@@ -4998,7 +5042,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tokio-util",
- "unicode-width 0.1.10",
+ "unicode-width 0.1.14",
  "url",
  "uuid",
  "winapi",

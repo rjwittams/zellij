@@ -22,6 +22,12 @@ pub static NATIVE_PLUGIN_REGISTRY: &[(&str, NativePluginFactory)] = &[
     ("status-bar", status_bar::create_plugin),
     #[cfg(feature = "native-tab-bar")]
     ("tab-bar", tab_bar::create_plugin),
+    #[cfg(feature = "native-tabs-controller")]
+    ("tabs-controller", tabs_controller::create_plugin),
+    #[cfg(feature = "native-tabs-rail")]
+    ("tabs-rail", tabs_rail::create_plugin),
+    #[cfg(feature = "native-tabs-rail-config")]
+    ("tabs-rail-config", tabs_rail_config::create_plugin),
 ];
 
 pub fn factory_for(name: &str) -> Option<NativePluginFactory> {
