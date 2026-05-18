@@ -182,6 +182,7 @@ impl<'a> PluginLoader<'a> {
             .ok_or_else(|| anyhow!("no native plugin registered for name '{}'", name))?;
         let env = self.build_plugin_env_for_native()?;
         let state = factory();
+        log::info!("Loaded native plugin '{}'", name);
         let subscriptions = env.subscriptions.clone();
         let plugin = Arc::new(Mutex::new(RunningPlugin::new_native(
             state,
@@ -252,7 +253,7 @@ impl<'a> PluginLoader<'a> {
         let timer = std::time::Instant::now();
         let module = Module::new(&self.engine, &wasm_bytes)?;
         log::info!(
-            "Loaded plugin '{}' in {:?}",
+            "Loaded wasm plugin '{}' in {:?}",
             self.plugin_config.path.display(),
             timer.elapsed()
         );
