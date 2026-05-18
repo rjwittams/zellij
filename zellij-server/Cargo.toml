@@ -44,7 +44,7 @@ uuid = { workspace = true }
 vte = { workspace = true }
 wasmi_wasi = { version = "0.51.3" }
 zellij-utils = { workspace = true }
-zellij-tile = { workspace = true }
+zellij-tile = { workspace = true, optional = true }
 once_cell = "1.19"
 num_cpus = { workspace = true }
 
@@ -77,3 +77,8 @@ wasmi = { version = "0.51.3", features = ["std"] }
 
 [features]
 web_server_capability = ["zellij-utils/web_server_capability"]
+# Enable native (Rust-linked) plugins alongside the WASM plugin runtime.
+# Pulls in the zellij-tile crate so the server can hold `Box<dyn ZellijPlugin>`
+# instances. With this off, the `RunPluginLocation::Native(_)` variant still
+# parses (for forward-compat) but loading one returns an error at load time.
+native-plugins = ["dep:zellij-tile"]

@@ -8,12 +8,15 @@ use std::{
 };
 use wasmi::{Instance, Store, StoreLimits};
 use wasmi_wasi::WasiCtx;
+#[cfg(feature = "native-plugins")]
 use zellij_tile::ZellijPlugin;
+#[cfg(feature = "native-plugins")]
 use zellij_utils::data::{Event, PipeMessage};
 
 /// Object-safe wrapper around `zellij_tile::ZellijPlugin`. Needed because
 /// `ZellijPlugin: Default` is not dyn-compatible (constructor in trait bound).
 /// A blanket impl makes any `T: ZellijPlugin + Send + 'static` usable through this trait.
+#[cfg(feature = "native-plugins")]
 pub trait BoxableZellijPlugin: Send {
     fn load(&mut self, configuration: BTreeMap<String, String>);
     fn update(&mut self, event: Event) -> bool;
@@ -21,6 +24,7 @@ pub trait BoxableZellijPlugin: Send {
     fn render(&mut self, rows: usize, cols: usize);
 }
 
+#[cfg(feature = "native-plugins")]
 impl<T: ZellijPlugin + Send + 'static> BoxableZellijPlugin for T {
     fn load(&mut self, configuration: BTreeMap<String, String>) {
         <Self as ZellijPlugin>::load(self, configuration)
@@ -383,11 +387,13 @@ pub enum AtomicEvent {
 
 /// Backend implementation of a plugin instance. Either a WASM module hosted by
 /// wasmi, or a natively-compiled Rust impl of `ZellijPlugin` linked into the binary.
+/// The `Native` arm only exists when the `native-plugins` feature is enabled.
 pub enum PluginBackend {
     Wasm {
         store: Store<PluginEnv>,
         instance: Instance,
     },
+    #[cfg(feature = "native-plugins")]
     Native {
         state: Box<dyn BoxableZellijPlugin>,
         env: Box<PluginEnv>,
@@ -418,6 +424,7 @@ impl RunningPlugin {
         }
     }
 
+    #[cfg(feature = "native-plugins")]
     pub fn new_native(
         state: Box<dyn BoxableZellijPlugin>,
         env: PluginEnv,
@@ -440,6 +447,7 @@ impl RunningPlugin {
     pub fn env(&self) -> &PluginEnv {
         match &self.backend {
             PluginBackend::Wasm { store, .. } => store.data(),
+            #[cfg(feature = "native-plugins")]
             PluginBackend::Native { env, .. } => env,
         }
     }
@@ -448,6 +456,7 @@ impl RunningPlugin {
     pub fn env_mut(&mut self) -> &mut PluginEnv {
         match &mut self.backend {
             PluginBackend::Wasm { store, .. } => store.data_mut(),
+            #[cfg(feature = "native-plugins")]
             PluginBackend::Native { env, .. } => env,
         }
     }
@@ -496,6 +505,7 @@ impl RunningPlugin {
     pub fn wasm_parts_mut(&mut self) -> Option<(&mut Store<PluginEnv>, &Instance)> {
         match &mut self.backend {
             PluginBackend::Wasm { store, instance } => Some((store, instance)),
+            #[cfg(feature = "native-plugins")]
             PluginBackend::Native { .. } => None,
         }
     }
@@ -504,10 +514,6 @@ impl RunningPlugin {
     /// `ProtobufPluginConfiguration` bytes.
     pub fn call_load(&mut self, config_bytes: &[u8]) -> Result<()> {
         use crate::plugins::zellij_exports::wasi_write_object;
-        use prost::Message;
-        use std::collections::BTreeMap;
-        use std::convert::TryFrom;
-        use zellij_utils::plugin_api::action::ProtobufPluginConfiguration;
         match &mut self.backend {
             PluginBackend::Wasm { store, instance } => {
                 wasi_write_object(store.data(), &config_bytes)?;
@@ -517,7 +523,11 @@ impl RunningPlugin {
                 load.call(&mut *store, ())
                     .map_err(|e| anyhow!("plugin load failed: {e}"))
             },
+            #[cfg(feature = "native-plugins")]
             PluginBackend::Native { state, .. } => {
+                use prost::Message;
+                use std::convert::TryFrom;
+                use zellij_utils::plugin_api::action::ProtobufPluginConfiguration;
                 let proto = ProtobufPluginConfiguration::decode(config_bytes)
                     .context("decode plugin configuration")?;
                 let config = BTreeMap::try_from(&proto)
@@ -532,9 +542,6 @@ impl RunningPlugin {
     /// `ProtobufEvent` bytes. Returns true if the plugin requested a render.
     pub fn call_update(&mut self, event_bytes: &[u8]) -> Result<bool> {
         use crate::plugins::zellij_exports::wasi_write_object;
-        use prost::Message;
-        use std::convert::TryInto;
-        use zellij_utils::plugin_api::event::ProtobufEvent;
         match &mut self.backend {
             PluginBackend::Wasm { store, instance } => {
                 wasi_write_object(store.data(), &event_bytes)?;
@@ -546,7 +553,11 @@ impl RunningPlugin {
                     .map_err(|e| anyhow!("plugin update failed: {e}"))?;
                 Ok(r == 1)
             },
+            #[cfg(feature = "native-plugins")]
             PluginBackend::Native { state, .. } => {
+                use prost::Message;
+                use std::convert::TryInto;
+                use zellij_utils::plugin_api::event::ProtobufEvent;
                 let proto = ProtobufEvent::decode(event_bytes).context("decode event")?;
                 let event = proto.try_into().map_err(|e| anyhow!("event: {e}"))?;
                 Ok(state.update(event))
@@ -568,6 +579,7 @@ impl RunningPlugin {
                     .map_err(|e| anyhow!("plugin render failed: {e}"))?;
                 wasi_read_string(store.data())
             },
+            #[cfg(feature = "native-plugins")]
             PluginBackend::Native { state, .. } => {
                 let buf = crate::plugins::native_runtime::with_render_buffer(|| {
                     state.render(rows as usize, cols as usize);
@@ -583,9 +595,6 @@ impl RunningPlugin {
     /// "old plugin without the interface").
     pub fn call_pipe(&mut self, pipe_bytes: &[u8]) -> Result<Option<bool>> {
         use crate::plugins::zellij_exports::wasi_write_object;
-        use prost::Message;
-        use std::convert::TryInto;
-        use zellij_utils::plugin_api::pipe_message::ProtobufPipeMessage;
         match &mut self.backend {
             PluginBackend::Wasm { store, instance } => {
                 let Ok(pipe) = instance.get_typed_func::<(), i32>(&mut *store, "pipe") else {
@@ -597,7 +606,11 @@ impl RunningPlugin {
                     .map_err(|e| anyhow!("plugin pipe failed: {e}"))?;
                 Ok(Some(r == 1))
             },
+            #[cfg(feature = "native-plugins")]
             PluginBackend::Native { state, .. } => {
+                use prost::Message;
+                use std::convert::TryInto;
+                use zellij_utils::plugin_api::pipe_message::ProtobufPipeMessage;
                 let proto = ProtobufPipeMessage::decode(pipe_bytes).context("decode pipe")?;
                 let msg = proto.try_into().map_err(|e| anyhow!("pipe message: {e}"))?;
                 Ok(Some(state.pipe(msg)))

@@ -160,6 +160,9 @@ disable_automatic_asset_installation = ["zellij-utils/disable_automatic_asset_in
 vendored_curl = ["zellij-utils/vendored_curl"]
 unstable = ["zellij-client/unstable", "zellij-utils/unstable"]
 web_server_capability = ["zellij-client/web_server_capability", "zellij-server/web_server_capability", "zellij-utils/web_server_capability"]
+# Compile native (Rust-linked) plugins into the binary alongside the WASM runtime.
+# Off by default. See zellij-server/src/plugins/native_plugins.rs for the registry.
+native-plugins = ["zellij-server/native-plugins"]
 
 # uncomment this when developing plugins in the Zellij UI to make plugin compilation faster
 # [profile.dev.package."*"]

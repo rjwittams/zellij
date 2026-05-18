@@ -8,7 +8,6 @@ use crate::plugins::plugin_map::{AtomicEvent, PluginEnv, PluginMap, RunningPlugi
 
 use crate::plugins::plugin_worker::MessageToWorker;
 use crate::plugins::watch_filesystem::watch_filesystem;
-use crate::plugins::zellij_exports::{wasi_read_string, wasi_write_object};
 use highway::{HighwayHash, PortableHash};
 use log::info;
 use notify_debouncer_full::{notify::RecommendedWatcher, Debouncer, FileIdMap};

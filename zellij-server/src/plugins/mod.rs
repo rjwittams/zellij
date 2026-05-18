@@ -1,4 +1,6 @@
+#[cfg(feature = "native-plugins")]
 mod native_plugins;
+#[cfg(feature = "native-plugins")]
 pub(crate) mod native_runtime;
 mod pinned_executor;
 mod pipes;

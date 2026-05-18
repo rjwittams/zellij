@@ -882,6 +882,7 @@ pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
 
     // Route `zellij_tile::println!` from native plugins into the per-thread render buffer
     // installed around each `render()` call by `plugins::native_runtime`.
+    #[cfg(feature = "native-plugins")]
     zellij_tile::shim::register_native_printer(plugins::native_runtime::write_to_render_buffer);
 
     #[cfg(unix)]

@@ -1,7 +1,6 @@
 use super::{PluginId, PluginInstruction};
 use crate::plugins::plugin_map::RunningPlugin;
 use crate::plugins::wasm_bridge::PluginRenderAsset;
-use crate::plugins::zellij_exports::{wasi_read_string, wasi_write_object};
 use std::collections::{HashMap, HashSet};
 use zellij_utils::data::{PipeMessage, PipeSource};
 use zellij_utils::plugin_api::pipe_message::ProtobufPipeMessage;

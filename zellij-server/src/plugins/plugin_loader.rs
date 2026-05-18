@@ -3,7 +3,7 @@ use crate::plugins::plugin_map::{
 };
 use crate::plugins::plugin_worker::{plugin_worker, RunningWorker};
 use crate::plugins::wasm_bridge::{LoadingContext, PluginCache};
-use crate::plugins::zellij_exports::{wasi_write_object, zellij_exports};
+use crate::plugins::zellij_exports::zellij_exports;
 use crate::plugins::PluginId;
 use prost::Message;
 use std::{
@@ -140,9 +140,20 @@ impl<'a> PluginLoader<'a> {
     }
     pub fn start_plugin(&mut self) -> Result<()> {
         if self.plugin_config.is_native() {
-            self.start_native_plugin()?;
-            self.clone_instance_for_other_clients()?;
-            return Ok(());
+            #[cfg(feature = "native-plugins")]
+            {
+                self.start_native_plugin()?;
+                self.clone_instance_for_other_clients()?;
+                return Ok(());
+            }
+            #[cfg(not(feature = "native-plugins"))]
+            return Err(anyhow!(
+                "plugin '{}' requested as native, but this build was compiled without the \
+                 `native-plugins` feature",
+                self.plugin_config
+                    .native_name()
+                    .unwrap_or("<unnamed>")
+            ));
         }
         let module = if self.skip_cache {
             self.interpret_module()?
@@ -156,6 +167,7 @@ impl<'a> PluginLoader<'a> {
         Ok(())
     }
 
+    #[cfg(feature = "native-plugins")]
     fn start_native_plugin(&mut self) -> Result<()> {
         use crate::plugins::native_plugins::factory_for;
         use crate::plugins::plugin_map::RunningPlugin;
@@ -202,6 +214,7 @@ impl<'a> PluginLoader<'a> {
     /// Build a PluginEnv for a native plugin. Mirrors the env half of
     /// `create_plugin_environment` but skips the wasmi Store and uses an empty WASI ctx
     /// (native plugins don't go through WASI; the field stays for type compatibility).
+    #[cfg(feature = "native-plugins")]
     fn build_plugin_env_for_native(&self) -> Result<PluginEnv> {
         use wasmi_wasi::WasiCtxBuilder;
         let stdin_pipe = Arc::new(Mutex::new(VecDeque::new()));
@@ -319,14 +332,15 @@ impl<'a> PluginLoader<'a> {
             .try_into()
             .map_err(|e| anyhow!("Failed to serialize user configuration: {:?}", e))?;
         let protobuf_bytes = protobuf_plugin_configuration.encode_to_vec();
-        {
-            let mut guard = plugin.lock().unwrap();
-            let (store, _instance) = guard
-                .wasm_parts_mut()
-                .expect("wasm loader path reached for non-wasm plugin");
-            wasi_write_object(store.data(), &protobuf_bytes).with_context(err_context)?;
-            load_function.call(&mut *store, ()).with_context(err_context)?;
-        }
+        // Avoid the unused-variable warning for load_function — call_load picks the
+        // `load` typed-func itself from the instance, so we no longer reference the
+        // pre-resolved handle here.
+        let _ = load_function;
+        plugin
+            .lock()
+            .unwrap()
+            .call_load(&protobuf_bytes)
+            .with_context(err_context)?;
 
         Ok(())
     }
