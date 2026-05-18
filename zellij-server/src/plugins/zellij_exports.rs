@@ -37,9 +37,9 @@ use zellij_utils::data::{
     OpenPluginPaneFloatingResponse, OpenTerminalFloatingNearPluginResponse,
     OpenTerminalFloatingResponse, OpenTerminalInPlaceOfPluginResponse, OpenTerminalInPlaceResponse,
     OpenTerminalNearPluginResponse, OpenTerminalPaneInPlaceOfPaneIdResponse, OpenTerminalResponse,
-    OriginatingPlugin, PaneScrollbackResponse, PermissionStatus, PermissionType, PluginGraphicsOp,
-    PluginGraphicsUpdate, PluginImageSource, PluginPermission, RegexHighlight,
-    RenameLayoutResponse, SaveLayoutResponse, TabMetadata,
+    OriginatingPlugin, PaneDimensionConstraint, PaneScrollbackResponse, PermissionStatus,
+    PermissionType, PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource, PluginPermission,
+    RegexHighlight, RenameLayoutResponse, SaveLayoutResponse, TabMetadata,
 };
 use zellij_utils::home::default_layout_dir;
 use zellij_utils::input::permission::PermissionCache;
@@ -480,6 +480,9 @@ fn host_run_plugin_command(mut caller: Caller<'_, PluginEnv>) {
                     },
                     PluginCommand::ResizePaneIdWithDirection(resize, pane_id) => {
                         resize_pane_with_id(env, resize, pane_id.into())
+                    },
+                    PluginCommand::ResizePaneWithIdTo(pane_id, direction, target_size) => {
+                        resize_pane_with_id_to(env, pane_id.into(), direction, target_size)
                     },
                     PluginCommand::EditScrollbackForPaneWithId(pane_id) => {
                         edit_scrollback_for_pane_with_id(env, pane_id.into())
@@ -4026,6 +4029,21 @@ fn resize_pane_with_id(env: &PluginEnv, resize: ResizeStrategy, pane_id: PaneId)
         .send_to_screen(ScreenInstruction::ResizePaneWithId(resize, pane_id));
 }
 
+fn resize_pane_with_id_to(
+    env: &PluginEnv,
+    pane_id: PaneId,
+    direction: Direction,
+    target_size: PaneDimensionConstraint,
+) {
+    let _ = env
+        .senders
+        .send_to_screen(ScreenInstruction::ResizePaneWithIdTo(
+            pane_id,
+            direction,
+            target_size,
+        ));
+}
+
 fn edit_scrollback_for_pane_with_id(env: &PluginEnv, pane_id: PaneId) {
     let _ = env
         .senders
@@ -5434,6 +5452,7 @@ fn check_command_permission(
         | PluginCommand::HidePaneWithId(..)
         | PluginCommand::RerunCommandPane(..)
         | PluginCommand::ResizePaneIdWithDirection(..)
+        | PluginCommand::ResizePaneWithIdTo(..)
         | PluginCommand::CloseTabWithIndex(..)
         | PluginCommand::BreakPanesToNewTab(..)
         | PluginCommand::BreakPanesToTabWithIndex(..)

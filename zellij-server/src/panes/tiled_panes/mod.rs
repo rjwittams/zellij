@@ -18,13 +18,16 @@ use crate::{
 };
 use stacked_panes::StackedPanes;
 use zellij_utils::{
-    data::{Direction, ModeInfo, PaneInfo, Resize, ResizeStrategy, Style, Styling},
+    data::{
+        Direction, ModeInfo, PaneDimensionConstraint, PaneInfo, Resize, ResizeStrategy, Style,
+        Styling,
+    },
     errors::prelude::*,
     input::{
         command::RunCommand,
         layout::{Run, RunPluginOrAlias, SplitDirection},
     },
-    pane_size::{Offset, PaneGeom, Size, SizeInPixels, Viewport},
+    pane_size::{Constraint, Offset, PaneGeom, Size, SizeInPixels, Viewport},
 };
 
 use std::{
@@ -1783,6 +1786,56 @@ impl TiledPanes {
         Ok(pane_size_changed)
     }
 
+    pub fn resize_pane_with_id_to(
+        &mut self,
+        pane_id: PaneId,
+        direction: Direction,
+        target_size: PaneDimensionConstraint,
+    ) -> Result<bool> {
+        let err_context = || format!("failed to resize pane with id {pane_id:?} to target size");
+        let current_geom = self
+            .get_pane(pane_id)
+            .map(|pane| pane.current_geom())
+            .with_context(err_context)?;
+        let display_area = *self.display_area.borrow();
+        let (current_percent, full_size) = if direction.is_horizontal() {
+            (
+                dimension_as_percent(
+                    current_geom.cols.constraint,
+                    current_geom.cols.as_usize(),
+                    display_area.cols,
+                ),
+                display_area.cols,
+            )
+        } else {
+            (
+                dimension_as_percent(
+                    current_geom.rows.constraint,
+                    current_geom.rows.as_usize(),
+                    display_area.rows,
+                ),
+                display_area.rows,
+            )
+        };
+        let target_percent = target_size_as_percent(target_size, full_size);
+        let delta = (target_percent - current_percent).abs();
+        if delta < 0.001 {
+            return Ok(false);
+        }
+        let resize = if target_percent > current_percent {
+            Resize::Increase
+        } else {
+            Resize::Decrease
+        };
+        let strategy = ResizeStrategy {
+            resize,
+            direction: Some(direction),
+            invert_on_boundaries: false,
+        };
+        self.resize_pane_with_id(strategy, pane_id, Some((delta, delta)))
+            .with_context(err_context)
+    }
+
     pub fn resize_pane_with_strategies(
         &mut self,
         pane_id: PaneId,
@@ -2788,6 +2841,24 @@ impl TiledPanes {
             *self.viewport.borrow(),
         );
         pane_grid.next_selectable_pane_id_to_the_right(&pane_id)
+    }
+}
+
+fn dimension_as_percent(constraint: Constraint, current_size: usize, full_size: usize) -> f64 {
+    match constraint {
+        Constraint::Percent(percent) => percent,
+        Constraint::Fixed(_) if full_size > 0 => (current_size as f64 / full_size as f64) * 100.0,
+        Constraint::Fixed(_) => 0.0,
+    }
+}
+
+fn target_size_as_percent(target_size: PaneDimensionConstraint, full_size: usize) -> f64 {
+    match target_size {
+        PaneDimensionConstraint::Percent(percent) => percent,
+        PaneDimensionConstraint::Fixed(fixed) if full_size > 0 => {
+            (fixed as f64 / full_size as f64) * 100.0
+        },
+        PaneDimensionConstraint::Fixed(_) => 0.0,
     }
 }
 

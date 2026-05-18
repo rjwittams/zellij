@@ -45,9 +45,10 @@ use log::{debug, warn};
 use zellij_utils::data::{
     CommandOrPlugin, Direction, EventType, FloatingPaneCoordinates, GetFocusedPaneInfoResponse,
     HostTerminalThemeMode, KeyWithModifier, LayoutInfo, LayoutWithError, ListPanesResponse,
-    ListTabsResponse, NewPanePlacement, PaneContents, PaneInfo, PaneListEntry, PaneManifest,
-    PaneRenderReport, PaneScrollbackResponse, PluginGraphicsUpdate, PluginPermission,
-    RegexHighlight, Resize, ResizeStrategy, SessionInfo, Styling, TabInfo, WebSharing,
+    ListTabsResponse, NewPanePlacement, PaneContents, PaneDimensionConstraint, PaneInfo,
+    PaneListEntry, PaneManifest, PaneRenderReport, PaneScrollbackResponse, PluginGraphicsUpdate,
+    PluginPermission, RegexHighlight, Resize, ResizeStrategy, SessionInfo, Styling, TabInfo,
+    WebSharing,
 };
 use zellij_utils::errors::prelude::*;
 use zellij_utils::input::command::RunCommand;
@@ -760,6 +761,7 @@ pub enum ScreenInstruction {
     },
     RerunCommandPane(u32, Option<NotificationEnd>), // u32 - terminal pane id
     ResizePaneWithId(ResizeStrategy, PaneId),
+    ResizePaneWithIdTo(PaneId, Direction, PaneDimensionConstraint),
     EditScrollbackForPaneWithId(PaneId, Option<NotificationEnd>),
     WriteToPaneId(Vec<u8>, PaneId, Option<NotificationEnd>),
     Paste(Vec<u8>, Option<PaneId>, ClientId, Option<NotificationEnd>),
@@ -1103,6 +1105,7 @@ impl From<&ScreenInstruction> for ScreenContext {
             ScreenInstruction::Reconfigure { .. } => ScreenContext::Reconfigure,
             ScreenInstruction::RerunCommandPane { .. } => ScreenContext::RerunCommandPane,
             ScreenInstruction::ResizePaneWithId(..) => ScreenContext::ResizePaneWithId,
+            ScreenInstruction::ResizePaneWithIdTo(..) => ScreenContext::ResizePaneWithIdTo,
             ScreenInstruction::EditScrollbackForPaneWithId(..) => {
                 ScreenContext::EditScrollbackForPaneWithId
             },
@@ -4922,6 +4925,25 @@ impl Screen {
         for tab in self.tabs.values_mut() {
             if tab.has_pane_with_pid(&pane_id) {
                 tab.resize_pane_with_id(resize, pane_id).non_fatal();
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            log::error!("Failed to find pane with id: {:?} to resize", pane_id);
+        }
+    }
+    pub fn resize_pane_with_id_to(
+        &mut self,
+        pane_id: PaneId,
+        direction: Direction,
+        target_size: PaneDimensionConstraint,
+    ) {
+        let mut found = false;
+        for tab in self.tabs.values_mut() {
+            if tab.has_pane_with_pid(&pane_id) {
+                tab.resize_pane_with_id_to(pane_id, direction, target_size)
+                    .non_fatal();
                 found = true;
                 break;
             }
@@ -9675,6 +9697,9 @@ pub(crate) fn screen_thread_main(
             },
             ScreenInstruction::ResizePaneWithId(resize, pane_id) => {
                 screen.resize_pane_with_id(resize, pane_id)
+            },
+            ScreenInstruction::ResizePaneWithIdTo(pane_id, direction, target_size) => {
+                screen.resize_pane_with_id_to(pane_id, direction, target_size)
             },
             ScreenInstruction::EditScrollbackForPaneWithId(pane_id, completion_tx) => {
                 let all_tabs = screen.get_tabs_mut();

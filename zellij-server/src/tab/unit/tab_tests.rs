@@ -6,7 +6,9 @@ use crate::screen::CopyOptions;
 use crate::{os_input_output::ServerOsApi, panes::PaneId, thread_bus::ThreadSenders, ClientId};
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
-use zellij_utils::data::{Direction, NewPanePlacement, Resize, ResizeStrategy, WebSharing};
+use zellij_utils::data::{
+    Direction, NewPanePlacement, PaneDimensionConstraint, Resize, ResizeStrategy, WebSharing,
+};
 use zellij_utils::errors::prelude::*;
 use zellij_utils::input::layout::{SplitDirection, SplitSize, TiledPaneLayout};
 use zellij_utils::ipc::IpcReceiverWithContext;
@@ -444,6 +446,63 @@ fn write_to_suppressed_pane() {
         None,
     )
     .unwrap();
+}
+
+#[test]
+fn pane_info_for_pane_reports_runtime_dimension_constraints() {
+    let tab = create_new_tab(
+        Size {
+            cols: 121,
+            rows: 20,
+        },
+        true,
+    );
+
+    let pane_info = tab
+        .pane_infos()
+        .into_iter()
+        .find(|pane_info| pane_info.id == 1 && !pane_info.is_plugin)
+        .unwrap();
+
+    assert_eq!(
+        pane_info.pane_rows_constraint,
+        Some(PaneDimensionConstraint::Percent(100.0))
+    );
+    assert_eq!(
+        pane_info.pane_columns_constraint,
+        Some(PaneDimensionConstraint::Percent(100.0))
+    );
+}
+
+#[test]
+fn resize_pane_with_id_to_percent_updates_runtime_dimension_constraint() {
+    let mut tab = create_new_tab(
+        Size {
+            cols: 120,
+            rows: 20,
+        },
+        true,
+    );
+    tab.vertical_split(PaneId::Terminal(2), None, 1, None, None)
+        .unwrap();
+
+    tab.resize_pane_with_id_to(
+        PaneId::Terminal(1),
+        Direction::Right,
+        PaneDimensionConstraint::Percent(25.0),
+    )
+    .unwrap();
+
+    let pane_info = tab
+        .pane_infos()
+        .into_iter()
+        .find(|pane_info| pane_info.id == 1 && !pane_info.is_plugin)
+        .unwrap();
+
+    assert_eq!(
+        pane_info.pane_columns_constraint,
+        Some(PaneDimensionConstraint::Percent(25.0))
+    );
 }
 
 #[test]

@@ -3,6 +3,7 @@ pub use super::generated_api::api::{
     event::{
         event::Payload as ProtobufEventPayload,
         layout_parsing_error::ErrorType as ProtobufLayoutParsingErrorType,
+        pane_dimension_constraint::Constraint as ProtobufPaneDimensionConstraintVariant,
         pane_scrollback_response, ActionCompletePayload as ProtobufActionCompletePayload,
         AvailableLayoutInfoPayload as ProtobufAvailableLayoutInfoPayload,
         ClientInfo as ProtobufClientInfo, ClientPaneHistory as ProtobufClientPaneHistory,
@@ -19,8 +20,9 @@ pub use super::generated_api::api::{
         LayoutParsingError as ProtobufLayoutParsingError,
         LayoutWithError as ProtobufLayoutWithError, ModeUpdatePayload as ProtobufModeUpdatePayload,
         PaneContents as ProtobufPaneContents, PaneContentsEntry as ProtobufPaneContentsEntry,
-        PaneId as ProtobufPaneId, PaneInfo as ProtobufPaneInfo,
-        PaneManifest as ProtobufPaneManifest, PaneMetadata as ProtobufPaneMetadata,
+        PaneDimensionConstraint as ProtobufPaneDimensionConstraint, PaneId as ProtobufPaneId,
+        PaneInfo as ProtobufPaneInfo, PaneManifest as ProtobufPaneManifest,
+        PaneMetadata as ProtobufPaneMetadata,
         PaneRenderReportPayload as ProtobufPaneRenderReportPayload,
         PaneScrollbackResponse as ProtobufPaneScrollbackResponse, PaneType as ProtobufPaneType,
         PluginConfigurationChangedPayload as ProtobufPluginConfigurationChangedPayload,
@@ -38,10 +40,10 @@ pub use super::generated_api::api::{
 #[allow(hidden_glob_reexports)]
 use crate::data::{
     ClientId, ClientInfo, CopyDestination, Event, EventType, FileMetadata, HostTerminalThemeMode,
-    InputMode, KeyWithModifier, LayoutInfo, LayoutMetadata, ModeInfo, Mouse, PaneContents, PaneId,
-    PaneInfo, PaneManifest, PaneMetadata, PaneScrollbackResponse, PermissionStatus,
-    PluginCapabilities, PluginInfo, SelectedText, SessionInfo, Style, TabInfo, TabMetadata,
-    WebServerStatus, WebSharing,
+    InputMode, KeyWithModifier, LayoutInfo, LayoutMetadata, ModeInfo, Mouse, PaneContents,
+    PaneDimensionConstraint, PaneId, PaneInfo, PaneManifest, PaneMetadata, PaneScrollbackResponse,
+    PermissionStatus, PluginCapabilities, PluginInfo, SelectedText, SessionInfo, Style, TabInfo,
+    TabMetadata, WebServerStatus, WebSharing,
 };
 
 use crate::errors::prelude::*;
@@ -1716,6 +1718,14 @@ impl TryFrom<ProtobufPaneInfo> for PaneInfo {
             pane_content_rows: protobuf_pane_info.pane_content_rows as usize,
             pane_columns: protobuf_pane_info.pane_columns as usize,
             pane_content_columns: protobuf_pane_info.pane_content_columns as usize,
+            pane_rows_constraint: protobuf_pane_info
+                .pane_rows_constraint
+                .map(PaneDimensionConstraint::try_from)
+                .transpose()?,
+            pane_columns_constraint: protobuf_pane_info
+                .pane_columns_constraint
+                .map(PaneDimensionConstraint::try_from)
+                .transpose()?,
             cursor_coordinates_in_pane: protobuf_pane_info
                 .cursor_coordinates_in_pane
                 .map(|position| (position.column as usize, position.line as usize)),
@@ -1760,6 +1770,14 @@ impl TryFrom<PaneInfo> for ProtobufPaneInfo {
             pane_content_rows: pane_info.pane_content_rows as u32,
             pane_columns: pane_info.pane_columns as u32,
             pane_content_columns: pane_info.pane_content_columns as u32,
+            pane_rows_constraint: pane_info
+                .pane_rows_constraint
+                .map(ProtobufPaneDimensionConstraint::try_from)
+                .transpose()?,
+            pane_columns_constraint: pane_info
+                .pane_columns_constraint
+                .map(ProtobufPaneDimensionConstraint::try_from)
+                .transpose()?,
             cursor_coordinates_in_pane: pane_info.cursor_coordinates_in_pane.map(|(x, y)| {
                 ProtobufPosition {
                     column: x as i64,
@@ -1780,6 +1798,38 @@ impl TryFrom<PaneInfo> for ProtobufPaneInfo {
             default_fg: pane_info.default_fg,
             default_bg: pane_info.default_bg,
         })
+    }
+}
+
+impl TryFrom<ProtobufPaneDimensionConstraint> for PaneDimensionConstraint {
+    type Error = &'static str;
+    fn try_from(
+        protobuf_pane_dimension_constraint: ProtobufPaneDimensionConstraint,
+    ) -> Result<Self, &'static str> {
+        match protobuf_pane_dimension_constraint.constraint {
+            Some(ProtobufPaneDimensionConstraintVariant::Fixed(fixed)) => {
+                Ok(PaneDimensionConstraint::Fixed(fixed as usize))
+            },
+            Some(ProtobufPaneDimensionConstraintVariant::Percent(percent)) => {
+                Ok(PaneDimensionConstraint::Percent(percent))
+            },
+            None => Err("PaneDimensionConstraint must have a constraint"),
+        }
+    }
+}
+
+impl TryFrom<PaneDimensionConstraint> for ProtobufPaneDimensionConstraint {
+    type Error = &'static str;
+    fn try_from(pane_dimension_constraint: PaneDimensionConstraint) -> Result<Self, &'static str> {
+        let constraint = match pane_dimension_constraint {
+            PaneDimensionConstraint::Fixed(fixed) => {
+                Some(ProtobufPaneDimensionConstraintVariant::Fixed(fixed as u32))
+            },
+            PaneDimensionConstraint::Percent(percent) => {
+                Some(ProtobufPaneDimensionConstraintVariant::Percent(percent))
+            },
+        };
+        Ok(ProtobufPaneDimensionConstraint { constraint })
     }
 }
 
@@ -2411,6 +2461,32 @@ fn serialize_pane_update_event() {
 }
 
 #[test]
+fn serialize_pane_update_event_preserves_dimension_constraints() {
+    use crate::data::PaneDimensionConstraint;
+    use prost::Message;
+
+    let mut panes = HashMap::new();
+    panes.insert(
+        0,
+        vec![PaneInfo {
+            id: 1,
+            pane_rows_constraint: Some(PaneDimensionConstraint::Fixed(8)),
+            pane_columns_constraint: Some(PaneDimensionConstraint::Percent(22.5)),
+            ..PaneInfo::default()
+        }],
+    );
+    let pane_update_event = Event::PaneUpdate(PaneManifest { panes });
+
+    let protobuf_event: ProtobufEvent = pane_update_event.clone().try_into().unwrap();
+    let serialized_protobuf_event = protobuf_event.encode_to_vec();
+    let deserialized_protobuf_event: ProtobufEvent =
+        Message::decode(serialized_protobuf_event.as_slice()).unwrap();
+    let deserialized_event: Event = deserialized_protobuf_event.try_into().unwrap();
+
+    assert_eq!(pane_update_event, deserialized_event);
+}
+
+#[test]
 fn serialize_key_event() {
     use crate::data::BareKey;
     use prost::Message;
@@ -2710,6 +2786,8 @@ fn serialize_session_update_event_with_non_default_values() {
             pane_content_rows: 4,
             pane_columns: 22,
             pane_content_columns: 21,
+            pane_rows_constraint: None,
+            pane_columns_constraint: None,
             cursor_coordinates_in_pane: Some((0, 0)),
             terminal_command: Some("foo".to_owned()),
             plugin_url: None,
@@ -2737,6 +2815,8 @@ fn serialize_session_update_event_with_non_default_values() {
             pane_content_rows: 4,
             pane_columns: 22,
             pane_content_columns: 21,
+            pane_rows_constraint: None,
+            pane_columns_constraint: None,
             cursor_coordinates_in_pane: Some((0, 0)),
             terminal_command: None,
             plugin_url: Some("i_am_a_fake_plugin".to_owned()),

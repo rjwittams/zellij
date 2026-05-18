@@ -577,6 +577,27 @@ pub struct PaneInfo {
     pub default_fg: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, optional, tag="25")]
     pub default_bg: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="26")]
+    pub pane_rows_constraint: ::core::option::Option<PaneDimensionConstraint>,
+    #[prost(message, optional, tag="27")]
+    pub pane_columns_constraint: ::core::option::Option<PaneDimensionConstraint>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PaneDimensionConstraint {
+    #[prost(oneof="pane_dimension_constraint::Constraint", tags="1, 2")]
+    pub constraint: ::core::option::Option<pane_dimension_constraint::Constraint>,
+}
+/// Nested message and enum types in `PaneDimensionConstraint`.
+pub mod pane_dimension_constraint {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Constraint {
+        #[prost(uint32, tag="1")]
+        Fixed(u32),
+        #[prost(double, tag="2")]
+        Percent(f64),
+    }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -435,6 +435,15 @@ message PaneInfo {
     repeated IndexInPaneGroup index_in_pane_group = 23;
     optional string default_fg = 24;
     optional string default_bg = 25;
+    optional PaneDimensionConstraint pane_rows_constraint = 26;
+    optional PaneDimensionConstraint pane_columns_constraint = 27;
+}
+
+message PaneDimensionConstraint {
+    oneof constraint {
+        uint32 fixed = 1;
+        double percent = 2;
+    }
 }
 
 message IndexInPaneGroup {
@@ -553,4 +562,3 @@ message HighlightClickedPayload {
 message InitialKeybindsPayload {
   repeated InputModeKeybinds keybinds = 1;
 }
-

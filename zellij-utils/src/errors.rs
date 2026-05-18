@@ -383,6 +383,7 @@ pub enum ScreenContext {
     Reconfigure,
     RerunCommandPane,
     ResizePaneWithId,
+    ResizePaneWithIdTo,
     EditScrollbackForPaneWithId,
     WriteToPaneId,
     Paste,

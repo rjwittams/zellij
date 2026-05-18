@@ -16,8 +16,9 @@ use std::path::PathBuf;
 use uuid::Uuid;
 use zellij_utils::data::PaneContents;
 use zellij_utils::data::{
-    Direction, KeyWithModifier, NewPanePlacement, PaneInfo, PermissionStatus, PermissionType,
-    PluginGraphicsUpdate, PluginPermission, RegexHighlight, ResizeStrategy, Style, WebSharing,
+    Direction, KeyWithModifier, NewPanePlacement, PaneDimensionConstraint, PaneInfo,
+    PermissionStatus, PermissionType, PluginGraphicsUpdate, PluginPermission, RegexHighlight,
+    ResizeStrategy, Style, WebSharing,
 };
 use zellij_utils::errors::prelude::*;
 use zellij_utils::input::command::RunCommand;
@@ -67,7 +68,7 @@ use zellij_utils::{
         },
         parse_keys,
     },
-    pane_size::{Offset, PaneGeom, Size, SizeInPixels, Viewport},
+    pane_size::{Constraint, Offset, PaneGeom, Size, SizeInPixels, Viewport},
 };
 
 #[macro_export]
@@ -5697,6 +5698,34 @@ impl Tab {
         }
         Ok(())
     }
+    pub fn resize_pane_with_id_to(
+        &mut self,
+        pane_id: PaneId,
+        direction: Direction,
+        target_size: PaneDimensionConstraint,
+    ) -> Result<()> {
+        let err_context = || format!("unable to resize pane to target size");
+        if self.floating_panes.panes_contain(&pane_id) {
+            return Err(anyhow!("Cannot resize floating pane to target size"))
+                .with_context(err_context);
+        } else if self.tiled_panes.panes_contain(&pane_id) {
+            let successfully_resized = self
+                .tiled_panes
+                .resize_pane_with_id_to(pane_id, direction, target_size)
+                .with_context(err_context)?;
+            if successfully_resized {
+                self.swap_layouts.set_is_tiled_damaged();
+                self.set_force_render();
+            }
+        } else if self
+            .suppressed_panes
+            .values()
+            .any(|s_p| s_p.1.pid() == pane_id)
+        {
+            log::error!("Cannot resize suppressed panes to target size");
+        }
+        Ok(())
+    }
     pub fn update_theme(&mut self, theme: Styling) {
         self.style.colors = theme;
         // The tab's `default_mode_info` is what `update_input_modes`
@@ -6208,6 +6237,7 @@ pub fn pane_info_for_pane(
     current_pane_group: &HashMap<ClientId, Vec<PaneId>>,
 ) -> PaneInfo {
     let mut pane_info = PaneInfo::default();
+    let current_geom = pane.current_geom();
     pane_info.pane_x = pane.x();
     pane_info.pane_content_x = pane.get_content_x();
     pane_info.pane_y = pane.y();
@@ -6216,6 +6246,14 @@ pub fn pane_info_for_pane(
     pane_info.pane_content_rows = pane.get_content_rows();
     pane_info.pane_columns = pane.cols();
     pane_info.pane_content_columns = pane.get_content_columns();
+    pane_info.pane_rows_constraint = Some(match current_geom.rows.constraint {
+        Constraint::Fixed(fixed) => PaneDimensionConstraint::Fixed(fixed),
+        Constraint::Percent(percent) => PaneDimensionConstraint::Percent(percent),
+    });
+    pane_info.pane_columns_constraint = Some(match current_geom.cols.constraint {
+        Constraint::Fixed(fixed) => PaneDimensionConstraint::Fixed(fixed),
+        Constraint::Percent(percent) => PaneDimensionConstraint::Percent(percent),
+    });
     pane_info.cursor_coordinates_in_pane = pane
         .cursor_coordinates(None)
         .and_then(|(x, y, is_visible)| if is_visible { Some((x, y)) } else { None });

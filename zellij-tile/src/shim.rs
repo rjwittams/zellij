@@ -190,8 +190,8 @@ pub fn terminal_pixel_cell_size() -> Option<SizeInPixels> {
     let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
     object_to_stdout(&protobuf_plugin_command.encode_to_vec());
     unsafe { host_run_plugin_command() };
-    let response = ProtobufTerminalPixelCellSizeResponse::decode(bytes_from_stdin().ok()?.as_slice())
-        .ok()?;
+    let response =
+        ProtobufTerminalPixelCellSizeResponse::decode(bytes_from_stdin().ok()?.as_slice()).ok()?;
     response.try_into().ok().flatten()
 }
 
@@ -1840,6 +1840,18 @@ pub fn close_pane_with_id(pane_id: PaneId) {
 /// Resize the specified pane (increase/decrease) with an optional direction (left/right/up/down)
 pub fn resize_pane_with_id(resize_strategy: ResizeStrategy, pane_id: PaneId) {
     let plugin_command = PluginCommand::ResizePaneIdWithDirection(resize_strategy, pane_id);
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+}
+
+/// Resize the specified pane to a target size by moving the specified boundary.
+pub fn resize_pane_with_id_to(
+    pane_id: PaneId,
+    direction: Direction,
+    target_size: PaneDimensionConstraint,
+) {
+    let plugin_command = PluginCommand::ResizePaneWithIdTo(pane_id, direction, target_size);
     let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
     object_to_stdout(&protobuf_plugin_command.encode_to_vec());
     unsafe { host_run_plugin_command() };

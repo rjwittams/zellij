@@ -125,9 +125,10 @@ pub use super::generated_api::api::{
         RenameLayoutResponse as ProtobufRenameLayoutResponse, RenameTabWithIdPayload,
         RenameWebLoginTokenPayload, RenameWebTokenResponse, ReplacePaneWithExistingPanePayload,
         RequestPluginPermissionPayload, RerunCommandPanePayload, ResizePaneIdWithDirectionPayload,
-        ResizePayload, RevokeAllWebTokensResponse, RevokeTokenResponse, RevokeWebLoginTokenPayload,
-        RunActionPayload, RunCommandPayload, RunningCommand as ProtobufRunningCommand,
-        SaveLayoutPayload, SaveLayoutResponse as ProtobufSaveLayoutResponse, SaveSessionPayload,
+        ResizePaneWithIdToPayload, ResizePayload, RevokeAllWebTokensResponse, RevokeTokenResponse,
+        RevokeWebLoginTokenPayload, RunActionPayload, RunCommandPayload,
+        RunningCommand as ProtobufRunningCommand, SaveLayoutPayload,
+        SaveLayoutResponse as ProtobufSaveLayoutResponse, SaveSessionPayload,
         SaveSessionResponse as ProtobufSaveSessionResponse, ScrollDownInPaneIdPayload,
         ScrollToBottomInPaneIdPayload, ScrollToTopInPaneIdPayload, ScrollUpInPaneIdPayload,
         SessionListSnapshot as ProtobufSessionListSnapshot, SetFloatingPanePinnedPayload,
@@ -151,9 +152,10 @@ use crate::data::{
     DeleteLayoutResponse, EditLayoutResponse, FloatingPaneCoordinates, GetFocusedPaneInfoResponse,
     GetPaneCwdResponse, GetPanePidResponse, GetPaneRunningCommandResponse, GetSessionListResponse,
     HighlightLayer, HighlightStyle, HttpVerb, InputMode, KeyWithModifier, KillSessionsResponse,
-    MessageToPlugin, NewPluginArgs, PaneId, PermissionType, PluginCellRect, PluginCommand,
-    PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource, PluginPixelRect, RegexHighlight,
-    RenameLayoutResponse, SaveLayoutResponse, SessionInfo, SessionListSnapshot,
+    MessageToPlugin, NewPluginArgs, PaneDimensionConstraint, PaneId, PermissionType,
+    PluginCellRect, PluginCommand, PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource,
+    PluginPixelRect, RegexHighlight, RenameLayoutResponse, SaveLayoutResponse, SessionInfo,
+    SessionListSnapshot,
 };
 use crate::input::actions::Action;
 use crate::input::layout::PercentOrFixed;
@@ -1756,6 +1758,25 @@ impl TryFrom<ProtobufPluginCommand> for PluginCommand {
                     }
                 },
                 _ => Err("Mismatched payload for Resize"),
+            },
+            Some(CommandName::ResizePaneWithIdTo) => match protobuf_plugin_command.payload {
+                Some(Payload::ResizePaneWithIdToPayload(resize_pane_with_id_to_payload)) => {
+                    match (
+                        resize_pane_with_id_to_payload.pane_id,
+                        resize_pane_with_id_to_payload.direction,
+                        resize_pane_with_id_to_payload.size,
+                    ) {
+                        (Some(pane_id), Some(direction), Some(size)) => {
+                            Ok(PluginCommand::ResizePaneWithIdTo(
+                                pane_id.try_into()?,
+                                direction.try_into()?,
+                                PaneDimensionConstraint::try_from(size)?,
+                            ))
+                        },
+                        _ => Err("Malformed resize_pane_with_id_to payload"),
+                    }
+                },
+                _ => Err("Mismatched payload for ResizePaneWithIdTo"),
             },
             Some(CommandName::EditScrollbackForPaneWithId) => match protobuf_plugin_command.payload
             {
@@ -3624,6 +3645,18 @@ impl TryFrom<PluginCommand> for ProtobufPluginCommand {
                     )),
                 })
             },
+            PluginCommand::ResizePaneWithIdTo(pane_id, direction, size) => {
+                Ok(ProtobufPluginCommand {
+                    name: CommandName::ResizePaneWithIdTo as i32,
+                    payload: Some(Payload::ResizePaneWithIdToPayload(
+                        ResizePaneWithIdToPayload {
+                            pane_id: Some(pane_id.try_into()?),
+                            direction: Some(direction.try_into()?),
+                            size: Some(size.try_into()?),
+                        },
+                    )),
+                })
+            },
             PluginCommand::EditScrollbackForPaneWithId(pane_id) => Ok(ProtobufPluginCommand {
                 name: CommandName::EditScrollbackForPaneWithId as i32,
                 payload: Some(Payload::EditScrollbackForPaneWithIdPayload(
@@ -5303,8 +5336,8 @@ impl From<OpenPluginPaneFloatingResponse> for ProtobufOpenPluginPaneFloatingResp
 mod plugin_graphics_tests {
     use super::*;
     use crate::data::{
-        PluginCellRect, PluginCommand, PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource,
-        PluginPixelRect,
+        Direction, PaneDimensionConstraint, PaneId, PluginCellRect, PluginCommand,
+        PluginGraphicsOp, PluginGraphicsUpdate, PluginImageSource, PluginPixelRect,
     };
     use crate::pane_size::SizeInPixels;
     use crate::plugin_api::generated_api::api::plugin_command::plugin_graphics_op;
@@ -5377,6 +5410,26 @@ mod plugin_graphics_tests {
             PluginCommand::MessageToPlugin(message) => {
                 assert_eq!(message.destination_plugin_id, Some(7));
                 assert_eq!(message.destination_client_id, Some(3));
+            },
+            other => panic!("unexpected command after roundtrip: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn resize_pane_with_id_to_roundtrips_fractional_percent() {
+        let command = PluginCommand::ResizePaneWithIdTo(
+            PaneId::Plugin(3),
+            Direction::Right,
+            PaneDimensionConstraint::Percent(22.5),
+        );
+
+        let protobuf: ProtobufPluginCommand = command.try_into().unwrap();
+
+        match protobuf.try_into().unwrap() {
+            PluginCommand::ResizePaneWithIdTo(pane_id, direction, size) => {
+                assert_eq!(pane_id, PaneId::Plugin(3));
+                assert_eq!(direction, Direction::Right);
+                assert_eq!(size, PaneDimensionConstraint::Percent(22.5));
             },
             other => panic!("unexpected command after roundtrip: {other:?}"),
         }

@@ -2282,6 +2282,29 @@ pub struct PaneManifest {
     pub panes: HashMap<usize, Vec<PaneInfo>>, // usize is the tab position
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize, Serialize)]
+pub enum PaneDimensionConstraint {
+    Fixed(usize),
+    Percent(f64),
+}
+
+impl Eq for PaneDimensionConstraint {}
+
+impl Hash for PaneDimensionConstraint {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            PaneDimensionConstraint::Fixed(size) => {
+                0_u8.hash(state);
+                size.hash(state);
+            },
+            PaneDimensionConstraint::Percent(percent) => {
+                1_u8.hash(state);
+                percent.to_bits().hash(state);
+            },
+        }
+    }
+}
+
 /// Contains all the information for a currently open pane
 ///
 /// # Difference between coordinates/size and content coordinates/size
@@ -2325,6 +2348,8 @@ pub struct PaneInfo {
     pub pane_content_rows: usize,
     pub pane_columns: usize,
     pub pane_content_columns: usize,
+    pub pane_rows_constraint: Option<PaneDimensionConstraint>,
+    pub pane_columns_constraint: Option<PaneDimensionConstraint>,
     /// The coordinates of the cursor - if this pane is focused - relative to the pane's
     /// coordinates
     pub cursor_coordinates_in_pane: Option<(usize, usize)>, // x, y if cursor is visible
@@ -3513,6 +3538,7 @@ pub enum PluginCommand {
     OpenCommandPaneBackground(CommandToRun, Context),
     RerunCommandPane(u32), // u32  - terminal pane id
     ResizePaneIdWithDirection(ResizeStrategy, PaneId),
+    ResizePaneWithIdTo(PaneId, Direction, PaneDimensionConstraint),
     EditScrollbackForPaneWithId(PaneId),
     GetPaneScrollback {
         pane_id: PaneId,

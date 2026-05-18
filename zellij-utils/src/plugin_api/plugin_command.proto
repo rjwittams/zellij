@@ -209,6 +209,7 @@ enum CommandName {
   DeleteAllDeadSessionsAndReply = 214;
   ApplyGraphicsUpdate = 215;
   GetTerminalPixelCellSize = 216;
+  ResizePaneWithIdTo = 217;
 }
 
 message PluginCommand {
@@ -364,6 +365,7 @@ message PluginCommand {
     KillSessionsPayload kill_sessions_and_reply_payload = 162;
     string delete_dead_session_and_reply_payload = 163;
     PluginGraphicsUpdatePayload apply_graphics_update_payload = 164;
+    ResizePaneWithIdToPayload resize_pane_with_id_to_payload = 165;
   }
 }
 
@@ -1121,6 +1123,12 @@ message GetPaneInfoPayload {
 
 message GetPaneInfoResponse {
   optional event.PaneInfo pane_info = 1; // None if pane not found
+}
+
+message ResizePaneWithIdToPayload {
+  PaneId pane_id = 1;
+  resize.MoveDirection direction = 2;
+  event.PaneDimensionConstraint size = 3;
 }
 
 message GetTabInfoPayload {
