@@ -203,11 +203,19 @@ impl<'a> PluginLoader<'a> {
 
     #[cfg(feature = "native-plugins")]
     fn start_native_plugin(&mut self, name: &str) -> Result<()> {
-        use crate::plugins::native_plugins::factory_for;
+        use crate::plugins::native_plugins::{factory_for, NATIVE_PLUGIN_REGISTRY};
         use crate::plugins::plugin_map::RunningPlugin;
 
-        let factory = factory_for(name)
-            .ok_or_else(|| anyhow!("no native plugin registered for name '{}'", name))?;
+        let factory = factory_for(name).ok_or_else(|| {
+            let known: Vec<&str> =
+                NATIVE_PLUGIN_REGISTRY.iter().map(|(n, _)| *n).collect();
+            anyhow!(
+                "no native plugin registered for name '{name}' (known: {known:?}); \
+                 plugin_config.path={:?}, location={:?}",
+                self.plugin_config.path,
+                self.plugin_config.location,
+            )
+        })?;
         let env = self.build_plugin_env_for_native()?;
         let state = factory();
         log::info!("Loaded native plugin '{}'", name);

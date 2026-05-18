@@ -948,8 +948,14 @@ fn translate_plugin_graphics_file_paths(env: &PluginEnv, update: &mut PluginGrap
 }
 
 fn request_permission(env: &PluginEnv, permissions: Vec<PermissionType>) -> Result<()> {
-    if PermissionCache::from_path_or_default(None)
-        .check_permissions(env.plugin.location.to_string(), &permissions)
+    // Native plugins are trusted code linked into the zellij binary itself.
+    // Skip the user-prompted permission flow that would otherwise pop a modal
+    // the user has to grant for every native plugin's load(). Same rationale
+    // as the auto-grant in check_command_permission / check_event_permission.
+    let auto_grant = env.plugin.is_native() || env.plugin.is_builtin();
+    if auto_grant
+        || PermissionCache::from_path_or_default(None)
+            .check_permissions(env.plugin.location.to_string(), &permissions)
     {
         return env
             .senders
