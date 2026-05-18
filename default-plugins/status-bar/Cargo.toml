@@ -5,6 +5,14 @@ authors = ["Brooks J Rady <b.j.rady@gmail.com>"]
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "status_bar"
+path = "src/main.rs"
+
+[[bin]]
+name = "status-bar"
+path = "src/main.rs"
+
 [dependencies]
 colored = "2"
 ansi_term = "0.12"

@@ -11,6 +11,7 @@ use ansi_term::{
 
 use std::collections::BTreeMap;
 use std::fmt::{Display, Error, Formatter};
+use zellij_tile::output::{print, println};
 use zellij_tile::prelude::actions::Action;
 use zellij_tile::prelude::*;
 use zellij_tile_utils::{palette_match, style};
@@ -33,7 +34,7 @@ const TO_NORMAL: Action = Action::SwitchToMode {
 };
 
 #[derive(Default)]
-struct State {
+pub struct State {
     tabs: Vec<TabInfo>,
     tip_name: String,
     mode_info: ModeInfo,
