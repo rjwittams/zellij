@@ -38,7 +38,7 @@ use zellij_utils::plugin_api::plugin_command::{
     ProtobufOpenTerminalFloatingResponse, ProtobufOpenTerminalInPlaceOfPluginResponse,
     ProtobufOpenTerminalInPlaceResponse, ProtobufOpenTerminalNearPluginResponse,
     ProtobufOpenTerminalPaneInPlaceOfPaneIdResponse, ProtobufOpenTerminalResponse,
-    ProtobufParseLayoutResponse, ProtobufPluginCommand, ProtobufRenameLayoutResponse,
+    ProtobufParseLayoutResponse, ProtobufRenameLayoutResponse,
     ProtobufSaveLayoutResponse, ProtobufSaveSessionResponse, ProtobufShowFloatingPanesResponse,
     ProtobufTerminalPixelCellSizeResponse, RenameWebTokenResponse, RevokeAllWebTokensResponse,
     RevokeTokenResponse,
@@ -2620,6 +2620,7 @@ pub fn register_native_typed_dispatcher(d: fn(PluginCommand)) {
 pub fn dispatch_plugin_command(plugin_command: PluginCommand) {
     #[cfg(target_family = "wasm")]
     {
+        use zellij_utils::plugin_api::plugin_command::ProtobufPluginCommand;
         let protobuf_plugin_command: ProtobufPluginCommand =
             plugin_command.try_into().unwrap();
         object_to_stdout(&protobuf_plugin_command.encode_to_vec());
@@ -2733,10 +2734,12 @@ pub fn clear_pane_highlights(pane_id: PaneId) {
 extern "C" {
     fn host_run_plugin_command();
 }
-// Native dispatch: invoke the dispatcher registered by the host. The dispatcher
-// reads encoded `PluginCommand` bytes from the current NativeBridge's stdout pipe,
-// processes them, and writes any response back into the stdin pipe.
+// Native dispatch: invoke the dispatcher registered by the host. Used only by
+// the bytes-based path; the typed-dispatch path used by all shim functions
+// today bypasses this. Kept as a fallback for any external code still calling
+// the wasm-style import.
 #[cfg(not(target_family = "wasm"))]
+#[allow(dead_code)]
 unsafe fn host_run_plugin_command() {
     if let Some(d) = NATIVE_DISPATCHER.get() {
         d();

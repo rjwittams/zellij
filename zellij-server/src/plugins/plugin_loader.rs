@@ -5,7 +5,6 @@ use crate::plugins::plugin_worker::{plugin_worker, RunningWorker};
 use crate::plugins::wasm_bridge::{LoadingContext, PluginCache};
 use crate::plugins::zellij_exports::zellij_exports;
 use crate::plugins::PluginId;
-use prost::Message;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs,
@@ -23,7 +22,6 @@ use crate::{
     ui::loading_indication::LoadingIndication, ClientId,
 };
 
-use zellij_utils::plugin_api::action::ProtobufPluginConfiguration;
 use zellij_utils::{
     consts::ZELLIJ_TMP_DIR,
     data::InputMode,
@@ -207,8 +205,6 @@ impl<'a> PluginLoader<'a> {
     fn start_native_plugin(&mut self, name: &str) -> Result<()> {
         use crate::plugins::native_plugins::factory_for;
         use crate::plugins::plugin_map::RunningPlugin;
-        use prost::Message;
-        use zellij_utils::plugin_api::action::ProtobufPluginConfiguration;
 
         let factory = factory_for(name)
             .ok_or_else(|| anyhow!("no native plugin registered for name '{}'", name))?;
@@ -229,17 +225,11 @@ impl<'a> PluginLoader<'a> {
             subscriptions,
             HashMap::new(),
         );
-        let protobuf_plugin_configuration: ProtobufPluginConfiguration = self
-            .plugin_config
-            .initial_userspace_configuration
-            .clone()
-            .try_into()
-            .map_err(|e| anyhow!("Failed to serialize user configuration: {:?}", e))?;
-        let config_bytes = protobuf_plugin_configuration.encode_to_vec();
+        let config = self.plugin_config.initial_userspace_configuration.clone();
         plugin
             .lock()
             .unwrap()
-            .call_load(&config_bytes)
+            .call_load(config)
             .context("native plugin load failed")?;
         Ok(())
     }
@@ -358,13 +348,7 @@ impl<'a> PluginLoader<'a> {
             start_function.call(&mut *store, ()).with_context(err_context)?;
         }
 
-        let protobuf_plugin_configuration: ProtobufPluginConfiguration = self
-            .plugin_config
-            .initial_userspace_configuration
-            .clone()
-            .try_into()
-            .map_err(|e| anyhow!("Failed to serialize user configuration: {:?}", e))?;
-        let protobuf_bytes = protobuf_plugin_configuration.encode_to_vec();
+        let config = self.plugin_config.initial_userspace_configuration.clone();
         // Avoid the unused-variable warning for load_function — call_load picks the
         // `load` typed-func itself from the instance, so we no longer reference the
         // pre-resolved handle here.
@@ -372,7 +356,7 @@ impl<'a> PluginLoader<'a> {
         plugin
             .lock()
             .unwrap()
-            .call_load(&protobuf_bytes)
+            .call_load(config)
             .with_context(err_context)?;
 
         Ok(())

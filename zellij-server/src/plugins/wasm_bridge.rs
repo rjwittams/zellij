@@ -28,9 +28,6 @@ use zellij_utils::data::{
 use zellij_utils::downloader::Downloader;
 use zellij_utils::input::keybinds::Keybinds;
 use zellij_utils::input::permission::PermissionCache;
-use zellij_utils::plugin_api::event::ProtobufEvent;
-
-use prost::Message;
 
 use crate::panes::PaneId;
 use crate::{
@@ -2155,49 +2152,41 @@ pub fn apply_event_to_plugin(
                     mode_info.keybinds = running_plugin.env().keybinds.to_keybinds_vec();
                 }
             }
-            let protobuf_event: Result<ProtobufEvent, _> = event.clone().try_into();
-            match protobuf_event {
-                Ok(protobuf_event) => {
-                    let should_render_raw = running_plugin
-                        .call_update(&protobuf_event.encode_to_vec())
-                        .with_context(err_context)?;
-                    let mut should_render = should_render_raw;
-                    if let Event::PermissionRequestResult(..) = event {
-                        // we always render in this case, otherwise the request permission screen stays on
-                        // screen
-                        should_render = true;
-                    }
-                    if rows > 0 && columns > 0 && should_render {
-                        let rendered_bytes = running_plugin
-                            .call_render(rows as i32, columns as i32)
-                            .with_context(err_context)?;
-                        let pipes_to_block_or_unblock =
-                            pipes_to_block_or_unblock(running_plugin, None);
-                        let plugin_render_asset = PluginRenderAsset::new(
-                            plugin_id,
-                            client_id,
-                            rendered_bytes.as_bytes().to_vec(),
-                        )
+            let should_render_raw = running_plugin
+                .call_update(event.clone())
+                .with_context(err_context)?;
+            let mut should_render = should_render_raw;
+            if let Event::PermissionRequestResult(..) = event {
+                // we always render in this case, otherwise the request permission screen stays on
+                // screen
+                should_render = true;
+            }
+            if rows > 0 && columns > 0 && should_render {
+                let rendered_bytes = running_plugin
+                    .call_render(rows as i32, columns as i32)
+                    .with_context(err_context)?;
+                let pipes_to_block_or_unblock =
+                    pipes_to_block_or_unblock(running_plugin, None);
+                let plugin_render_asset = PluginRenderAsset::new(
+                    plugin_id,
+                    client_id,
+                    rendered_bytes.as_bytes().to_vec(),
+                )
+                .with_pipes(pipes_to_block_or_unblock);
+                plugin_render_assets.push(plugin_render_asset);
+            } else {
+                // This is a bit of a hack to get around the fact that plugins are allowed not to
+                // render and still unblock CLI pipes
+                let pipes_to_block_or_unblock =
+                    pipes_to_block_or_unblock(running_plugin, None);
+                let plugin_render_asset =
+                    PluginRenderAsset::new(plugin_id, client_id, vec![])
                         .with_pipes(pipes_to_block_or_unblock);
-                        plugin_render_assets.push(plugin_render_asset);
-                    } else {
-                        // This is a bit of a hack to get around the fact that plugins are allowed not to
-                        // render and still unblock CLI pipes
-                        let pipes_to_block_or_unblock =
-                            pipes_to_block_or_unblock(running_plugin, None);
-                        let plugin_render_asset =
-                            PluginRenderAsset::new(plugin_id, client_id, vec![])
-                                .with_pipes(pipes_to_block_or_unblock);
-                        let _ = senders
-                            .send_to_plugin(PluginInstruction::UnblockCliPipes(vec![
-                                plugin_render_asset,
-                            ]))
-                            .context("failed to unblock input pipe");
-                    }
-                },
-                Err(e) => {
-                    log::error!("Failed to convert to protobuf: {:?}", e);
-                },
+                let _ = senders
+                    .send_to_plugin(PluginInstruction::UnblockCliPipes(vec![
+                        plugin_render_asset,
+                    ]))
+                    .context("failed to unblock input pipe");
             }
         },
         (PermissionStatus::Denied, permission) => {
@@ -2230,13 +2219,8 @@ pub fn apply_before_close_event_to_plugin(
     senders: ThreadSenders,
 ) -> Result<()> {
     let err_context = || format!("Failed to apply event to plugin {plugin_id}");
-    let event = Event::BeforeClose;
-    let protobuf_event: ProtobufEvent = event
-        .clone()
-        .try_into()
-        .map_err(|e| anyhow!("Failed to convert to protobuf: {:?}", e))?;
     let _should_render = running_plugin
-        .call_update(&protobuf_event.encode_to_vec())
+        .call_update(Event::BeforeClose)
         .with_context(err_context)?;
     let pipes_to_block_or_unblock = pipes_to_block_or_unblock(running_plugin, None);
     let plugin_render_asset =
