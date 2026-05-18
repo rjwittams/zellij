@@ -5,6 +5,14 @@ authors = ["Jonah Caplan <jonahcaplan@gmail.com>"]
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "tab_bar"
+path = "src/main.rs"
+
+[[bin]]
+name = "tab-bar"
+path = "src/main.rs"
+
 [dependencies]
 colored = "2"
 ansi_term = "0.12"

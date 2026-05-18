@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::convert::TryInto;
 
 use tab::get_tab_to_focus;
+use zellij_tile::output::print;
 use zellij_tile::prelude::*;
 
 use crate::line::tab_line;
@@ -26,7 +27,7 @@ impl LinePart {
 }
 
 #[derive(Default, Debug)]
-struct State {
+pub struct State {
     tabs: Vec<TabInfo>,
     active_tab_idx: usize,
     mode_info: ModeInfo,

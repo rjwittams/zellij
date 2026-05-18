@@ -15,6 +15,8 @@ pub static NATIVE_PLUGIN_REGISTRY: &[(&str, NativePluginFactory)] = &[
     ("native-hello", || Box::new(hello::NativeHello::default())),
     #[cfg(feature = "native-status-bar")]
     ("status-bar", || Box::new(status_bar::State::default())),
+    #[cfg(feature = "native-tab-bar")]
+    ("tab-bar", || Box::new(tab_bar::State::default())),
 ];
 
 pub fn factory_for(name: &str) -> Option<NativePluginFactory> {
