@@ -581,6 +581,9 @@ pub enum RunPluginLocation {
     File(PathBuf),
     Zellij(PluginTag),
     Remote(String),
+    /// A plugin compiled into the Zellij binary as native Rust code.
+    /// The string is the registry key (e.g. `"native-hello"`).
+    Native(String),
 }
 
 impl Default for RunPluginLocation {
@@ -597,6 +600,7 @@ impl RunPluginLocation {
 
         match url.scheme() {
             "zellij" => Ok(Self::Zellij(PluginTag::new(decoded_path))),
+            "native" => Ok(Self::Native(decoded_path.into_owned())),
             "file" => {
                 let path = if location.starts_with("file:/") {
                     // Path is absolute, its safe to use URL path.
@@ -635,6 +639,7 @@ impl RunPluginLocation {
             RunPluginLocation::File(pathbuf) => format!("file:{}", pathbuf.display()),
             RunPluginLocation::Zellij(plugin_tag) => format!("zellij:{}", plugin_tag),
             RunPluginLocation::Remote(url) => String::from(url),
+            RunPluginLocation::Native(name) => format!("native:{}", name),
         }
     }
 }
@@ -648,6 +653,7 @@ impl From<&RunPluginLocation> for Url {
             ),
             RunPluginLocation::Zellij(tag) => format!("zellij:{}", tag),
             RunPluginLocation::Remote(url) => String::from(url),
+            RunPluginLocation::Native(name) => format!("native:{}", name),
         };
         Self::parse(&url).unwrap()
     }
@@ -663,6 +669,7 @@ impl fmt::Display for RunPluginLocation {
             ),
             Self::Zellij(tag) => write!(f, "{}", tag),
             Self::Remote(url) => write!(f, "{}", url),
+            Self::Native(name) => write!(f, "{}", name),
         }
     }
 }

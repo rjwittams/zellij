@@ -8,6 +8,33 @@ use std::{
 };
 use wasmi::{Instance, Store, StoreLimits};
 use wasmi_wasi::WasiCtx;
+use zellij_tile::ZellijPlugin;
+use zellij_utils::data::{Event, PipeMessage};
+
+/// Object-safe wrapper around `zellij_tile::ZellijPlugin`. Needed because
+/// `ZellijPlugin: Default` is not dyn-compatible (constructor in trait bound).
+/// A blanket impl makes any `T: ZellijPlugin + Send + 'static` usable through this trait.
+pub trait BoxableZellijPlugin: Send {
+    fn load(&mut self, configuration: BTreeMap<String, String>);
+    fn update(&mut self, event: Event) -> bool;
+    fn pipe(&mut self, pipe_message: PipeMessage) -> bool;
+    fn render(&mut self, rows: usize, cols: usize);
+}
+
+impl<T: ZellijPlugin + Send + 'static> BoxableZellijPlugin for T {
+    fn load(&mut self, configuration: BTreeMap<String, String>) {
+        <Self as ZellijPlugin>::load(self, configuration)
+    }
+    fn update(&mut self, event: Event) -> bool {
+        <Self as ZellijPlugin>::update(self, event)
+    }
+    fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
+        <Self as ZellijPlugin>::pipe(self, pipe_message)
+    }
+    fn render(&mut self, rows: usize, cols: usize) {
+        <Self as ZellijPlugin>::render(self, rows, cols)
+    }
+}
 
 use crate::{thread_bus::ThreadSenders, ClientId};
 
@@ -159,7 +186,7 @@ impl PluginMap {
             .iter()
             .filter(|(_, (running_plugin, _subscriptions, _workers))| {
                 let running_plugin = running_plugin.lock().unwrap();
-                let plugin_config = &running_plugin.store.data().plugin;
+                let plugin_config = &running_plugin.env().plugin;
                 let running_plugin_location = &plugin_config.location;
                 let running_plugin_configuration = &plugin_config.initial_userspace_configuration;
                 running_plugin_location == plugin_location
@@ -182,7 +209,7 @@ impl PluginMap {
         > = HashMap::new();
         for ((plugin_id, client_id), (running_plugin, _, _)) in self.plugin_assets.iter() {
             let running_plugin = running_plugin.lock().unwrap();
-            let plugin_config = &running_plugin.store.data().plugin;
+            let plugin_config = &running_plugin.env().plugin;
             let running_plugin_location = &plugin_config.location;
             let running_plugin_configuration = &plugin_config.initial_userspace_configuration;
             match cloned_plugin_assets.get_mut(running_plugin_location) {
@@ -234,7 +261,7 @@ impl PluginMap {
             .find_map(|((p_id, _), (running_plugin, _, _))| {
                 if *p_id == plugin_id {
                     let running_plugin = running_plugin.lock().unwrap();
-                    let plugin_config = &running_plugin.store.data().plugin;
+                    let plugin_config = &running_plugin.env().plugin;
                     let run_plugin_location = plugin_config.location.clone();
                     let run_plugin_configuration =
                         plugin_config.initial_userspace_configuration.clone();
@@ -354,9 +381,21 @@ pub enum AtomicEvent {
     Resize,
 }
 
+/// Backend implementation of a plugin instance. Either a WASM module hosted by
+/// wasmi, or a natively-compiled Rust impl of `ZellijPlugin` linked into the binary.
+pub enum PluginBackend {
+    Wasm {
+        store: Store<PluginEnv>,
+        instance: Instance,
+    },
+    Native {
+        state: Box<dyn BoxableZellijPlugin>,
+        env: Box<PluginEnv>,
+    },
+}
+
 pub struct RunningPlugin {
-    pub store: Store<PluginEnv>,
-    pub instance: Instance,
+    pub backend: PluginBackend,
     pub rows: usize,
     pub columns: usize,
     next_event_ids: HashMap<AtomicEvent, usize>,
@@ -364,16 +403,55 @@ pub struct RunningPlugin {
 }
 
 impl RunningPlugin {
-    pub fn new(store: Store<PluginEnv>, instance: Instance, rows: usize, columns: usize) -> Self {
+    pub fn new_wasm(
+        store: Store<PluginEnv>,
+        instance: Instance,
+        rows: usize,
+        columns: usize,
+    ) -> Self {
         RunningPlugin {
-            store,
-            instance,
+            backend: PluginBackend::Wasm { store, instance },
             rows,
             columns,
             next_event_ids: HashMap::new(),
             last_applied_event_ids: HashMap::new(),
         }
     }
+
+    pub fn new_native(
+        state: Box<dyn BoxableZellijPlugin>,
+        env: PluginEnv,
+        rows: usize,
+        columns: usize,
+    ) -> Self {
+        RunningPlugin {
+            backend: PluginBackend::Native {
+                state,
+                env: Box::new(env),
+            },
+            rows,
+            columns,
+            next_event_ids: HashMap::new(),
+            last_applied_event_ids: HashMap::new(),
+        }
+    }
+
+    /// Backend-agnostic read access to the plugin environment.
+    pub fn env(&self) -> &PluginEnv {
+        match &self.backend {
+            PluginBackend::Wasm { store, .. } => store.data(),
+            PluginBackend::Native { env, .. } => env,
+        }
+    }
+
+    /// Backend-agnostic write access to the plugin environment.
+    pub fn env_mut(&mut self) -> &mut PluginEnv {
+        match &mut self.backend {
+            PluginBackend::Wasm { store, .. } => store.data_mut(),
+            PluginBackend::Native { env, .. } => env,
+        }
+    }
+
     pub fn next_event_id(&mut self, atomic_event: AtomicEvent) -> usize {
         let current_event_id = *self.next_event_ids.get(&atomic_event).unwrap_or(&0);
         if current_event_id < usize::MAX {
@@ -397,18 +475,133 @@ impl RunningPlugin {
         }
     }
     pub fn update_keybinds(&mut self, keybinds: Keybinds) {
-        self.store.data_mut().keybinds = keybinds;
+        self.env_mut().keybinds = keybinds;
     }
     pub fn update_default_mode(&mut self, default_mode: InputMode) {
-        self.store.data_mut().default_mode = default_mode;
+        self.env_mut().default_mode = default_mode;
     }
     pub fn update_default_shell(&mut self, default_shell: Option<TerminalAction>) {
-        self.store.data_mut().default_shell = default_shell;
+        self.env_mut().default_shell = default_shell;
     }
     pub fn update_layout_dir(&mut self, layout_dir: Option<PathBuf>) {
-        self.store.data_mut().layout_dir = layout_dir;
+        self.env_mut().layout_dir = layout_dir;
     }
     pub fn intercepting_key_presses(&self) -> bool {
-        self.store.data().intercepting_key_presses
+        self.env().intercepting_key_presses
+    }
+
+    /// Mutable access to the wasmi Store/Instance pair when this plugin is wasm-backed.
+    /// Returns None for native plugins. Used by the legacy dispatch sites in wasm_bridge.rs
+    /// and pipes.rs until they're moved behind backend-agnostic call methods.
+    pub fn wasm_parts_mut(&mut self) -> Option<(&mut Store<PluginEnv>, &Instance)> {
+        match &mut self.backend {
+            PluginBackend::Wasm { store, instance } => Some((store, instance)),
+            PluginBackend::Native { .. } => None,
+        }
+    }
+
+    /// Invoke the plugin's `load` entry point with the given protobuf-encoded
+    /// `ProtobufPluginConfiguration` bytes.
+    pub fn call_load(&mut self, config_bytes: &[u8]) -> Result<()> {
+        use crate::plugins::zellij_exports::wasi_write_object;
+        use prost::Message;
+        use std::collections::BTreeMap;
+        use std::convert::TryFrom;
+        use zellij_utils::plugin_api::action::ProtobufPluginConfiguration;
+        match &mut self.backend {
+            PluginBackend::Wasm { store, instance } => {
+                wasi_write_object(store.data(), &config_bytes)?;
+                let load = instance
+                    .get_typed_func::<(), ()>(&mut *store, "load")
+                    .context("plugin missing `load` export")?;
+                load.call(&mut *store, ())
+                    .map_err(|e| anyhow!("plugin load failed: {e}"))
+            },
+            PluginBackend::Native { state, .. } => {
+                let proto = ProtobufPluginConfiguration::decode(config_bytes)
+                    .context("decode plugin configuration")?;
+                let config = BTreeMap::try_from(&proto)
+                    .map_err(|e| anyhow!("plugin configuration: {e}"))?;
+                state.load(config);
+                Ok(())
+            },
+        }
+    }
+
+    /// Invoke the plugin's `update` entry point with the given protobuf-encoded
+    /// `ProtobufEvent` bytes. Returns true if the plugin requested a render.
+    pub fn call_update(&mut self, event_bytes: &[u8]) -> Result<bool> {
+        use crate::plugins::zellij_exports::wasi_write_object;
+        use prost::Message;
+        use std::convert::TryInto;
+        use zellij_utils::plugin_api::event::ProtobufEvent;
+        match &mut self.backend {
+            PluginBackend::Wasm { store, instance } => {
+                wasi_write_object(store.data(), &event_bytes)?;
+                let update = instance
+                    .get_typed_func::<(), i32>(&mut *store, "update")
+                    .context("plugin missing `update` export")?;
+                let r = update
+                    .call(&mut *store, ())
+                    .map_err(|e| anyhow!("plugin update failed: {e}"))?;
+                Ok(r == 1)
+            },
+            PluginBackend::Native { state, .. } => {
+                let proto = ProtobufEvent::decode(event_bytes).context("decode event")?;
+                let event = proto.try_into().map_err(|e| anyhow!("event: {e}"))?;
+                Ok(state.update(event))
+            },
+        }
+    }
+
+    /// Invoke the plugin's `render` entry point. Returns the rendered ANSI string
+    /// the plugin wrote during the call.
+    pub fn call_render(&mut self, rows: i32, cols: i32) -> Result<String> {
+        use crate::plugins::zellij_exports::wasi_read_string;
+        match &mut self.backend {
+            PluginBackend::Wasm { store, instance } => {
+                let render = instance
+                    .get_typed_func::<(i32, i32), ()>(&mut *store, "render")
+                    .context("plugin missing `render` export")?;
+                render
+                    .call(&mut *store, (rows, cols))
+                    .map_err(|e| anyhow!("plugin render failed: {e}"))?;
+                wasi_read_string(store.data())
+            },
+            PluginBackend::Native { state, .. } => {
+                let buf = crate::plugins::native_runtime::with_render_buffer(|| {
+                    state.render(rows as usize, cols as usize);
+                });
+                // Match the WASM path's CRLF normalization done by wasi_read_string.
+                Ok(buf.replace("\n", "\n\r"))
+            },
+        }
+    }
+
+    /// Invoke the plugin's `pipe` entry point if it has one. Returns `Some(should_render)`
+    /// when the export exists, `None` when the plugin has no pipe export (treated as
+    /// "old plugin without the interface").
+    pub fn call_pipe(&mut self, pipe_bytes: &[u8]) -> Result<Option<bool>> {
+        use crate::plugins::zellij_exports::wasi_write_object;
+        use prost::Message;
+        use std::convert::TryInto;
+        use zellij_utils::plugin_api::pipe_message::ProtobufPipeMessage;
+        match &mut self.backend {
+            PluginBackend::Wasm { store, instance } => {
+                let Ok(pipe) = instance.get_typed_func::<(), i32>(&mut *store, "pipe") else {
+                    return Ok(None);
+                };
+                wasi_write_object(store.data(), &pipe_bytes)?;
+                let r = pipe
+                    .call(&mut *store, ())
+                    .map_err(|e| anyhow!("plugin pipe failed: {e}"))?;
+                Ok(Some(r == 1))
+            },
+            PluginBackend::Native { state, .. } => {
+                let proto = ProtobufPipeMessage::decode(pipe_bytes).context("decode pipe")?;
+                let msg = proto.try_into().map_err(|e| anyhow!("pipe message: {e}"))?;
+                Ok(Some(state.pipe(msg)))
+            },
+        }
     }
 }

@@ -880,6 +880,10 @@ mod session_state_tests {
 pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
     info!("Starting Zellij server!");
 
+    // Route `zellij_tile::println!` from native plugins into the per-thread render buffer
+    // installed around each `render()` call by `plugins::native_runtime`.
+    zellij_tile::shim::register_native_printer(plugins::native_runtime::write_to_render_buffer);
+
     #[cfg(unix)]
     {
         use nix::sys::stat::{umask, Mode};

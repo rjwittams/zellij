@@ -4028,6 +4028,11 @@ impl From<crate::input::layout::RunPluginLocation>
                 location_type: ProtoRunPluginLocation::Remote as i32,
                 location_data: Some(LocationData::RemoteUrl(url)),
             },
+            // Spike: ride the File channel with a `native:` prefix.
+            crate::input::layout::RunPluginLocation::Native(name) => Self {
+                location_type: ProtoRunPluginLocation::File as i32,
+                location_data: Some(LocationData::FilePath(format!("native:{}", name))),
+            },
         }
     }
 }
@@ -4517,9 +4522,16 @@ impl TryFrom<crate::client_server_contract::client_server_contract::RunPluginLoc
         match location.location_type {
             x if x == ProtoRunPluginLocation::File as i32 => {
                 if let LocationData::FilePath(path) = location_data {
-                    Ok(crate::input::layout::RunPluginLocation::File(
-                        std::path::PathBuf::from(path),
-                    ))
+                    // Spike: detect the `native:` prefix and route back to the Native variant.
+                    if let Some(name) = path.strip_prefix("native:") {
+                        Ok(crate::input::layout::RunPluginLocation::Native(
+                            name.to_string(),
+                        ))
+                    } else {
+                        Ok(crate::input::layout::RunPluginLocation::File(
+                            std::path::PathBuf::from(path),
+                        ))
+                    }
                 } else {
                     Err(anyhow!("File location type but wrong data variant"))
                 }

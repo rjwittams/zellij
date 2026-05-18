@@ -2696,7 +2696,15 @@ impl TryFrom<ProtobufRunPluginLocationData> for RunPluginLocation {
     fn try_from(protobuf: ProtobufRunPluginLocationData) -> Result<Self, Self::Error> {
         use super::generated_api::api::action::run_plugin_location_data::LocationData;
         match protobuf.location_data {
-            Some(LocationData::FilePath(path)) => Ok(RunPluginLocation::File(PathBuf::from(path))),
+            // Spike-pragmatic: Native plugin locations ride the File channel with a
+            // `native:` prefix. Cleaner long-term would be a dedicated proto variant.
+            Some(LocationData::FilePath(path)) => {
+                if let Some(name) = path.strip_prefix("native:") {
+                    Ok(RunPluginLocation::Native(name.to_string()))
+                } else {
+                    Ok(RunPluginLocation::File(PathBuf::from(path)))
+                }
+            },
             Some(LocationData::ZellijTag(tag)) => Ok(RunPluginLocation::Zellij(tag.try_into()?)),
             Some(LocationData::RemoteUrl(url)) => Ok(RunPluginLocation::Remote(url)),
             None => Err("RunPluginLocationData must have location_data"),
@@ -2723,6 +2731,11 @@ impl TryFrom<RunPluginLocation> for ProtobufRunPluginLocationData {
             RunPluginLocation::Remote(url) => (
                 ProtobufRunPluginLocationType::Remote as i32,
                 Some(LocationData::RemoteUrl(url)),
+            ),
+            // Spike: ride the File channel with a `native:` prefix. See TryFrom above.
+            RunPluginLocation::Native(name) => (
+                ProtobufRunPluginLocationType::File as i32,
+                Some(LocationData::FilePath(format!("native:{}", name))),
             ),
         };
         Ok(ProtobufRunPluginLocationData {

@@ -2990,9 +2990,16 @@ pub fn clear_pane_highlights(pane_id: PaneId) {
     unsafe { host_run_plugin_command() };
 }
 
+#[cfg(target_family = "wasm")]
 #[link(wasm_import_module = "zellij")]
 extern "C" {
     fn host_run_plugin_command();
+}
+// Native fallback so this crate compiles when pulled in by host-side code (e.g. zellij-server).
+// The in-process bridge introduced later in this series replaces this stub.
+#[cfg(not(target_family = "wasm"))]
+unsafe fn host_run_plugin_command() {
+    panic!("host_run_plugin_command invoked from native code — no native dispatcher is wired up yet");
 }
 
 /// Backing function for `zellij_tile::println!` / `print!` on the native target.

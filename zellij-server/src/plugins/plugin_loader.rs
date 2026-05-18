@@ -139,6 +139,11 @@ impl<'a> PluginLoader<'a> {
         self
     }
     pub fn start_plugin(&mut self) -> Result<()> {
+        if self.plugin_config.is_native() {
+            self.start_native_plugin()?;
+            self.clone_instance_for_other_clients()?;
+            return Ok(());
+        }
         let module = if self.skip_cache {
             self.interpret_module()?
         } else {
@@ -149,6 +154,84 @@ impl<'a> PluginLoader<'a> {
         self.load_plugin_instance(store, &instance)?;
         self.clone_instance_for_other_clients()?;
         Ok(())
+    }
+
+    fn start_native_plugin(&mut self) -> Result<()> {
+        use crate::plugins::native_plugins::factory_for;
+        use crate::plugins::plugin_map::RunningPlugin;
+        use prost::Message;
+        use zellij_utils::plugin_api::action::ProtobufPluginConfiguration;
+
+        let name = self
+            .plugin_config
+            .native_name()
+            .ok_or_else(|| anyhow!("native plugin without name"))?;
+        let factory = factory_for(name)
+            .ok_or_else(|| anyhow!("no native plugin registered for name '{}'", name))?;
+        let env = self.build_plugin_env_for_native()?;
+        let state = factory();
+        let subscriptions = env.subscriptions.clone();
+        let plugin = Arc::new(Mutex::new(RunningPlugin::new_native(
+            state,
+            env,
+            self.size.rows,
+            self.size.cols,
+        )));
+        self.plugin_map.insert(
+            self.plugin_id,
+            self.client_id,
+            plugin.clone(),
+            subscriptions,
+            HashMap::new(),
+        );
+        let protobuf_plugin_configuration: ProtobufPluginConfiguration = self
+            .plugin_config
+            .initial_userspace_configuration
+            .clone()
+            .try_into()
+            .map_err(|e| anyhow!("Failed to serialize user configuration: {:?}", e))?;
+        let config_bytes = protobuf_plugin_configuration.encode_to_vec();
+        plugin
+            .lock()
+            .unwrap()
+            .call_load(&config_bytes)
+            .context("native plugin load failed")?;
+        Ok(())
+    }
+
+    /// Build a PluginEnv for a native plugin. Mirrors the env half of
+    /// `create_plugin_environment` but skips the wasmi Store and uses an empty WASI ctx
+    /// (native plugins don't go through WASI; the field stays for type compatibility).
+    fn build_plugin_env_for_native(&self) -> Result<PluginEnv> {
+        use wasmi_wasi::WasiCtxBuilder;
+        let stdin_pipe = Arc::new(Mutex::new(VecDeque::new()));
+        let stdout_pipe = Arc::new(Mutex::new(VecDeque::new()));
+        let wasi_ctx = WasiCtxBuilder::new().build();
+        Ok(PluginEnv {
+            plugin_id: self.plugin_id,
+            client_id: self.client_id,
+            plugin: self.plugin_config.clone(),
+            permissions: Arc::new(Mutex::new(None)),
+            senders: self.senders.clone(),
+            wasi_ctx,
+            plugin_own_data_dir: self.plugin_own_data_dir.clone(),
+            plugin_own_cache_dir: self.plugin_own_cache_dir.clone(),
+            tab_index: self.tab_index,
+            path_to_default_shell: self.path_to_default_shell.clone(),
+            default_shell: self.default_shell.clone(),
+            plugin_cwd: self.plugin_cwd.clone(),
+            session_env_vars: self.session_env_vars.clone(),
+            input_pipes_to_unblock: Arc::new(Mutex::new(HashSet::new())),
+            input_pipes_to_block: Arc::new(Mutex::new(HashSet::new())),
+            layout_dir: self.layout_dir.clone(),
+            default_mode: self.default_mode.clone(),
+            subscriptions: Arc::new(Mutex::new(HashSet::new())),
+            keybinds: self.keybinds.clone(),
+            intercepting_key_presses: false,
+            stdin_pipe,
+            stdout_pipe,
+            store_limits: create_optimized_store_limits(),
+        })
     }
     fn interpret_module(&mut self) -> Result<Module> {
         self.loading_indication.override_previous_error();
@@ -207,7 +290,7 @@ impl<'a> PluginLoader<'a> {
         }
 
         let subscriptions = store.data().subscriptions.clone();
-        let plugin = Arc::new(Mutex::new(RunningPlugin::new(
+        let plugin = Arc::new(Mutex::new(RunningPlugin::new_wasm(
             store,
             main_user_instance,
             self.size.rows,
@@ -221,9 +304,13 @@ impl<'a> PluginLoader<'a> {
             workers,
         );
 
-        start_function
-            .call(&mut plugin.lock().unwrap().store, ())
-            .with_context(err_context)?;
+        {
+            let mut guard = plugin.lock().unwrap();
+            let (store, _instance) = guard
+                .wasm_parts_mut()
+                .expect("wasm loader path reached for non-wasm plugin");
+            start_function.call(&mut *store, ()).with_context(err_context)?;
+        }
 
         let protobuf_plugin_configuration: ProtobufPluginConfiguration = self
             .plugin_config
@@ -232,11 +319,14 @@ impl<'a> PluginLoader<'a> {
             .try_into()
             .map_err(|e| anyhow!("Failed to serialize user configuration: {:?}", e))?;
         let protobuf_bytes = protobuf_plugin_configuration.encode_to_vec();
-        wasi_write_object(plugin.lock().unwrap().store.data(), &protobuf_bytes)
-            .with_context(err_context)?;
-        load_function
-            .call(&mut plugin.lock().unwrap().store, ())
-            .with_context(err_context)?;
+        {
+            let mut guard = plugin.lock().unwrap();
+            let (store, _instance) = guard
+                .wasm_parts_mut()
+                .expect("wasm loader path reached for non-wasm plugin");
+            wasi_write_object(store.data(), &protobuf_bytes).with_context(err_context)?;
+            load_function.call(&mut *store, ()).with_context(err_context)?;
+        }
 
         Ok(())
     }

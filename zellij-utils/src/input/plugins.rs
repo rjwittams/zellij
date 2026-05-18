@@ -89,6 +89,28 @@ impl PluginConfig {
                 initial_userspace_configuration: run_plugin.configuration.clone(),
                 initial_cwd: run_plugin.initial_cwd.clone(),
             }),
+            RunPluginLocation::Native(name) => Some(PluginConfig {
+                path: PathBuf::from(name),
+                _allow_exec_host_cmd: run_plugin._allow_exec_host_cmd,
+                location: run_plugin.location.clone(),
+                initial_userspace_configuration: run_plugin.configuration.clone(),
+                initial_cwd: run_plugin.initial_cwd.clone(),
+            }),
+        }
+    }
+
+    /// Whether this plugin is implemented as native Rust code compiled into the
+    /// Zellij binary (as opposed to a WASM module loaded at runtime).
+    pub fn is_native(&self) -> bool {
+        matches!(self.location, RunPluginLocation::Native(_))
+    }
+
+    /// Returns the native registry key when this plugin is native, otherwise None.
+    pub fn native_name(&self) -> Option<&str> {
+        if let RunPluginLocation::Native(name) = &self.location {
+            Some(name.as_str())
+        } else {
+            None
         }
     }
     /// Resolve wasm plugin bytes for the plugin path and given plugin directory.

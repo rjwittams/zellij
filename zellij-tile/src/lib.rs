@@ -64,7 +64,6 @@ macro_rules! print {
         $crate::__native_print(::std::format_args!($($arg)*))
     };
 }
-
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use zellij_utils::data::{Event, PipeMessage};

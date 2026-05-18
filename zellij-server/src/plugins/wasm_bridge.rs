@@ -558,7 +558,7 @@ impl WasmBridge {
                                 handle_plugin_crash(plugin_id, stringified_error, senders.clone());
                             },
                         }
-                        let cache_dir = rp.store.data().plugin_own_data_dir.clone();
+                        let cache_dir = rp.env().plugin_own_data_dir.clone();
                         drop(rp); // Release lock before filesystem operation
                         if let Err(e) = std::fs::remove_dir_all(&cache_dir) {
                             log::error!("Failed to remove cache dir for plugin: {:?}", e);
@@ -567,8 +567,7 @@ impl WasmBridge {
                         let cache_dir = running_plugin
                             .lock()
                             .unwrap()
-                            .store
-                            .data()
+                            .env()
                             .plugin_own_data_dir
                             .clone();
                         if let Err(e) = std::fs::remove_dir_all(&cache_dir) {
@@ -844,23 +843,7 @@ impl WasmBridge {
                             // make sure to always render on the first resize event
                             if old_rows != new_rows || old_columns != new_columns || event_id == 0 {
                                 let rendered_bytes = running_plugin
-                                    .instance
-                                    .clone()
-                                    .get_typed_func::<(i32, i32), ()>(
-                                        &mut running_plugin.store,
-                                        "render",
-                                    )
-                                    .and_then(|render| {
-                                        render.call(
-                                            &mut running_plugin.store,
-                                            (new_rows as i32, new_columns as i32),
-                                        )
-                                    })
-                                    .map_err(|e| anyhow!(e))
-                                    .and_then(|_| {
-                                        wasi_read_string(running_plugin.store.data())
-                                            .map_err(|e| anyhow!(e))
-                                    })
+                                    .call_render(new_rows as i32, new_columns as i32)
                                     .with_context(err_context);
                                 match rendered_bytes {
                                     Ok(rendered_bytes) => {
@@ -1000,8 +983,7 @@ impl WasmBridge {
                     let plugin_cwd = running_plugin
                         .lock()
                         .unwrap()
-                        .store
-                        .data()
+                        .env()
                         .plugin_cwd
                         .clone();
                     Some(plugin_cwd)
@@ -1069,7 +1051,7 @@ impl WasmBridge {
                     {
                         if plugin_id == &plugin_id_to_update && client_id == &client_id_to_update {
                             let mut running_plugin = running_plugin.lock().unwrap();
-                            let plugin_env = running_plugin.store.data_mut();
+                            let plugin_env = running_plugin.env_mut();
                             let stdin_pipe = plugin_env.stdin_pipe.clone();
                             let stdout_pipe = plugin_env.stdout_pipe.clone();
                             let wasi_ctx = PluginLoader::create_wasi_ctx(
@@ -1380,7 +1362,7 @@ impl WasmBridge {
                 .any(|(pid, cid, rp, _)| {
                     *pid == plugin_id
                         && *cid == client_id
-                        && rp.lock().unwrap().store.data().tab_index.is_none()
+                        && rp.lock().unwrap().env().tab_index.is_none()
                 })
         };
         if is_background {
@@ -1399,7 +1381,7 @@ impl WasmBridge {
                 .running_plugins_and_subscriptions()
                 .iter()
                 .find(|(pid, cid, _, _)| *pid == plugin_id && *cid == client_id)
-                .map(|(_, _, rp, _)| rp.lock().unwrap().store.data().keybinds.to_keybinds_vec())
+                .map(|(_, _, rp, _)| rp.lock().unwrap().env().keybinds.to_keybinds_vec())
         };
         if let Some(keybinds) = keybinds {
             let _ = self.senders.send_to_plugin(PluginInstruction::Update(vec![(
@@ -1726,7 +1708,7 @@ impl WasmBridge {
             .get_running_plugin(plugin_id, None)
             .map(|r| {
                 let r = r.lock().unwrap();
-                r.store.data().plugin_cwd.clone()
+                r.env().plugin_cwd.clone()
             })
     }
     fn plugin_config_of_plugin_id(&self, plugin_id: PluginId) -> Option<PluginConfig> {
@@ -1736,7 +1718,7 @@ impl WasmBridge {
             .get_running_plugin(plugin_id, None)
             .map(|r| {
                 let r = r.lock().unwrap();
-                r.store.data().plugin.clone()
+                r.env().plugin.clone()
             })
     }
     fn tab_index_of_plugin_id(&self, plugin_id: PluginId) -> Option<usize> {
@@ -1746,7 +1728,7 @@ impl WasmBridge {
             .get_running_plugin(plugin_id, None)
             .and_then(|r| {
                 let r = r.lock().unwrap();
-                r.store.data().tab_index
+                r.env().tab_index
             })
     }
     fn start_plugin_loading_indication(
@@ -1835,13 +1817,12 @@ impl WasmBridge {
         };
 
         running_plugin
-            .store
-            .data_mut()
+            .env_mut()
             .set_permissions(HashSet::from_iter(permissions.clone()));
 
         let mut permission_cache = PermissionCache::from_path_or_default(cache_path);
         permission_cache.cache(
-            running_plugin.store.data().plugin.location.to_string(),
+            running_plugin.env().plugin.location.to_string(),
             permissions,
         );
 
@@ -2039,7 +2020,7 @@ impl WasmBridge {
 
         for (plugin_id, client_id, running_plugin) in running_plugins {
             let running_plugin = running_plugin.lock().unwrap();
-            let plugin_env = &running_plugin.store.data();
+            let plugin_env = &running_plugin.env();
             let current_config = &plugin_env.plugin.initial_userspace_configuration;
             let plugin_location = &plugin_env.plugin.location;
 
@@ -2158,53 +2139,38 @@ pub fn apply_event_to_plugin(
     senders: ThreadSenders,
     plugin_subscriptions: &HashSet<EventType>,
 ) -> Result<()> {
-    let instance = &running_plugin.instance;
     let rows = running_plugin.rows;
     let columns = running_plugin.columns;
 
     let err_context = || format!("Failed to apply event to plugin {plugin_id}");
-    match check_event_permission(running_plugin.store.data(), event) {
+    match check_event_permission(running_plugin.env(), event) {
         (PermissionStatus::Granted, _) => {
             let mut event = event.clone();
             if let Event::ModeUpdate(mode_info) = &mut event {
-                mode_info.base_mode = Some(running_plugin.store.data().default_mode);
+                mode_info.base_mode = Some(running_plugin.env().default_mode);
                 if plugin_subscriptions.contains(&EventType::InitialKeybinds) {
                     // Plugin caches keybindings via InitialKeybinds — send lightweight ModeUpdate
                     mode_info.keybinds = vec![];
                 } else {
                     // Legacy plugin — send full keybindings as before
-                    mode_info.keybinds = running_plugin.store.data().keybinds.to_keybinds_vec();
+                    mode_info.keybinds = running_plugin.env().keybinds.to_keybinds_vec();
                 }
             }
             let protobuf_event: Result<ProtobufEvent, _> = event.clone().try_into();
             match protobuf_event {
                 Ok(protobuf_event) => {
-                    let update = instance
-                        .get_typed_func::<(), i32>(&mut running_plugin.store, "update")
+                    let should_render_raw = running_plugin
+                        .call_update(&protobuf_event.encode_to_vec())
                         .with_context(err_context)?;
-                    wasi_write_object(running_plugin.store.data(), &protobuf_event.encode_to_vec())
-                        .with_context(err_context)?;
-                    let should_render = update
-                        .call(&mut running_plugin.store, ())
-                        .with_context(err_context)?;
-                    let mut should_render = should_render == 1;
+                    let mut should_render = should_render_raw;
                     if let Event::PermissionRequestResult(..) = event {
                         // we always render in this case, otherwise the request permission screen stays on
                         // screen
                         should_render = true;
                     }
                     if rows > 0 && columns > 0 && should_render {
-                        let rendered_bytes = instance
-                            .get_typed_func::<(i32, i32), ()>(&mut running_plugin.store, "render")
-                            .and_then(|render| {
-                                render
-                                    .call(&mut running_plugin.store, (rows as i32, columns as i32))
-                            })
-                            .map_err(|e| anyhow!(e))
-                            .and_then(|_| {
-                                wasi_read_string(running_plugin.store.data())
-                                    .map_err(|e| anyhow!(e))
-                            })
+                        let rendered_bytes = running_plugin
+                            .call_render(rows as i32, columns as i32)
                             .with_context(err_context)?;
                         let pipes_to_block_or_unblock =
                             pipes_to_block_or_unblock(running_plugin, None);
@@ -2264,21 +2230,14 @@ pub fn apply_before_close_event_to_plugin(
     running_plugin: &mut RunningPlugin,
     senders: ThreadSenders,
 ) -> Result<()> {
-    let instance = &running_plugin.instance;
-
     let err_context = || format!("Failed to apply event to plugin {plugin_id}");
     let event = Event::BeforeClose;
     let protobuf_event: ProtobufEvent = event
         .clone()
         .try_into()
         .map_err(|e| anyhow!("Failed to convert to protobuf: {:?}", e))?;
-    let update = instance
-        .get_typed_func::<(), i32>(&mut running_plugin.store, "update")
-        .with_context(err_context)?;
-    wasi_write_object(running_plugin.store.data(), &protobuf_event.encode_to_vec())
-        .with_context(err_context)?;
-    let _should_render = update
-        .call(&mut running_plugin.store, ())
+    let _should_render = running_plugin
+        .call_update(&protobuf_event.encode_to_vec())
         .with_context(err_context)?;
     let pipes_to_block_or_unblock = pipes_to_block_or_unblock(running_plugin, None);
     let plugin_render_asset =

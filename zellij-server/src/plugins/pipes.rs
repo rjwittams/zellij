@@ -145,7 +145,6 @@ pub fn apply_pipe_message_to_plugin(
     plugin_render_assets: &mut Vec<PluginRenderAsset>,
     senders: &ThreadSenders,
 ) -> Result<()> {
-    let instance = &running_plugin.instance;
     let rows = running_plugin.rows;
     let columns = running_plugin.columns;
 
@@ -154,27 +153,16 @@ pub fn apply_pipe_message_to_plugin(
         .clone()
         .try_into()
         .map_err(|e| anyhow!("Failed to convert to protobuf: {:?}", e))?;
-    match instance.get_typed_func::<(), i32>(&mut running_plugin.store, "pipe") {
-        Ok(pipe) => {
-            wasi_write_object(
-                running_plugin.store.data(),
-                &protobuf_pipe_message.encode_to_vec(),
-            )
-            .with_context(err_context)?;
-            let should_render = pipe
-                .call(&mut running_plugin.store, ())
-                .with_context(err_context)?;
-            let should_render = should_render == 1;
+    let pipe_result = match running_plugin.call_pipe(&protobuf_pipe_message.encode_to_vec()) {
+        Ok(Some(should_render)) => Some(should_render),
+        Ok(None) => None,
+        Err(e) => return Err(e).with_context(err_context),
+    };
+    match pipe_result {
+        Some(should_render) => {
             if rows > 0 && columns > 0 && should_render {
-                let rendered_bytes = instance
-                    .get_typed_func::<(i32, i32), ()>(&mut running_plugin.store, "render")
-                    .and_then(|render| {
-                        render.call(&mut running_plugin.store, (rows as i32, columns as i32))
-                    })
-                    .map_err(|e| anyhow!(e))
-                    .and_then(|_| {
-                        wasi_read_string(running_plugin.store.data()).map_err(|e| anyhow!(e))
-                    })
+                let rendered_bytes = running_plugin
+                    .call_render(rows as i32, columns as i32)
                     .with_context(err_context)?;
                 let pipes_to_block_or_unblock =
                     pipes_to_block_or_unblock(running_plugin, Some(&pipe_message.source));
@@ -197,7 +185,7 @@ pub fn apply_pipe_message_to_plugin(
                     .context("failed to unblock input pipe");
             }
         },
-        Err(_e) => {
+        None => {
             // no-op, this is probably an old plugin that does not have this interface
             // we don't log this error because if we do the logs will be super crowded
             let pipes_to_block_or_unblock =
@@ -224,16 +212,14 @@ pub fn pipes_to_block_or_unblock(
 ) -> HashMap<String, PipeStateChange> {
     let mut pipe_state_changes = HashMap::new();
     let mut input_pipes_to_unblock: HashSet<String> = running_plugin
-        .store
-        .data()
+        .env()
         .input_pipes_to_unblock
         .lock()
         .unwrap()
         .drain()
         .collect();
     let mut input_pipes_to_block: HashSet<String> = running_plugin
-        .store
-        .data()
+        .env()
         .input_pipes_to_block
         .lock()
         .unwrap()

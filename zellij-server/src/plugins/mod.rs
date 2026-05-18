@@ -1,3 +1,5 @@
+mod native_plugins;
+pub(crate) mod native_runtime;
 mod pinned_executor;
 mod pipes;
 mod plugin_loader;
@@ -5,7 +7,7 @@ mod plugin_map;
 mod plugin_worker;
 mod wasm_bridge;
 mod watch_filesystem;
-mod zellij_exports;
+pub(crate) mod zellij_exports;
 use log::info;
 
 pub use pinned_executor::PinnedExecutor;

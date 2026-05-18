@@ -4923,6 +4923,7 @@ dependencies = [
  "wasmi",
  "wasmi_wasi",
  "windows-sys 0.59.0",
+ "zellij-tile",
  "zellij-utils",
 ]
 
