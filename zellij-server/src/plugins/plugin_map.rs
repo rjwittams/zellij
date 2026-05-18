@@ -367,9 +367,50 @@ pub enum PluginBackend {
     },
     #[cfg(feature = "native-plugins")]
     Native {
-        state: Box<dyn BoxableZellijPlugin>,
+        state: ThreadConfined<Box<dyn BoxableZellijPlugin>>,
         env: Box<PluginEnv>,
     },
+}
+
+/// Newtype that unconditionally asserts `Send` for its contents.
+///
+/// Safety invariant: the wrapped value is only ever *accessed* from the plugin's
+/// pinned executor thread (the one assigned by `PinnedExecutor::register_plugin`).
+/// The `Arc<Mutex<RunningPlugin>>` containing the wrapped value can be cloned to
+/// other threads (so the host can route work to the right executor), but only
+/// the assigned thread invokes the `call_*` methods that actually touch the
+/// state. The Mutex acts as a memory barrier on the last access before Drop, so
+/// Drop on any thread observes the final state correctly.
+///
+/// This lets us host `!Send` plugin types (e.g. ones using `Rc<RefCell<...>>`
+/// internally) on the native backend without forcing every plugin to use
+/// `Arc<Mutex<...>>`.
+#[cfg(feature = "native-plugins")]
+pub struct ThreadConfined<T>(T);
+
+#[cfg(feature = "native-plugins")]
+unsafe impl<T> Send for ThreadConfined<T> {}
+
+#[cfg(feature = "native-plugins")]
+impl<T> ThreadConfined<T> {
+    pub fn new(value: T) -> Self {
+        ThreadConfined(value)
+    }
+}
+
+#[cfg(feature = "native-plugins")]
+impl<T> std::ops::Deref for ThreadConfined<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+#[cfg(feature = "native-plugins")]
+impl<T> std::ops::DerefMut for ThreadConfined<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
 }
 
 pub struct RunningPlugin {
@@ -405,7 +446,7 @@ impl RunningPlugin {
     ) -> Self {
         RunningPlugin {
             backend: PluginBackend::Native {
-                state,
+                state: ThreadConfined::new(state),
                 env: Box::new(env),
             },
             rows,

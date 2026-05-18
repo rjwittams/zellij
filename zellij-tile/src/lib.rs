@@ -95,17 +95,21 @@ pub trait ZellijPlugin: Default {
 
 /// Object-safe wrapper around [`ZellijPlugin`]. Needed because `ZellijPlugin: Default`
 /// is not dyn-compatible (constructor in trait bound), so the host cannot hold
-/// `Box<dyn ZellijPlugin>` directly. A blanket impl makes any `T: ZellijPlugin + Send + 'static`
+/// `Box<dyn ZellijPlugin>` directly. A blanket impl makes any `T: ZellijPlugin + 'static`
 /// usable through this trait, so plugin authors keep implementing [`ZellijPlugin`] as
 /// before and don't see this type unless they're writing a `create_plugin` factory.
-pub trait BoxableZellijPlugin: Send {
+///
+/// Deliberately not `: Send` — native plugins are pinned to a single executor thread
+/// after registration, so we can host `!Send` plugin state (e.g. types containing
+/// `Rc<RefCell<...>>`) behind an unsafe Send-asserting wrapper in zellij-server.
+pub trait BoxableZellijPlugin {
     fn load(&mut self, configuration: BTreeMap<String, String>);
     fn update(&mut self, event: Event) -> bool;
     fn pipe(&mut self, pipe_message: PipeMessage) -> bool;
     fn render(&mut self, rows: usize, cols: usize);
 }
 
-impl<T: ZellijPlugin + Send + 'static> BoxableZellijPlugin for T {
+impl<T: ZellijPlugin + 'static> BoxableZellijPlugin for T {
     fn load(&mut self, configuration: BTreeMap<String, String>) {
         <Self as ZellijPlugin>::load(self, configuration)
     }
