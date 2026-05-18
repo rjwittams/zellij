@@ -142,7 +142,12 @@ impl<'a> PluginLoader<'a> {
         if self.plugin_config.is_native() {
             #[cfg(feature = "native-plugins")]
             {
-                self.start_native_plugin()?;
+                let name = self
+                    .plugin_config
+                    .native_name()
+                    .ok_or_else(|| anyhow!("native plugin without name"))?
+                    .to_string();
+                self.start_native_plugin(&name)?;
                 self.clone_instance_for_other_clients()?;
                 return Ok(());
             }
@@ -154,6 +159,19 @@ impl<'a> PluginLoader<'a> {
                     .native_name()
                     .unwrap_or("<unnamed>")
             ));
+        }
+        // Auto-substitute: if the requested zellij: bundled plugin has a native
+        // registry entry, prefer the native one. Disable with
+        // ZELLIJ_DISABLE_NATIVE_SUBSTITUTION=1.
+        #[cfg(feature = "native-plugins")]
+        if let Some(name) = self.maybe_substitute_native() {
+            log::info!(
+                "Substituting native plugin for 'zellij:{name}' (set \
+                 ZELLIJ_DISABLE_NATIVE_SUBSTITUTION=1 to disable)"
+            );
+            self.start_native_plugin(&name)?;
+            self.clone_instance_for_other_clients()?;
+            return Ok(());
         }
         let module = if self.skip_cache {
             self.interpret_module()?
@@ -167,17 +185,31 @@ impl<'a> PluginLoader<'a> {
         Ok(())
     }
 
+    /// Returns the native registry name to substitute for the current load when:
+    ///   1. The location is `Zellij(tag)` (bundled-wasm path), and
+    ///   2. The native registry has an entry with the same name, and
+    ///   3. `ZELLIJ_DISABLE_NATIVE_SUBSTITUTION` is not set.
     #[cfg(feature = "native-plugins")]
-    fn start_native_plugin(&mut self) -> Result<()> {
+    fn maybe_substitute_native(&self) -> Option<String> {
+        use crate::plugins::native_plugins::factory_for;
+        use zellij_utils::input::layout::RunPluginLocation;
+        if std::env::var_os("ZELLIJ_DISABLE_NATIVE_SUBSTITUTION").is_some() {
+            return None;
+        }
+        let RunPluginLocation::Zellij(tag) = &self.plugin_config.location else {
+            return None;
+        };
+        let name = tag.to_string();
+        factory_for(&name).map(|_| name)
+    }
+
+    #[cfg(feature = "native-plugins")]
+    fn start_native_plugin(&mut self, name: &str) -> Result<()> {
         use crate::plugins::native_plugins::factory_for;
         use crate::plugins::plugin_map::RunningPlugin;
         use prost::Message;
         use zellij_utils::plugin_api::action::ProtobufPluginConfiguration;
 
-        let name = self
-            .plugin_config
-            .native_name()
-            .ok_or_else(|| anyhow!("native plugin without name"))?;
         let factory = factory_for(name)
             .ok_or_else(|| anyhow!("no native plugin registered for name '{}'", name))?;
         let env = self.build_plugin_env_for_native()?;
