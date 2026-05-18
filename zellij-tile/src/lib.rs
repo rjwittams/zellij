@@ -141,6 +141,7 @@ Please refer to the documentation for further information:
 ///
 /// register_plugin!(MyPlugin);
 /// ```
+#[cfg(target_family = "wasm")]
 #[macro_export]
 macro_rules! register_plugin {
     ($t:ty) => {
@@ -214,6 +215,15 @@ macro_rules! register_plugin {
             println!("{}", $crate::prelude::VERSION);
         }
     };
+}
+
+/// On non-wasm targets the WASM exports aren't needed — the host invokes the
+/// `ZellijPlugin` trait methods directly via the native registry. `register_plugin!`
+/// expands to nothing so plugin source compiles unchanged for both targets.
+#[cfg(not(target_family = "wasm"))]
+#[macro_export]
+macro_rules! register_plugin {
+    ($t:ty) => {};
 }
 
 /// Used to register a plugin worker implementing the [`ZellijWorker`] trait.

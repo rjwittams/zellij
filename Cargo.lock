@@ -4912,6 +4912,7 @@ dependencies = [
  "signal-hook",
  "sixel-image",
  "sixel-tokenizer",
+ "status-bar",
  "sysinfo",
  "tempfile",
  "tokio",

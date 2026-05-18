@@ -1,9 +1,8 @@
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::{BTreeMap, HashSet};
-use std::{
-    io,
-    path::{Path, PathBuf},
-};
+#[cfg(target_family = "wasm")]
+use std::io;
+use std::path::{Path, PathBuf};
 use zellij_utils::data::*;
 use zellij_utils::errors::prelude::*;
 use zellij_utils::input::actions::Action;
@@ -2861,6 +2860,7 @@ pub fn override_layout<L: AsRef<LayoutInfo>>(
 
 // Internal Functions
 
+#[cfg(target_family = "wasm")]
 #[doc(hidden)]
 pub fn object_from_stdin<T: DeserializeOwned>() -> Result<T> {
     let err_context = || "failed to deserialize object from stdin".to_string();
@@ -2870,6 +2870,7 @@ pub fn object_from_stdin<T: DeserializeOwned>() -> Result<T> {
     serde_json::from_str(&json).with_context(err_context)
 }
 
+#[cfg(target_family = "wasm")]
 #[doc(hidden)]
 pub fn bytes_from_stdin() -> Result<Vec<u8>> {
     let err_context = || "failed to deserialize bytes from stdin".to_string();
@@ -2878,10 +2879,104 @@ pub fn bytes_from_stdin() -> Result<Vec<u8>> {
     serde_json::from_str(&json).with_context(err_context)
 }
 
+#[cfg(target_family = "wasm")]
 #[doc(hidden)]
 pub fn object_to_stdout(object: &impl Serialize) {
     // TODO: no crashy
     println!("{}", serde_json::to_string(object).unwrap());
+}
+
+// Native equivalents — read/write the per-thread NativeBridge installed by the host
+// around each plugin call. See `register_native_dispatcher` for the matching dispatch path.
+
+#[cfg(not(target_family = "wasm"))]
+#[doc(hidden)]
+pub fn object_from_stdin<T: DeserializeOwned>() -> Result<T> {
+    let line = read_line_from_native_stdin()?;
+    serde_json::from_str(&line).with_context(|| "object_from_stdin deserialize".to_string())
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[doc(hidden)]
+pub fn bytes_from_stdin() -> Result<Vec<u8>> {
+    let line = read_line_from_native_stdin()?;
+    serde_json::from_str(&line).with_context(|| "bytes_from_stdin deserialize".to_string())
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[doc(hidden)]
+pub fn object_to_stdout(object: &impl Serialize) {
+    let line = format!("{}\n", serde_json::to_string(object).unwrap());
+    NATIVE_BRIDGE.with(|cell| {
+        let bridge = cell.borrow();
+        if let Some(b) = bridge.as_ref() {
+            let mut stdout = b.stdout.lock().unwrap();
+            stdout.extend(line.as_bytes());
+        }
+        // No-op when no bridge is installed (e.g. plugin code running in unit tests).
+    });
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn read_line_from_native_stdin() -> Result<String> {
+    NATIVE_BRIDGE.with(|cell| {
+        let bridge = cell.borrow();
+        let b = bridge
+            .as_ref()
+            .ok_or_else(|| anyhow!("no NativeBridge installed"))?;
+        let mut stdin = b.stdin.lock().unwrap();
+        let pos = stdin
+            .iter()
+            .position(|&c| c == b'\n')
+            .ok_or_else(|| anyhow!("no complete line in NativeBridge stdin"))?;
+        let line: Vec<u8> = stdin.drain(..=pos).collect();
+        let line = std::str::from_utf8(&line[..line.len() - 1])
+            .map_err(|e| anyhow!("non-utf8 line in NativeBridge stdin: {e}"))?
+            .to_string();
+        Ok(line)
+    })
+}
+
+/// Cross-target plumbing for natively-linked plugins.
+///
+/// The host installs a `NativeBridge` around each call into the plugin (`load`,
+/// `update`, `render`, `pipe`). While installed, the shim's `object_to_stdout`
+/// and `bytes_from_stdin` route through the bridge's stdin/stdout pipes instead
+/// of process stdio, and `host_run_plugin_command` invokes the registered
+/// dispatcher to actually handle the encoded `PluginCommand` the plugin wrote.
+///
+/// The pipes here are the *same* `Arc<Mutex<VecDeque<u8>>>` the host wraps in
+/// its `PluginEnv.stdout_pipe`/`stdin_pipe`, so the existing wasi_read_bytes /
+/// wasi_write_object helpers on the host side work unchanged.
+#[cfg(not(target_family = "wasm"))]
+pub struct NativeBridge {
+    pub stdin: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>,
+    pub stdout: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<u8>>>,
+}
+
+#[cfg(not(target_family = "wasm"))]
+std::thread_local! {
+    static NATIVE_BRIDGE: std::cell::RefCell<Option<NativeBridge>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install a NativeBridge for the current thread. Called by the host around each
+/// invocation of a native plugin entry point. Returns the previous bridge, which
+/// the caller should restore via `install_native_bridge` once the call returns.
+#[cfg(not(target_family = "wasm"))]
+pub fn install_native_bridge(bridge: Option<NativeBridge>) -> Option<NativeBridge> {
+    NATIVE_BRIDGE.with(|cell| std::mem::replace(&mut *cell.borrow_mut(), bridge))
+}
+
+#[cfg(not(target_family = "wasm"))]
+static NATIVE_DISPATCHER: std::sync::OnceLock<fn()> = std::sync::OnceLock::new();
+
+/// Called once by the host (zellij-server) at startup to install a function that
+/// processes encoded `PluginCommand` bytes from the current NativeBridge stdout
+/// buffer and writes any response into its stdin buffer.
+#[cfg(not(target_family = "wasm"))]
+pub fn register_native_dispatcher(d: fn()) {
+    let _ = NATIVE_DISPATCHER.set(d);
 }
 
 /// Post a message to a worker of this plugin, for more information please see [Plugin Workers](https://zellij.dev/documentation/plugin-api-workers.md)
@@ -2995,11 +3090,21 @@ pub fn clear_pane_highlights(pane_id: PaneId) {
 extern "C" {
     fn host_run_plugin_command();
 }
-// Native fallback so this crate compiles when pulled in by host-side code (e.g. zellij-server).
-// The in-process bridge introduced later in this series replaces this stub.
+// Native dispatch: invoke the dispatcher registered by the host. The dispatcher
+// reads encoded `PluginCommand` bytes from the current NativeBridge's stdout pipe,
+// processes them, and writes any response back into the stdin pipe.
 #[cfg(not(target_family = "wasm"))]
 unsafe fn host_run_plugin_command() {
-    panic!("host_run_plugin_command invoked from native code — no native dispatcher is wired up yet");
+    if let Some(d) = NATIVE_DISPATCHER.get() {
+        d();
+    } else {
+        // No dispatcher registered: the host is using zellij-tile but hasn't enabled
+        // the native-plugins feature. Drop the command on the floor with a warning.
+        eprintln!(
+            "host_run_plugin_command: no NATIVE_DISPATCHER registered; the plugin's \
+             host call has been dropped."
+        );
+    }
 }
 
 /// Backing function for `zellij_tile::println!` / `print!` on the native target.

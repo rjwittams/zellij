@@ -2087,9 +2087,9 @@ fn check_event_permission(
     plugin_env: &PluginEnv,
     event: &Event,
 ) -> (PermissionStatus, Option<PermissionType>) {
-    if plugin_env.plugin.is_builtin() {
-        // built-in plugins can do all the things because they're part of the application and
-        // there's no use to deny them anything
+    if plugin_env.plugin.is_builtin() || plugin_env.plugin.is_native() {
+        // built-in (bundled wasm) and native (linked-in Rust) plugins are part of the
+        // application binary itself, so all permissions are granted.
         return (PermissionStatus::Granted, None);
     }
     let permission = match event {

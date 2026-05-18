@@ -883,7 +883,16 @@ pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
     // Route `zellij_tile::println!` from native plugins into the per-thread render buffer
     // installed around each `render()` call by `plugins::native_runtime`.
     #[cfg(feature = "native-plugins")]
-    zellij_tile::shim::register_native_printer(plugins::native_runtime::write_to_render_buffer);
+    {
+        zellij_tile::shim::register_native_printer(
+            plugins::native_runtime::write_to_render_buffer,
+        );
+        // Dispatch the plugin's host calls (subscribe, set_selectable, …) when they
+        // fire `host_run_plugin_command` from within a `with_native_call` scope.
+        zellij_tile::shim::register_native_dispatcher(
+            plugins::native_runtime::dispatch_from_current_env,
+        );
+    }
 
     #[cfg(unix)]
     {

@@ -163,7 +163,19 @@ pub fn zellij_exports(linker: &mut Linker<PluginEnv>) {
 }
 
 fn host_run_plugin_command(mut caller: Caller<'_, PluginEnv>) {
-    let mut env = caller.data_mut();
+    let env = caller.data_mut();
+    dispatch_plugin_command_from_pipe(env);
+}
+
+/// Runtime-agnostic dispatch entry point. Reads a length-delimited
+/// `ProtobufPluginCommand` from `env.stdout_pipe`, decodes it, and dispatches.
+/// Used by both the wasmi shim (`host_run_plugin_command`) and the native
+/// plugin runtime (via the `NativeBridge` in zellij-tile).
+///
+/// The function is infallible from the caller's POV; errors are logged via
+/// `.non_fatal()` exactly as the original wasm path did.
+pub fn dispatch_plugin_command_from_pipe(env: &mut PluginEnv) {
+    let mut env = env; // re-bind as mutable for the handler call sites
     let plugin_command = env.name();
     let err_context = || format!("failed to run plugin command {}", plugin_command);
     wasi_read_bytes(env)
@@ -5345,9 +5357,9 @@ fn check_command_permission(
     plugin_env: &PluginEnv,
     command: &PluginCommand,
 ) -> (PermissionStatus, Option<PermissionType>) {
-    if plugin_env.plugin.is_builtin() {
-        // built-in plugins can do all the things because they're part of the application and
-        // there's no use to deny them anything
+    if plugin_env.plugin.is_builtin() || plugin_env.plugin.is_native() {
+        // built-in (bundled wasm) and native (linked-in Rust) plugins are part of the
+        // application binary itself, so all permissions are granted.
         return (PermissionStatus::Granted, None);
     }
     let permission = match command {

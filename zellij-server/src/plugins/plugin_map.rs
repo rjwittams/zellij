@@ -524,7 +524,7 @@ impl RunningPlugin {
                     .map_err(|e| anyhow!("plugin load failed: {e}"))
             },
             #[cfg(feature = "native-plugins")]
-            PluginBackend::Native { state, .. } => {
+            PluginBackend::Native { state, env } => {
                 use prost::Message;
                 use std::convert::TryFrom;
                 use zellij_utils::plugin_api::action::ProtobufPluginConfiguration;
@@ -532,7 +532,7 @@ impl RunningPlugin {
                     .context("decode plugin configuration")?;
                 let config = BTreeMap::try_from(&proto)
                     .map_err(|e| anyhow!("plugin configuration: {e}"))?;
-                state.load(config);
+                crate::plugins::native_runtime::with_native_call(env, || state.load(config));
                 Ok(())
             },
         }
@@ -554,13 +554,15 @@ impl RunningPlugin {
                 Ok(r == 1)
             },
             #[cfg(feature = "native-plugins")]
-            PluginBackend::Native { state, .. } => {
+            PluginBackend::Native { state, env } => {
                 use prost::Message;
                 use std::convert::TryInto;
                 use zellij_utils::plugin_api::event::ProtobufEvent;
                 let proto = ProtobufEvent::decode(event_bytes).context("decode event")?;
                 let event = proto.try_into().map_err(|e| anyhow!("event: {e}"))?;
-                Ok(state.update(event))
+                Ok(crate::plugins::native_runtime::with_native_call(env, || {
+                    state.update(event)
+                }))
             },
         }
     }
@@ -580,9 +582,11 @@ impl RunningPlugin {
                 wasi_read_string(store.data())
             },
             #[cfg(feature = "native-plugins")]
-            PluginBackend::Native { state, .. } => {
-                let buf = crate::plugins::native_runtime::with_render_buffer(|| {
-                    state.render(rows as usize, cols as usize);
+            PluginBackend::Native { state, env } => {
+                let buf = crate::plugins::native_runtime::with_native_call(env, || {
+                    crate::plugins::native_runtime::with_render_buffer(|| {
+                        state.render(rows as usize, cols as usize);
+                    })
                 });
                 // Match the WASM path's CRLF normalization done by wasi_read_string.
                 Ok(buf.replace("\n", "\n\r"))
@@ -607,13 +611,16 @@ impl RunningPlugin {
                 Ok(Some(r == 1))
             },
             #[cfg(feature = "native-plugins")]
-            PluginBackend::Native { state, .. } => {
+            PluginBackend::Native { state, env } => {
                 use prost::Message;
                 use std::convert::TryInto;
                 use zellij_utils::plugin_api::pipe_message::ProtobufPipeMessage;
                 let proto = ProtobufPipeMessage::decode(pipe_bytes).context("decode pipe")?;
                 let msg = proto.try_into().map_err(|e| anyhow!("pipe message: {e}"))?;
-                Ok(Some(state.pipe(msg)))
+                Ok(Some(crate::plugins::native_runtime::with_native_call(
+                    env,
+                    || state.pipe(msg),
+                )))
             },
         }
     }
