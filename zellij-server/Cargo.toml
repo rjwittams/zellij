@@ -84,3 +84,6 @@ web_server_capability = ["zellij-utils/web_server_capability"]
 # parses (for forward-compat) but loading one returns an error at load time.
 native-plugins = ["dep:zellij-tile"]
 native-status-bar = ["native-plugins", "dep:status-bar"]
+# Convenience feature: enables every per-plugin native port available in this
+# build. Grows as plugins get ported.
+native-plugins-all = ["native-status-bar"]

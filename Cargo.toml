@@ -164,6 +164,7 @@ web_server_capability = ["zellij-client/web_server_capability", "zellij-server/w
 # Off by default. See zellij-server/src/plugins/native_plugins.rs for the registry.
 native-plugins = ["zellij-server/native-plugins"]
 native-status-bar = ["zellij-server/native-status-bar"]
+native-plugins-all = ["zellij-server/native-plugins-all"]
 
 # uncomment this when developing plugins in the Zellij UI to make plugin compilation faster
 # [profile.dev.package."*"]
