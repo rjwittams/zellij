@@ -887,10 +887,17 @@ pub fn start_server(mut os_input: Box<dyn ServerOsApi>, socket_path: PathBuf) {
         zellij_tile::shim::register_native_printer(
             plugins::native_runtime::write_to_render_buffer,
         );
-        // Dispatch the plugin's host calls (subscribe, set_selectable, …) when they
-        // fire `host_run_plugin_command` from within a `with_native_call` scope.
+        // Bytes-based dispatcher: fallback for any shim path that still goes
+        // through the encode → bridge-stdio → host_run_plugin_command route.
         zellij_tile::shim::register_native_dispatcher(
             plugins::native_runtime::dispatch_from_current_env,
+        );
+        // Typed dispatcher: fast path used by every shim function — receives
+        // the PluginCommand directly, skipping protobuf encode/decode for the
+        // request side. Response side (query commands) still uses the byte
+        // bridge until a phase-2 handler refactor.
+        zellij_tile::shim::register_native_typed_dispatcher(
+            plugins::native_runtime::dispatch_typed,
         );
     }
 

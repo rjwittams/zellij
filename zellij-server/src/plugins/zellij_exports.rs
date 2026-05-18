@@ -174,17 +174,31 @@ fn host_run_plugin_command(mut caller: Caller<'_, PluginEnv>) {
 ///
 /// The function is infallible from the caller's POV; errors are logged via
 /// `.non_fatal()` exactly as the original wasm path did.
+/// Bytes-based wrapper used by the wasmi shim and the native byte-bridge.
+/// Reads encoded `ProtobufPluginCommand` bytes from `env.stdout_pipe`, decodes,
+/// and dispatches via the runtime-agnostic [`dispatch_plugin_command`].
 pub fn dispatch_plugin_command_from_pipe(env: &mut PluginEnv) {
-    let mut env = env; // re-bind as mutable for the handler call sites
-    let plugin_command = env.name();
-    let err_context = || format!("failed to run plugin command {}", plugin_command);
-    wasi_read_bytes(env)
-        .and_then(|bytes| {
-            let command: ProtobufPluginCommand = ProtobufPluginCommand::decode(bytes.as_slice())?;
-            let command: PluginCommand = command
-                .try_into()
-                .map_err(|e| anyhow!("failed to convert serialized command: {}", e))?;
-            match check_command_permission(&env, &command) {
+    let plugin_name = env.name();
+    let err_context = || format!("failed to run plugin command {}", plugin_name);
+    let result: Result<()> = wasi_read_bytes(env).and_then(|bytes| {
+        let proto: ProtobufPluginCommand = ProtobufPluginCommand::decode(bytes.as_slice())?;
+        let command: PluginCommand = proto
+            .try_into()
+            .map_err(|e| anyhow!("failed to convert serialized command: {}", e))?;
+        dispatch_plugin_command(env, command)
+    });
+    result.with_context(err_context).non_fatal();
+}
+
+/// Runtime-agnostic typed dispatch entry point. Used by both the bytes-based
+/// wrapper above and the native typed-dispatch path (which skips the encode /
+/// decode round-trip entirely for fire-and-forget commands).
+pub fn dispatch_plugin_command(env: &mut PluginEnv, command: PluginCommand) -> Result<()> {
+    let plugin_name = env.name();
+    let err_context = || format!("failed to run plugin command {}", plugin_name);
+    {
+        let mut env = env; // re-bind as mutable for the handler call sites
+        match check_command_permission(&env, &command) {
                 (PermissionStatus::Granted, _) => match command {
                     PluginCommand::Subscribe(event_list) => subscribe(env, event_list)?,
                     PluginCommand::Unsubscribe(event_list) => unsubscribe(env, event_list)?,
@@ -802,10 +816,8 @@ pub fn dispatch_plugin_command_from_pipe(env: &mut PluginEnv) {
                     );
                 },
             };
-            Ok(())
-        })
-        .with_context(|| format!("failed to run plugin command {}", env.name()))
-        .non_fatal();
+        }
+        Ok(())
 }
 
 fn subscribe(env: &PluginEnv, event_list: HashSet<EventType>) -> Result<()> {

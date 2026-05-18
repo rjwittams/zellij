@@ -14,7 +14,8 @@ use std::cell::{Cell, RefCell};
 use std::fmt;
 
 use crate::plugins::plugin_map::PluginEnv;
-use crate::plugins::zellij_exports::dispatch_plugin_command_from_pipe;
+use crate::plugins::zellij_exports::{dispatch_plugin_command, dispatch_plugin_command_from_pipe};
+use zellij_utils::data::PluginCommand;
 
 thread_local! {
     /// Per-thread render buffer. `Some` only during a `call_render` invocation;
@@ -80,17 +81,34 @@ pub fn with_native_call<R>(env: &mut PluginEnv, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Dispatcher function registered into zellij-tile at startup. When the plugin
-/// invokes `host_run_plugin_command` from within a `with_native_call` scope,
-/// this fires: it reads the encoded command bytes from the plugin's stdout
-/// pipe (= NativeBridge stdout) and runs the same dispatch path as the wasmi
-/// shim does.
+/// Bytes-based dispatcher registered into zellij-tile at startup. When the
+/// plugin invokes `host_run_plugin_command` from within a `with_native_call`
+/// scope, this fires: it reads the encoded command bytes from the plugin's
+/// stdout pipe (= NativeBridge stdout) and runs the same dispatch path as the
+/// wasmi shim does. Used as a fallback; most shim calls now bypass it via the
+/// typed dispatcher below.
 pub fn dispatch_from_current_env() {
+    with_current_env("byte-based dispatcher", dispatch_plugin_command_from_pipe);
+}
+
+/// Typed dispatcher registered into zellij-tile. Receives a `PluginCommand`
+/// directly from the shim (no protobuf encode/decode round-trip) and runs the
+/// runtime-agnostic dispatch with the current `PluginEnv`. This is the fast
+/// path for native plugin host calls.
+pub fn dispatch_typed(command: PluginCommand) {
+    with_current_env("typed dispatcher", |env| {
+        if let Err(e) = dispatch_plugin_command(env, command) {
+            log::error!("native typed dispatch failed: {e:?}");
+        }
+    });
+}
+
+fn with_current_env(label: &str, f: impl FnOnce(&mut PluginEnv)) {
     CURRENT_ENV.with(|cell| {
         let env_ptr = cell.get();
         if env_ptr.is_null() {
             log::error!(
-                "native dispatcher fired with no CURRENT_ENV set — \
+                "native {label} fired with no CURRENT_ENV set — \
                  plugin called a host function outside a plugin entry-point call"
             );
             return;
@@ -98,6 +116,6 @@ pub fn dispatch_from_current_env() {
         // Safety: with_native_call guarantees env_ptr is valid for the duration
         // of the plugin call, and host calls only happen synchronously from there.
         let env = unsafe { &mut *env_ptr };
-        dispatch_plugin_command_from_pipe(env);
+        f(env);
     });
 }
