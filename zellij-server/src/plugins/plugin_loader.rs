@@ -267,6 +267,7 @@ impl<'a> PluginLoader<'a> {
             stdin_pipe,
             stdout_pipe,
             store_limits: create_optimized_store_limits(),
+            terminal_pixel_cell_size: self.terminal_pixel_cell_size.clone(),
         })
     }
     fn interpret_module(&mut self) -> Result<Module> {

@@ -83,9 +83,7 @@ pub fn show_cursor(cursor_position: Option<(usize, usize)>) {
 
 pub fn apply_graphics_update(ops: Vec<PluginGraphicsOp>) {
     let plugin_command = PluginCommand::ApplyGraphicsUpdate(PluginGraphicsUpdate { ops });
-    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
-    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
-    unsafe { host_run_plugin_command() };
+    dispatch_plugin_command(plugin_command);
 }
 
 pub fn set_png_asset(asset_id: u32, png: Vec<u8>) {
@@ -172,9 +170,7 @@ pub fn get_zellij_version() -> String {
 /// Returns the host terminal's last known character cell size in pixels.
 pub fn terminal_pixel_cell_size() -> Option<SizeInPixels> {
     let plugin_command = PluginCommand::GetTerminalPixelCellSize;
-    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
-    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
-    unsafe { host_run_plugin_command() };
+    dispatch_plugin_command(plugin_command);
     let response =
         ProtobufTerminalPixelCellSizeResponse::decode(bytes_from_stdin().ok()?.as_slice()).ok()?;
     response.try_into().ok().flatten()
@@ -1590,9 +1586,7 @@ pub fn resize_pane_with_id_to(
     target_size: PaneDimensionConstraint,
 ) {
     let plugin_command = PluginCommand::ResizePaneWithIdTo(pane_id, direction, target_size);
-    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
-    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
-    unsafe { host_run_plugin_command() };
+    dispatch_plugin_command(plugin_command);
 }
 
 /// Changes the focus to the pane with the specified id, unsuppressing it if it was suppressed and switching to its tab and layer (eg. floating/tiled).
