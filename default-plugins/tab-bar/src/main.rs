@@ -27,7 +27,7 @@ impl LinePart {
 }
 
 #[derive(Default, Debug)]
-pub struct State {
+struct State {
     tabs: Vec<TabInfo>,
     active_tab_idx: usize,
     mode_info: ModeInfo,

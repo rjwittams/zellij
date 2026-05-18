@@ -9,36 +9,7 @@ use std::{
 use wasmi::{Instance, Store, StoreLimits};
 use wasmi_wasi::WasiCtx;
 #[cfg(feature = "native-plugins")]
-use zellij_tile::ZellijPlugin;
-#[cfg(feature = "native-plugins")]
-use zellij_utils::data::{Event, PipeMessage};
-
-/// Object-safe wrapper around `zellij_tile::ZellijPlugin`. Needed because
-/// `ZellijPlugin: Default` is not dyn-compatible (constructor in trait bound).
-/// A blanket impl makes any `T: ZellijPlugin + Send + 'static` usable through this trait.
-#[cfg(feature = "native-plugins")]
-pub trait BoxableZellijPlugin: Send {
-    fn load(&mut self, configuration: BTreeMap<String, String>);
-    fn update(&mut self, event: Event) -> bool;
-    fn pipe(&mut self, pipe_message: PipeMessage) -> bool;
-    fn render(&mut self, rows: usize, cols: usize);
-}
-
-#[cfg(feature = "native-plugins")]
-impl<T: ZellijPlugin + Send + 'static> BoxableZellijPlugin for T {
-    fn load(&mut self, configuration: BTreeMap<String, String>) {
-        <Self as ZellijPlugin>::load(self, configuration)
-    }
-    fn update(&mut self, event: Event) -> bool {
-        <Self as ZellijPlugin>::update(self, event)
-    }
-    fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
-        <Self as ZellijPlugin>::pipe(self, pipe_message)
-    }
-    fn render(&mut self, rows: usize, cols: usize) {
-        <Self as ZellijPlugin>::render(self, rows, cols)
-    }
-}
+pub use zellij_tile::BoxableZellijPlugin;
 
 use crate::{thread_bus::ThreadSenders, ClientId};
 

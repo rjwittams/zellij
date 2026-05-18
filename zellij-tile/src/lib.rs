@@ -93,6 +93,33 @@ pub trait ZellijPlugin: Default {
     fn render(&mut self, rows: usize, cols: usize) {}
 }
 
+/// Object-safe wrapper around [`ZellijPlugin`]. Needed because `ZellijPlugin: Default`
+/// is not dyn-compatible (constructor in trait bound), so the host cannot hold
+/// `Box<dyn ZellijPlugin>` directly. A blanket impl makes any `T: ZellijPlugin + Send + 'static`
+/// usable through this trait, so plugin authors keep implementing [`ZellijPlugin`] as
+/// before and don't see this type unless they're writing a `create_plugin` factory.
+pub trait BoxableZellijPlugin: Send {
+    fn load(&mut self, configuration: BTreeMap<String, String>);
+    fn update(&mut self, event: Event) -> bool;
+    fn pipe(&mut self, pipe_message: PipeMessage) -> bool;
+    fn render(&mut self, rows: usize, cols: usize);
+}
+
+impl<T: ZellijPlugin + Send + 'static> BoxableZellijPlugin for T {
+    fn load(&mut self, configuration: BTreeMap<String, String>) {
+        <Self as ZellijPlugin>::load(self, configuration)
+    }
+    fn update(&mut self, event: Event) -> bool {
+        <Self as ZellijPlugin>::update(self, event)
+    }
+    fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
+        <Self as ZellijPlugin>::pipe(self, pipe_message)
+    }
+    fn render(&mut self, rows: usize, cols: usize) {
+        <Self as ZellijPlugin>::render(self, rows, cols)
+    }
+}
+
 /// This trait is used to create workers. Workers can be used by plugins to run longer running
 /// background tasks without blocking their own rendering (eg. and showing some sort of loading
 /// indication in part of the UI as needed while waiting for the task to complete).
@@ -169,7 +196,12 @@ macro_rules! register_plugin {
                     ProtobufPluginConfiguration::decode(protobuf_bytes.as_slice()).unwrap();
                 let plugin_configuration: BTreeMap<String, String> =
                     BTreeMap::try_from(&protobuf_configuration).unwrap();
-                state.borrow_mut().load(plugin_configuration);
+                // UFCS so it picks ZellijPlugin::load specifically, not the
+                // blanket BoxableZellijPlugin::load (which exists for native dispatch).
+                <$t as $crate::ZellijPlugin>::load(
+                    &mut *state.borrow_mut(),
+                    plugin_configuration,
+                );
             });
         }
 
@@ -184,7 +216,7 @@ macro_rules! register_plugin {
                 let protobuf_event: ProtobufEvent =
                     ProtobufEvent::decode(protobuf_bytes.as_slice()).unwrap();
                 let event = protobuf_event.try_into().unwrap();
-                state.borrow_mut().update(event)
+                <$t as $crate::ZellijPlugin>::update(&mut *state.borrow_mut(), event)
             })
         }
 
@@ -199,14 +231,18 @@ macro_rules! register_plugin {
                 let protobuf_pipe_message: ProtobufPipeMessage =
                     ProtobufPipeMessage::decode(protobuf_bytes.as_slice()).unwrap();
                 let pipe_message = protobuf_pipe_message.try_into().unwrap();
-                state.borrow_mut().pipe(pipe_message)
+                <$t as $crate::ZellijPlugin>::pipe(&mut *state.borrow_mut(), pipe_message)
             })
         }
 
         #[no_mangle]
         pub fn render(rows: i32, cols: i32) {
             STATE.with(|state| {
-                state.borrow_mut().render(rows as usize, cols as usize);
+                <$t as $crate::ZellijPlugin>::render(
+                    &mut *state.borrow_mut(),
+                    rows as usize,
+                    cols as usize,
+                );
             });
         }
 
@@ -218,12 +254,18 @@ macro_rules! register_plugin {
 }
 
 /// On non-wasm targets the WASM exports aren't needed — the host invokes the
-/// `ZellijPlugin` trait methods directly via the native registry. `register_plugin!`
-/// expands to nothing so plugin source compiles unchanged for both targets.
+/// `ZellijPlugin` trait methods directly via the native registry. Instead we
+/// emit a `create_plugin` factory function that the registry can call to
+/// construct a fresh boxed instance of `$t`. Plugin source compiles unchanged
+/// for both targets.
 #[cfg(not(target_family = "wasm"))]
 #[macro_export]
 macro_rules! register_plugin {
-    ($t:ty) => {};
+    ($t:ty) => {
+        pub fn create_plugin() -> std::boxed::Box<dyn $crate::BoxableZellijPlugin> {
+            std::boxed::Box::new(<$t as ::std::default::Default>::default())
+        }
+    };
 }
 
 /// Used to register a plugin worker implementing the [`ZellijWorker`] trait.

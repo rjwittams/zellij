@@ -1,8 +1,13 @@
 //! Registry of natively-linked Zellij plugins. Each entry is a `(name, factory)`
 //! pair; the factory constructs a fresh boxed plugin instance.
 //!
-//! Adding a new native plugin: implement `ZellijPlugin` on a `Default`able type,
-//! then add a registry entry below (optionally gated behind a Cargo feature).
+//! Adding a new native plugin:
+//!   1. Implement `ZellijPlugin` on a `Default`able type in a crate that exposes
+//!      `register_plugin!(MyState);`. On native targets the macro generates a
+//!      `pub fn create_plugin() -> Box<dyn BoxableZellijPlugin>` factory.
+//!   2. Add the crate as an optional dep on zellij-server, gated behind a
+//!      Cargo feature (e.g. `native-my-plugin = ["native-plugins", "dep:my-plugin"]`).
+//!   3. Add a registry entry below referencing `my_plugin::create_plugin`.
 
 use crate::plugins::plugin_map::BoxableZellijPlugin;
 
@@ -12,11 +17,11 @@ pub type NativePluginFactory = fn() -> Box<dyn BoxableZellijPlugin>;
 /// All native plugins available in this build. Lookup happens by name from
 /// `RunPluginLocation::Native(name)` at load time.
 pub static NATIVE_PLUGIN_REGISTRY: &[(&str, NativePluginFactory)] = &[
-    ("native-hello", || Box::new(hello::NativeHello::default())),
+    ("native-hello", hello::create_plugin),
     #[cfg(feature = "native-status-bar")]
-    ("status-bar", || Box::new(status_bar::State::default())),
+    ("status-bar", status_bar::create_plugin),
     #[cfg(feature = "native-tab-bar")]
-    ("tab-bar", || Box::new(tab_bar::State::default())),
+    ("tab-bar", tab_bar::create_plugin),
 ];
 
 pub fn factory_for(name: &str) -> Option<NativePluginFactory> {
@@ -32,7 +37,7 @@ mod hello {
     use zellij_tile::prelude::*;
 
     #[derive(Default)]
-    pub struct NativeHello {
+    struct NativeHello {
         renders: usize,
     }
 
@@ -48,4 +53,6 @@ mod hello {
             println!("  (running as Rust code linked into the zellij binary)");
         }
     }
+
+    register_plugin!(NativeHello);
 }

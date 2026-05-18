@@ -34,7 +34,7 @@ const TO_NORMAL: Action = Action::SwitchToMode {
 };
 
 #[derive(Default)]
-pub struct State {
+struct State {
     tabs: Vec<TabInfo>,
     tip_name: String,
     mode_info: ModeInfo,
