@@ -218,7 +218,15 @@ impl<'a> PluginLoader<'a> {
         })?;
         let env = self.build_plugin_env_for_native()?;
         let state = factory();
-        log::info!("Loaded native plugin '{}'", name);
+        log::info!(
+            "Loaded native plugin '{}' plugin_id={} client_id={} location={:?} config_keys={:?}\nbacktrace:\n{}",
+            name,
+            self.plugin_id,
+            self.client_id,
+            self.plugin_config.location,
+            self.plugin_config.initial_userspace_configuration.inner().keys().collect::<Vec<_>>(),
+            std::backtrace::Backtrace::force_capture(),
+        );
         let subscriptions = env.subscriptions.clone();
         let plugin = Arc::new(Mutex::new(RunningPlugin::new_native(
             state,
