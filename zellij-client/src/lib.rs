@@ -21,6 +21,7 @@ mod stdin_handler_windows;
 #[cfg(feature = "web_server_capability")]
 pub mod web_client;
 
+use anyhow::Context;
 use log::info;
 use std::env::current_exe;
 use std::io::{self, Write};
@@ -1265,16 +1266,31 @@ pub fn start_client(
 
         os_input.disable_mouse().non_fatal();
         info!("{}", exit_msg);
-        os_input.unset_raw_mode().unwrap();
+        os_input
+            .unset_raw_mode()
+            .context("failed to unset raw mode")
+            .non_fatal();
         os_input.restore_console_mode();
         let mut stdout = os_input.get_stdout_writer();
-        stdout.write_all(goodbye_message.as_bytes()).unwrap();
-        stdout.flush().unwrap();
+        stdout
+            .write_all(goodbye_message.as_bytes())
+            .context("failed to write terminal teardown message")
+            .non_fatal();
+        stdout
+            .flush()
+            .context("failed to flush terminal teardown message")
+            .non_fatal();
     } else {
         let clear_screen = "\u{1b}[2J";
         let mut stdout = os_input.get_stdout_writer();
-        stdout.write_all(clear_screen.as_bytes()).unwrap();
-        stdout.flush().unwrap();
+        stdout
+            .write_all(clear_screen.as_bytes())
+            .context("failed to clear terminal before reconnect")
+            .non_fatal();
+        stdout
+            .flush()
+            .context("failed to flush terminal clear before reconnect")
+            .non_fatal();
     }
 
     let _ = send_input_instructions.send(InputInstruction::Exit);

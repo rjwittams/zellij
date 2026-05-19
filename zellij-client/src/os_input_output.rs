@@ -194,7 +194,7 @@ impl ClientOsApi for ClientOsInputOutput {
             None => {
                 let stdin = std::io::stdin();
                 let mut stdin = stdin.lock();
-                let buffer = stdin.fill_buf().unwrap();
+                let buffer = stdin.fill_buf().map_err(|_| "Failed to read from STDIN")?;
                 let length = buffer.len();
                 let read_bytes = Vec::from(buffer);
                 stdin.consume(length);
