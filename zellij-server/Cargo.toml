@@ -95,5 +95,5 @@ native-tabs-rail-config = ["native-plugins", "dep:tabs-rail-config"]
 # All zellij-scratch / ardamento tabs plugins as natives — for profiling.
 native-tabs-all = ["native-tabs-controller", "native-tabs-rail", "native-tabs-rail-config"]
 # Convenience feature: enables every per-plugin native port available in this
-# build. Grows as plugins get ported.
-native-plugins-all = ["native-status-bar", "native-tab-bar"]
+# build. Grows as plugins get ported. Includes native-tabs-all.
+native-plugins-all = ["native-status-bar", "native-tab-bar", "native-tabs-all"]

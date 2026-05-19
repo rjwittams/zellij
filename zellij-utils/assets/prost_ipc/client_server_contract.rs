@@ -1950,8 +1950,7 @@ pub struct Options {
     #[prost(string, optional, tag="47")]
     pub theme_light: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(string, repeated, tag="48")]
-    pub kitty_image_output_transports:
-        ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    pub kitty_image_output_transports: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
     #[prost(string, optional, tag="49")]
     pub kitty_image_file_lifetime: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -3079,6 +3078,12 @@ pub struct HostTerminalThemeChangedMsg {
     #[prost(enumeration="HostTerminalThemeIndication", tag="1")]
     pub mode: i32,
 }
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct KittyImageTerminalResponseMsg {
+    #[prost(bytes="vec", tag="1")]
+    pub raw_bytes: ::prost::alloc::vec::Vec<u8>,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum HostTerminalThemeIndication {
@@ -3104,12 +3109,6 @@ impl HostTerminalThemeIndication {
             _ => None,
         }
     }
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct KittyImageTerminalResponseMsg {
-    #[prost(bytes="vec", tag="1")]
-    pub raw_bytes: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
