@@ -74,6 +74,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e9d4ee0d472d1cd2e28c97dfa124b3d8d992e10eb0a035f33f5d12e3a177ba3b"
 
 [[package]]
+name = "andamento-config"
+version = "0.1.0"
+dependencies = [
+ "andamento-shared",
+ "serde_json",
+ "unicode-width 0.1.14",
+ "zellij-tile",
+]
+
+[[package]]
+name = "andamento-controller"
+version = "0.1.0"
+dependencies = [
+ "andamento-shared",
+ "log",
+ "serde",
+ "serde_json",
+ "zellij-tile",
+]
+
+[[package]]
+name = "andamento-rail"
+version = "0.1.0"
+dependencies = [
+ "andamento-shared",
+ "ansi_term",
+ "log",
+ "serde_json",
+ "unicode-width 0.1.14",
+ "zellij-tile",
+ "zellij-tile-utils",
+]
+
+[[package]]
+name = "andamento-shared"
+version = "0.1.0"
+dependencies = [
+ "kdl",
+ "serde",
+ "serde_json",
+ "zellij-tile",
+]
+
+[[package]]
 name = "android-tzdata"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3550,47 +3594,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tabs-controller"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "tabs-shared",
- "zellij-tile",
-]
-
-[[package]]
-name = "tabs-rail"
-version = "0.1.0"
-dependencies = [
- "ansi_term",
- "serde_json",
- "tabs-shared",
- "unicode-width 0.1.14",
- "zellij-tile",
- "zellij-tile-utils",
-]
-
-[[package]]
-name = "tabs-rail-config"
-version = "0.1.0"
-dependencies = [
- "serde_json",
- "tabs-shared",
- "unicode-width 0.1.14",
- "zellij-tile",
-]
-
-[[package]]
-name = "tabs-shared"
-version = "0.1.0"
-dependencies = [
- "kdl",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "tempfile"
 version = "3.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4920,6 +4923,9 @@ dependencies = [
 name = "zellij-server"
 version = "0.45.0"
 dependencies = [
+ "andamento-config",
+ "andamento-controller",
+ "andamento-rail",
  "ansi_term",
  "anyhow",
  "arrayvec 0.7.6",
@@ -4956,9 +4962,6 @@ dependencies = [
  "status-bar",
  "sysinfo",
  "tab-bar",
- "tabs-controller",
- "tabs-rail",
- "tabs-rail-config",
  "tempfile",
  "tokio",
  "typetag",

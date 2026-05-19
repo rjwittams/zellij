@@ -165,10 +165,10 @@ web_server_capability = ["zellij-client/web_server_capability", "zellij-server/w
 native-plugins = ["zellij-server/native-plugins"]
 native-status-bar = ["zellij-server/native-status-bar"]
 native-tab-bar = ["zellij-server/native-tab-bar"]
-native-tabs-controller = ["zellij-server/native-tabs-controller"]
-native-tabs-rail = ["zellij-server/native-tabs-rail"]
-native-tabs-rail-config = ["zellij-server/native-tabs-rail-config"]
-native-tabs-all = ["zellij-server/native-tabs-all"]
+native-andamento-controller = ["zellij-server/native-andamento-controller"]
+native-andamento-rail = ["zellij-server/native-andamento-rail"]
+native-andamento-config = ["zellij-server/native-andamento-config"]
+native-andamento-all = ["zellij-server/native-andamento-all"]
 native-plugins-all = ["zellij-server/native-plugins-all"]
 
 # uncomment this when developing plugins in the Zellij UI to make plugin compilation faster
