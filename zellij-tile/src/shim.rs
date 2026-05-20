@@ -2995,3 +2995,32 @@ pub fn clear_pane_highlights(pane_id: PaneId) {
 extern "C" {
     fn host_run_plugin_command();
 }
+
+/// Backing function for `zellij_tile::println!` / `print!` on the native target.
+/// Native plugins compile this and call it; WASM plugins use `std::println!` directly.
+///
+/// The render buffer is installed by `zellij_server::plugins::native_runtime` around
+/// each `render()` call. Output outside a render call is dropped to prevent native
+/// plugins from accidentally writing to the server's real stdout.
+///
+/// We bind the function at runtime via a `OnceLock` so this crate stays free of
+/// a circular dependency on `zellij-server`. The host registers the actual writer
+/// during startup.
+#[cfg(not(target_family = "wasm"))]
+pub fn __native_print(args: std::fmt::Arguments<'_>) {
+    if let Some(write) = NATIVE_PRINTER.get() {
+        write(args);
+    }
+    // else: silently drop. Prevents leakage to server stdout when no host
+    // has registered (e.g. during plugin author's local unit tests).
+}
+
+#[cfg(not(target_family = "wasm"))]
+static NATIVE_PRINTER: std::sync::OnceLock<fn(std::fmt::Arguments<'_>)> =
+    std::sync::OnceLock::new();
+
+/// Called once by the host (zellij-server) at startup to install the native render-buffer writer.
+#[cfg(not(target_family = "wasm"))]
+pub fn register_native_printer(f: fn(std::fmt::Arguments<'_>)) {
+    let _ = NATIVE_PRINTER.set(f);
+}

@@ -20,6 +20,51 @@ pub mod shim;
 pub mod ui_components;
 pub mod vfs;
 
+/// Cross-target render-output macros.
+///
+/// Plugin code that wants to compile on both WASM and native targets should
+/// `use zellij_tile::output::{print, println};` and then use the bare names.
+/// These shadow `std`'s `print!`/`println!` in the importing module's scope:
+///
+/// - On **WASM**, they pass through to `std::print!` / `std::println!`, which
+///   write to the plugin's stdio — the historical channel the host reads as
+///   render output.
+///
+/// - On **native** (plugin linked into the zellij binary), they write into a
+///   per-thread buffer installed by the host around each `render()` call.
+///   Standard `std::println!` would dump to the server's real stdout, so
+///   plugins that want native compat must opt in via this import.
+///
+/// Outside a `render()` call on native, output is silently dropped.
+pub mod output {
+    #[cfg(target_family = "wasm")]
+    pub use ::std::{print, println};
+
+    #[cfg(not(target_family = "wasm"))]
+    pub use crate::{print, println};
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[doc(hidden)]
+pub use shim::__native_print;
+
+#[cfg(not(target_family = "wasm"))]
+#[macro_export]
+macro_rules! println {
+    () => { $crate::__native_print(::std::format_args!("\n")) };
+    ($($arg:tt)*) => {
+        $crate::__native_print(::std::format_args!("{}\n", ::std::format_args!($($arg)*)))
+    };
+}
+
+#[cfg(not(target_family = "wasm"))]
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => {
+        $crate::__native_print(::std::format_args!($($arg)*))
+    };
+}
+
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use zellij_utils::data::{Event, PipeMessage};
