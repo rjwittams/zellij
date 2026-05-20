@@ -1680,14 +1680,27 @@ impl WasmBridge {
         if self.cached_plugin_map.is_empty() {
             self.cached_plugin_map = self.plugin_map.lock().unwrap().clone_plugin_assets();
         }
-        match self
-            .cached_plugin_map
-            .get(plugin_location)
-            .and_then(|m| m.get(plugin_configuration))
-        {
-            Some(plugin_and_client_ids) => plugin_and_client_ids
+        // `caller_cwd` is injected by the host on message_to_plugin pipe calls
+        // (zellij_exports::message_to_plugin) but is not part of the
+        // configuration carried by a layout-loaded plugin. Compare configs
+        // ignoring it — otherwise the same logical plugin looks like two
+        // different instances and `get_or_load_plugins` spawns an extra one
+        // on every pipe call. Mirrors the equivalence logic for aliases in
+        // RunPluginOrAlias::eq_with (layout.rs).
+        let strip_caller_cwd = |cfg: &PluginUserConfiguration| -> BTreeMap<String, String> {
+            let mut map = cfg.inner().clone();
+            map.remove("caller_cwd");
+            map
+        };
+        let query = strip_caller_cwd(plugin_configuration);
+        match self.cached_plugin_map.get(plugin_location) {
+            Some(by_config) => by_config
                 .iter()
-                .map(|(plugin_id, client_id)| (*plugin_id, Some(*client_id)))
+                .filter(|(stored, _)| strip_caller_cwd(stored) == query)
+                .flat_map(|(_, ids)| {
+                    ids.iter()
+                        .map(|(plugin_id, client_id)| (*plugin_id, Some(*client_id)))
+                })
                 .collect(),
             None => vec![],
         }
