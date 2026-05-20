@@ -18,6 +18,7 @@
 pub mod prelude;
 pub mod shim;
 pub mod ui_components;
+pub mod vfs;
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;

@@ -4934,6 +4934,7 @@ dependencies = [
  "prost",
  "serde",
  "serde_json",
+ "shellexpand",
  "strum",
  "strum_macros",
  "zellij-utils",
