@@ -8,4 +8,21 @@ fork:
 test_command:
   default: cargo test --workspace
   per_slice_overrides: {}
-slices: []
+slices:
+- id: kitty-image-plumbing
+  branch: feat/kitty-image-plumbing
+  purpose: 'Plugin runtime improvements: graphics rendering, vfs path translation,
+    client-scoped messaging, pane resize API.'
+  audience: upstream
+  parents:
+  - main
+  paths: []
+  kind: leaf
+  children: []
+  status: draft
+  verification:
+    last_verified_at: null
+    parents_hash: null
+    tests_passed: null
+    flatten_eligible: null
+  previous_bookmarks: []
