@@ -1,0 +1,51 @@
+---
+const { nodes, edges, base } = Astro.props;
+
+function nodeStyle(node) {
+  const fills = { upstream: "#4b7bec", "fork-only": "#d49c2d", undecided: "#999" };
+  const fill = fills[node.audience] ?? "#999";
+  const stroke = node.status === "verified" ? "#1a8a3a" : "#444";
+  const strokeWidth = node.status === "verified" ? 3 : 1;
+  return `fill:${fill},color:white,stroke:${stroke},stroke-width:${strokeWidth}px`;
+}
+
+const lines = ["graph TD"];
+lines.push("  main([main])");
+for (const node of nodes) {
+  lines.push(`  ${node.id}["${node.id}"]`);
+  lines.push(`  style ${node.id} ${nodeStyle(node)}`);
+  lines.push(`  click ${node.id} "${base}slices/${node.id}/" "View ${node.id}"`);
+}
+for (const edge of edges) {
+  lines.push(`  ${edge.from} --> ${edge.to}`);
+}
+const rootIds = nodes
+  .filter((n) => !edges.some((e) => e.to === n.id))
+  .map((n) => n.id);
+for (const root of rootIds) {
+  lines.push(`  main --> ${root}`);
+}
+
+const mermaidSource = lines.join("\n");
+---
+<div class="dag-container">
+  <pre class="mermaid">{mermaidSource}</pre>
+</div>
+
+<script>
+  import mermaid from "mermaid";
+  mermaid.initialize({ startOnLoad: true, theme: "default" });
+</script>
+
+<style>
+  .dag-container {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    background: white;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+  }
+  .mermaid {
+    text-align: center;
+  }
+</style>

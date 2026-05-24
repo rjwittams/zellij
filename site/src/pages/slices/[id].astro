@@ -1,0 +1,116 @@
+---
+import { getCollection, getEntry } from "astro:content";
+import Base from "../../layouts/Base.astro";
+import AudienceBadge from "../../components/AudienceBadge.astro";
+import StatusBadge from "../../components/StatusBadge.astro";
+import KindBadge from "../../components/KindBadge.astro";
+
+export async function getStaticPaths() {
+  const slices = await getCollection("slices");
+  return slices.map((s) => ({
+    params: { id: s.data.id },
+    props: { slice: s.data },
+  }));
+}
+
+const { slice } = Astro.props;
+const prData = await getEntry("prData", slice.id).catch(() => null);
+const prs = prData?.data?.prs ?? [];
+const base = import.meta.env.BASE_URL;
+---
+<Base title={slice.id}>
+  <p><a href={base}>&larr; Index</a></p>
+  <h1>{slice.id}</h1>
+  <p>
+    <AudienceBadge audience={slice.audience} />
+    <StatusBadge status={slice.status} />
+    <KindBadge kind={slice.kind} />
+  </p>
+
+  <h2>Purpose</h2>
+  <p>{slice.purpose}</p>
+
+  <h2>Branch</h2>
+  <p><code>{slice.branch}</code></p>
+
+  <h2>Parents</h2>
+  <ul>
+    {slice.parents.map((p) => (
+      <li>
+        {p === "main" ? <code>main</code> : <a href={`${base}slices/${p}/`}>{p}</a>}
+      </li>
+    ))}
+  </ul>
+
+  {slice.children.length > 0 && (
+    <>
+      <h2>Children</h2>
+      <ul>
+        {slice.children.map((c) => (
+          <li><a href={`${base}slices/${c}/`}>{c}</a></li>
+        ))}
+      </ul>
+    </>
+  )}
+
+  <h2>Paths</h2>
+  {slice.paths.length > 0 ? (
+    <ul>
+      {slice.paths.map((p) => <li><code>{p}</code></li>)}
+    </ul>
+  ) : (
+    <p><em>(no paths declared)</em></p>
+  )}
+
+  <h2>Verification</h2>
+  <table>
+    <tr>
+      <th>last_verified_at</th>
+      <td>{slice.verification.last_verified_at ?? <em>never</em>}</td>
+    </tr>
+    <tr>
+      <th>parents_hash</th>
+      <td><code>{slice.verification.parents_hash ?? <em>null</em>}</code></td>
+    </tr>
+    <tr>
+      <th>tests_passed</th>
+      <td>{slice.verification.tests_passed === null ? <em>null</em> : String(slice.verification.tests_passed)}</td>
+    </tr>
+    <tr>
+      <th>flatten_eligible</th>
+      <td>{slice.verification.flatten_eligible === null ? <em>null</em> : String(slice.verification.flatten_eligible)}</td>
+    </tr>
+  </table>
+
+  {slice.audience === "upstream" && (
+    <>
+      <h2>Upstream PRs</h2>
+      {prs.length === 0 ? (
+        <p><em>No PRs found for branch <code>{slice.branch}</code>.</em></p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Title</th>
+              <th>State</th>
+              <th>Merged</th>
+              <th>Closed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {prs.map((pr) => (
+              <tr>
+                <td><a href={pr.url}>#{pr.number}</a></td>
+                <td>{pr.title}</td>
+                <td>{pr.state}</td>
+                <td>{pr.mergedAt ?? "—"}</td>
+                <td>{pr.closedAt ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </>
+  )}
+</Base>

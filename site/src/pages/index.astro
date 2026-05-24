@@ -1,0 +1,88 @@
+---
+import { getCollection, getEntry } from "astro:content";
+import Base from "../layouts/Base.astro";
+import DagGraph from "../components/DagGraph.astro";
+import AudienceBadge from "../components/AudienceBadge.astro";
+import StatusBadge from "../components/StatusBadge.astro";
+
+const slices = await getCollection("slices");
+const manifestMetaEntry = await getEntry("manifestMeta", "manifest");
+const dagEntry = await getEntry("dag", "dag");
+
+const meta = manifestMetaEntry?.data;
+const dagData = dagEntry?.data ?? { nodes: [], edges: [] };
+const base = import.meta.env.BASE_URL;
+
+const counts = {
+  total: slices.length,
+  byAudience: { upstream: 0, "fork-only": 0, undecided: 0 },
+  byStatus: { draft: 0, ready: 0, verified: 0 },
+};
+for (const s of slices) {
+  counts.byAudience[s.data.audience]++;
+  counts.byStatus[s.data.status]++;
+}
+
+const slicesSorted = [...slices].sort((a, b) => a.data.id.localeCompare(b.data.id));
+---
+<Base title="Index">
+  <h1>Kintsugi</h1>
+  {meta && (
+    <p>
+      Fork of <a href={`https://github.com/${meta.upstream.repo}`}>{meta.upstream.repo}</a>,
+      maintained at <a href={`https://github.com/${meta.fork.repo}`}>{meta.fork.repo}</a>.
+    </p>
+  )}
+
+  <h2>Stats</h2>
+  <ul class="stats">
+    <li>Total slices: <strong>{counts.total}</strong></li>
+    <li>
+      By audience:
+      <AudienceBadge audience="upstream" /> {counts.byAudience.upstream}
+      <AudienceBadge audience="fork-only" /> {counts.byAudience["fork-only"]}
+      <AudienceBadge audience="undecided" /> {counts.byAudience.undecided}
+    </li>
+    <li>
+      By status:
+      <StatusBadge status="draft" /> {counts.byStatus.draft}
+      <StatusBadge status="ready" /> {counts.byStatus.ready}
+      <StatusBadge status="verified" /> {counts.byStatus.verified}
+    </li>
+  </ul>
+
+  <h2>DAG</h2>
+  <DagGraph nodes={dagData.nodes} edges={dagData.edges} base={base} />
+
+  <h2>Slices</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Audience</th>
+        <th>Status</th>
+        <th>Purpose</th>
+      </tr>
+    </thead>
+    <tbody>
+      {slicesSorted.map((s) => (
+        <tr>
+          <td><a href={`${base}slices/${s.data.id}/`}>{s.data.id}</a></td>
+          <td><AudienceBadge audience={s.data.audience} /></td>
+          <td><StatusBadge status={s.data.status} /></td>
+          <td>{s.data.purpose}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</Base>
+
+<style>
+  .stats {
+    list-style: none;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+</style>

@@ -1,0 +1,37 @@
+---
+const { rows, base } = Astro.props;
+---
+{rows.length === 0 ? (
+  <p><em>No upstream-audience slices yet.</em></p>
+) : (
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>Purpose</th>
+        <th>PR</th>
+        <th>State</th>
+        <th>Merged</th>
+        <th>Closed</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows.map((row) => (
+        <tr>
+          <td><a href={`${base}slices/${row.id}/`}>{row.id}</a></td>
+          <td>{row.purpose.length > 80 ? row.purpose.slice(0, 80) + "…" : row.purpose}</td>
+          <td>
+            {row.pr ? (
+              <a href={row.pr.url}>#{row.pr.number}</a>
+            ) : (
+              <em>not submitted</em>
+            )}
+          </td>
+          <td>{row.pr?.state ?? "—"}</td>
+          <td>{row.pr?.mergedAt ?? "—"}</td>
+          <td>{row.pr?.closedAt ?? "—"}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+)}

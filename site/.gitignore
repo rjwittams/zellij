@@ -1,0 +1,18 @@
+node_modules/
+dist/
+.astro/
+.DS_Store
+*.log
+
+# npm lockfile is regenerated per downstream repo; not part of the template.
+package-lock.json
+
+# Content collection JSON is generated:
+#  - manifest-meta.json + dag.json by `kintsugi render`
+#  - slices/<id>.json by `kintsugi render`
+#  - pr-data/<id>.json by `scripts/fetch-pr-data.mjs` (prebuild)
+# config.ts is the schema and IS tracked.
+src/content/manifest-meta.json
+src/content/dag.json
+src/content/slices/
+src/content/pr-data/

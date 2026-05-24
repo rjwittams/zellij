@@ -1,0 +1,100 @@
+:root {
+  --color-bg: #fdfdfb;
+  --color-fg: #1a1a1a;
+  --color-muted: #6b6b6b;
+  --color-accent: #c89f4d;
+  --color-border: #d8d4cc;
+  --color-upstream: #4b7bec;
+  --color-fork-only: #d49c2d;
+  --color-undecided: #999;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  color: var(--color-fg);
+  background: var(--color-bg);
+  line-height: 1.5;
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 1rem;
+}
+
+h1, h2, h3 {
+  line-height: 1.2;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: rgba(0, 0, 0, 0.05);
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+th {
+  font-weight: 600;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.15em 0.5em;
+  border-radius: 3px;
+  font-size: 0.85em;
+  font-weight: 500;
+}
+
+.badge--upstream { background: var(--color-upstream); color: white; }
+.badge--fork-only { background: var(--color-fork-only); color: white; }
+.badge--undecided { background: var(--color-undecided); color: white; }
+.badge--draft { border: 1px solid var(--color-border); color: var(--color-muted); }
+.badge--ready { border: 1px solid var(--color-accent); color: var(--color-accent); }
+.badge--verified { background: #4caf50; color: white; }
+.badge--rollup { border: 2px dashed var(--color-accent); color: var(--color-accent); }
+.badge--leaf { /* no special styling */ }
+
+nav {
+  background: rgba(0, 0, 0, 0.03);
+  border-bottom: 1px solid var(--color-border);
+  padding: 0.75rem 1rem;
+}
+
+nav ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-width: 960px;
+  margin: 0 auto;
+  display: flex;
+  gap: 1.5rem;
+}

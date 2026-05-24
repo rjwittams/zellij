@@ -1,0 +1,11 @@
+version: 1
+upstream:
+  repo: zellij-org/zellij
+  default_branch: main
+fork:
+  repo: rjwittams/zellij
+  default_branch: main
+test_command:
+  default: cargo test --workspace
+  per_slice_overrides: {}
+slices: []

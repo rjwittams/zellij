@@ -1,0 +1,20 @@
+{
+  "name": "kintsugi-site-template",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "prebuild": "node scripts/fetch-pr-data.mjs",
+    "preview": "astro preview",
+    "test": "node --test 'tests/*.mjs'"
+  },
+  "dependencies": {
+    "astro": "^5.0.0",
+    "mermaid": "^11.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0"
+  }
+}

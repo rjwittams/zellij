@@ -1,0 +1,5 @@
+---
+const { audience } = Astro.props;
+const label = audience === "fork-only" ? "fork-only" : audience;
+---
+<span class={`badge badge--${audience}`}>{label}</span>

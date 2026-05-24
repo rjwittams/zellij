@@ -1,0 +1,24 @@
+---
+import "../styles/global.css";
+const { title } = Astro.props;
+const base = import.meta.env.BASE_URL;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title} — Kintsugi</title>
+  </head>
+  <body>
+    <nav>
+      <ul>
+        <li><a href={base}>Index</a></li>
+        <li><a href={`${base}ledger/`}>Ledger</a></li>
+      </ul>
+    </nav>
+    <main>
+      <slot />
+    </main>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+---
+import { getCollection, getEntry } from "astro:content";
+import Base from "../layouts/Base.astro";
+import LedgerTable from "../components/LedgerTable.astro";
+
+const slices = await getCollection("slices");
+const upstreamSlices = slices.filter((s) => s.data.audience === "upstream");
+
+const rows = [];
+for (const slice of upstreamSlices) {
+  const prData = await getEntry("prData", slice.data.id).catch(() => null);
+  const prs = prData?.data?.prs ?? [];
+  const currentPr = prs.length > 0
+    ? prs.reduce((a, b) => (a.number > b.number ? a : b))
+    : null;
+  rows.push({
+    id: slice.data.id,
+    purpose: slice.data.purpose,
+    pr: currentPr,
+  });
+}
+rows.sort((a, b) => a.id.localeCompare(b.id));
+const base = import.meta.env.BASE_URL;
+---
+<Base title="Ledger">
+  <h1>Upstream Submission Ledger</h1>
+  <p>
+    Public record of slices offered upstream. PR state is fetched from GitHub
+    at build time via <code>gh</code>.
+  </p>
+  <LedgerTable rows={rows} base={base} />
+</Base>
