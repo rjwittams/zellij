@@ -14,7 +14,7 @@ Working notes for the re-slicing of `feat/kitty-image-plumbing` and `spike/nativ
 
 ## Cross-cutting decisions
 
-- **VTE is a deliverable, not an obstacle.** Either upstream-track PR (APC hooks API + rationale) with the fork as fallback path, or two parallel slices (upstream attempt + workaround). Ship final state only; iteration noise is deleted.
+- **VTE work is two slices.** First, the vte version upgrade (zellij was on an old vte; upstream vte changed signatures, so the upgrade carries `Perform` signature migration across multiple zellij files). That slice is pure upstream-vte maintenance, no kitty content. Second, the fork-switch — zellij depends on a zellij-maintained vte fork carrying the APC-hook additions. Realistic acceptance path = zellij itself adopting the vte fork; can't push vte alone without downstream pressure from zellij.
 - **PNG / RGB / RGBA bundle into the foundation slice.** Kitty's payload formats share the parsing surface. The `KittyImageFormat` enum lands with the foundation, not as a later refactor.
 - **Transport variants bundle.** File / temp / shared-memory / direct + the ack/lifetime model. One slice covering the transport mechanism + all variants the protocol expects.
 - **Asset quota + lifecycle pruning is correctness, not polish.** A misbehaving program could exhaust memory uploading large images. Ships before transport variants (External media makes the problem worse, but the basic problem exists with Direct uploads too).
@@ -25,8 +25,8 @@ Working notes for the re-slicing of `feat/kitty-image-plumbing` and `spike/nativ
 
 Order reflects current understanding. Not frozen — review at each landing.
 
-1. **VTE prerequisite** — upstream-track PR with APC hooks API; fork as fallback.
-2. **Foundation** — APC parser (full kitty grammar — transmit, placement, delete, query), payload formats (PNG / RGB / RGBA with `KittyImageFormat` enum), zlib compression, direct payload transport only, basic absolute placement (no relative), deletion, query/response, per-pane `PaneImageScene` state, per-client `ImageOutput` structure, direct-only output serialization, **unclipped rendering** (boundary overflow is a known visible bug), minimal `KittyAssetStore` (id allocator + insert/get/remove; `KittyAssetData` enum with only `Image` variant; **no `generation` field**; no quota; no ref-counting).
+1. **vte-upgrade** — upgrade zellij from the old vte version to the current upstream vte version. Carries the `Perform` trait signature migration across `panes/grid.rs`, `panes/plugin_pane.rs`, `panes/terminal_pane.rs`, `ui/components/mod.rs`, plus the test files (`grid_tests.rs`, `tab_integration_tests.rs`, `screen_tests.rs`, `remote_runner.rs`). Pure upstream-vte maintenance, no kitty content. Upstream-audience.
+2. **Foundation** — switch vte dep to zellij-maintained fork (`rjwittams/vte` parserless-APC-support branch) + impl the new `apc_start`/`apc_put`/`apc_end` methods in `grid.rs` to capture APC bytes; APC parser (full kitty grammar — transmit, placement, delete, query), payload formats (PNG / RGB / RGBA with `KittyImageFormat` enum), zlib compression, direct payload transport only, basic absolute placement (no relative), deletion, query/response, per-pane `PaneImageScene` state, per-client `ImageOutput` structure, direct-only output serialization, **unclipped rendering** (boundary overflow is a known visible bug), minimal `KittyAssetStore` (id allocator + insert/get/remove; `KittyAssetData` enum with only `Image` variant; **no `generation` field**; no quota; no ref-counting). Acceptance path = zellij adopting the vte fork.
 3. **Pane-boundary clipping** — carve clipping functions from `image_fragment.rs` (`clip_image_fragment`, `visible_image_fragments`, `clip_kitty_explicit_fragment`, `clip_sixel_fragment`, `clip_kitty_placeholder_fragment`, `build_split_explicit_fragment`, `synthesize_split_fragment_placement_id`). No diff planner yet.
 4. **Generations + diff planner** — one slice. Add `generation: u64` to `KittyAsset`, increment on insert. Add `KittyScenePlan` / `KittySceneState` / `plan_kitty_scene` (`kitty_diff.rs`). Connect to render pipeline so unchanged assets/placements aren't re-emitted every frame.
 5. **Multi-client / watcher support** — per-watcher state separation, watcher capability application, multi-client image output paths. Earliest realistic position by code dependency (requires generations from #4).
@@ -121,3 +121,11 @@ Slice numbers below refer to the spine sketch above (current numbering).
 ### Combined commits to split
 
 - `9284198f Optimize kitty image transport and state tracking` — one commit that introduces `kitty_output_media.rs` AND the transport-config option AND does asset_store rework. Needs splitting at slice-design time: transport machinery → #8, config option → #8 or its own slice, asset_store rework → into generations+diff (#4) or quota (#6) depending on what changed.
+- `e76ac675 build: use git vte fork for APC hooks` — split: the vte version bump + `Perform` trait signature migration goes to vte-upgrade (#1). The fork-URL change + `apc_start`/`apc_put`/`apc_end` impl in `grid.rs` goes to foundation (#2). The 280-line `grid_tests.rs` churn appears to be artifacts of the first abandoned fork API; not needed once we ship only the final parserless-APC approach.
+
+### VTE iteration noise — delete entirely
+
+| Commit | Why |
+|---|---|
+| `02033740` build: switch to opaque string vte fork | abandoned middle iteration; sliced version skips straight to the final parserless-APC fork |
+| `b0393573` build: point at squashed vte parserless APC branch | the final-fork dep ref already lands in foundation (#2); this rebump on top of the abandoned middle iteration is noise |
