@@ -42,3 +42,20 @@ slices:
     tests_passed: null
     flatten_eligible: null
   previous_bookmarks: []
+- id: vte-upgrade
+  branch: rjw1/01-vte-upgrade
+  purpose: "Upgrade zellij from vte 0.11.0 to vte 0.15.0 (crates.io) \u2014 Perform\
+    \ trait signature migration (single-byte advance \u2192 slice-based advance)."
+  audience: upstream
+  parents:
+  - main
+  paths: []
+  kind: leaf
+  children: []
+  status: draft
+  verification:
+    last_verified_at: null
+    parents_hash: null
+    tests_passed: null
+    flatten_eligible: null
+  previous_bookmarks: []
