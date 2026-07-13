@@ -6,3 +6,5 @@ target/
 .DS_Store
 /assets/man/zellij.1
 .worktrees/
+# Local symlink to the sibling Andamento checkout; see .envrc.
+/andamento

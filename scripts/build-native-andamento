@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build native Andamento plugins from the single main andamento checkout.
+#
+# andamento normally depends on zellij-tile through its sibling ../zellij
+# checkout. Native plugin factories must use this worktree's zellij-tile
+# package identity, otherwise their Box<dyn ZellijPlugin> values are distinct
+# Rust types. The two source patches below are build-local: they affect only
+# this Cargo invocation.
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+repo_root="$(cd -- "$script_dir/.." && pwd -P)"
+andamento_link="$repo_root/andamento"
+
+if [[ ! -d "$andamento_link" ]]; then
+    echo "error: andamento checkout is missing at $andamento_link" >&2
+    echo "       create it with: ln -sfn ../andamento andamento" >&2
+    exit 1
+fi
+
+andamento_root="$(cd -- "$andamento_link" && pwd -P)"
+standard_zellij_root="$(cd -- "$andamento_root/../zellij" && pwd -P)"
+
+for manifest in \
+    "$andamento_root/Cargo.toml" \
+    "$standard_zellij_root/zellij-tile/Cargo.toml" \
+    "$standard_zellij_root/zellij-tile-utils/Cargo.toml" \
+    "$repo_root/zellij-tile/Cargo.toml" \
+    "$repo_root/zellij-tile-utils/Cargo.toml"; do
+    if [[ ! -f "$manifest" ]]; then
+        echo "error: required manifest is missing: $manifest" >&2
+        exit 1
+    fi
+done
+
+tile_patch="patch.\"file://${standard_zellij_root}/zellij-tile\".zellij-tile.path=\"${repo_root}/zellij-tile\""
+tile_utils_patch="patch.\"file://${standard_zellij_root}/zellij-tile-utils\".zellij-tile-utils.path=\"${repo_root}/zellij-tile-utils\""
+
+cd "$repo_root"
+cargo \
+    --config "$tile_patch" \
+    --config "$tile_utils_patch" \
+    build --profile dev-opt --features native-plugins-all "$@"

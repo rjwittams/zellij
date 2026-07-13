@@ -47,9 +47,10 @@ zellij-utils = { workspace = true }
 zellij-tile = { workspace = true, optional = true }
 status-bar = { path = "../default-plugins/status-bar", optional = true }
 tab-bar = { path = "../default-plugins/tab-bar", optional = true }
-andamento-controller = { path = "../../andamento.native-plugins/crates/andamento-controller", optional = true }
-andamento-rail = { path = "../../andamento.native-plugins/crates/andamento-rail", optional = true }
-andamento-config = { path = "../../andamento.native-plugins/crates/andamento-config", optional = true }
+# The factory is opt-in: the default Andamento build remains the normal WASM one.
+andamento-controller = { path = "../../andamento/crates/andamento-controller", optional = true, features = ["native-plugin-factory"] }
+andamento-rail = { path = "../../andamento/crates/andamento-rail", optional = true, features = ["native-plugin-factory"] }
+andamento-config = { path = "../../andamento/crates/andamento-config", optional = true, features = ["native-plugin-factory"] }
 once_cell = "1.19"
 num_cpus = { workspace = true }
 
