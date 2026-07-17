@@ -495,3 +495,86 @@ fn osc7_then_poll_skips_terminal() {
     );
 }
 
+// --- Initial cwd reporting (panes pending their first report) ---
+
+#[test]
+fn pending_pane_reported_without_activity() {
+    let mock = MockOsApi::new();
+    let child_pid = 100;
+    mock.set_cwd(child_pid, PathBuf::from("/spawned/here"));
+    let (mut pty, rx) = make_pty_with_plugin_receiver(mock);
+    set_active_terminal(&mut pty, 1, child_pid);
+    pty.pane_activity_flags
+        .get(&1)
+        .unwrap()
+        .store(false, Ordering::Relaxed);
+    pty.panes_pending_initial_cwd.insert(1);
+
+    pty.update_and_report_cwds();
+
+    let events = collect_cwd_changed_events(&rx);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1, PathBuf::from("/spawned/here"));
+    assert!(!pty.panes_pending_initial_cwd.contains(&1));
+}
+
+#[test]
+fn pending_pane_retried_until_cwd_available() {
+    let mock = MockOsApi::new();
+    let child_pid = 100;
+    let (mut pty, rx) = make_pty_with_plugin_receiver(mock.clone());
+    set_active_terminal(&mut pty, 1, child_pid);
+    pty.panes_pending_initial_cwd.insert(1);
+
+    pty.update_and_report_cwds(); // cwd not yet known to the OS
+    assert!(collect_cwd_changed_events(&rx).is_empty());
+    assert!(
+        pty.panes_pending_initial_cwd.contains(&1),
+        "pane should stay pending after a fetch miss"
+    );
+
+    mock.set_cwd(child_pid, PathBuf::from("/late"));
+    pty.update_and_report_cwds(); // no new activity, retried anyway
+    let events = collect_cwd_changed_events(&rx);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1, PathBuf::from("/late"));
+    assert!(!pty.panes_pending_initial_cwd.contains(&1));
+}
+
+#[test]
+fn first_report_sent_even_when_cache_matches() {
+    // capture_initial_cwd caches the cwd at spawn; the first CwdChanged must
+    // still reach plugins even though the polled value matches the cache.
+    let mock = MockOsApi::new();
+    let child_pid = 100;
+    mock.set_cwd(child_pid, PathBuf::from("/home/user"));
+    let (mut pty, rx) = make_pty_with_plugin_receiver(mock);
+    set_active_terminal(&mut pty, 1, child_pid);
+    pty.terminal_cwds.insert(1, PathBuf::from("/home/user"));
+    pty.panes_pending_initial_cwd.insert(1);
+
+    pty.update_and_report_cwds();
+
+    let events = collect_cwd_changed_events(&rx);
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].1, PathBuf::from("/home/user"));
+}
+
+#[test]
+fn osc7_satisfies_pending_initial_report() {
+    let mock = MockOsApi::new();
+    let (mut pty, rx) = make_pty_with_plugin_receiver(mock);
+    pty.id_to_child_pid.insert(1, 100);
+    pty.terminal_cwds.insert(1, PathBuf::from("/same"));
+    pty.panes_pending_initial_cwd.insert(1);
+
+    pty.notify_cwd_from_osc7(1, PathBuf::from("/same"));
+
+    let events = collect_cwd_changed_events(&rx);
+    assert_eq!(
+        events.len(),
+        1,
+        "first report must be sent even when the osc7 path matches the cache"
+    );
+    assert!(!pty.panes_pending_initial_cwd.contains(&1));
+}

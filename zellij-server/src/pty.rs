@@ -13,7 +13,10 @@ use crate::{
     ClientId, ServerInstruction,
 };
 use std::sync::Arc;
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 use tokio::task::JoinHandle;
 use zellij_utils::{
     data::{
@@ -207,6 +210,9 @@ pub(crate) struct Pty {
     pane_activity_flags: HashMap<u32, std::sync::Arc<std::sync::atomic::AtomicBool>>,
     terminal_cmds: HashMap<u32, Vec<String>>,
     terminal_foreground_cmds: HashMap<u32, Vec<String>>,
+    // Terminal ids that have not yet had a cwd reported to plugins; polled
+    // every cwd tick (regardless of activity) until the first report lands.
+    panes_pending_initial_cwd: HashSet<u32>,
 }
 
 pub(crate) fn pty_thread_main(mut pty: Pty, layout: Box<Layout>) -> Result<()> {
@@ -925,6 +931,7 @@ impl Pty {
             pane_activity_flags: HashMap::new(),
             terminal_cmds: HashMap::new(),
             terminal_foreground_cmds: HashMap::new(),
+            panes_pending_initial_cwd: HashSet::new(),
         }
     }
     pub fn get_default_terminal(
@@ -1817,6 +1824,7 @@ impl Pty {
                 self.terminal_cwds.remove(&id);
                 self.terminal_cmds.remove(&id);
                 self.terminal_foreground_cmds.remove(&id);
+                self.panes_pending_initial_cwd.remove(&id);
                 self.bus
                     .os_input
                     .as_ref()
@@ -2049,6 +2057,10 @@ impl Pty {
         Ok(())
     }
     fn capture_initial_cwd(&mut self, terminal_id: u32, child_pid: u32) {
+        // This warms the cache for focused-cwd queries; the pane still owes
+        // plugins a first CwdChanged report, delivered by
+        // update_and_report_cwds.
+        self.panes_pending_initial_cwd.insert(terminal_id);
         if let Some(os_input) = self.bus.os_input.as_ref() {
             if let Some(cwd) = os_input.get_cwd(child_pid) {
                 self.terminal_cwds.insert(terminal_id, cwd);
@@ -2086,10 +2098,12 @@ impl Pty {
             .keys()
             .copied()
             .filter(|id| {
-                self.pane_activity_flags
+                let has_activity = self
+                    .pane_activity_flags
                     .get(id)
                     .map(|f| f.swap(false, Ordering::Relaxed))
-                    .unwrap_or(false)
+                    .unwrap_or(false);
+                has_activity || self.panes_pending_initial_cwd.contains(id)
             })
             .collect();
 
@@ -2110,8 +2124,22 @@ impl Pty {
             let Some(&pid) = self.id_to_child_pid.get(terminal_id) else {
                 continue;
             };
-            if let Some(cwd) = snapshot.cwd(pid).cloned() {
-                if self.terminal_cwds.get(terminal_id) != Some(&cwd) {
+            let cwd = snapshot.cwd(pid).cloned().or_else(|| {
+                // A pane younger than the snapshot owes plugins its first
+                // report; query just its pid rather than waiting a scan cycle.
+                if self.panes_pending_initial_cwd.contains(terminal_id) {
+                    self.bus
+                        .os_input
+                        .as_ref()
+                        .and_then(|os_input| os_input.get_cwd(pid))
+                } else {
+                    None
+                }
+            });
+
+            if let Some(cwd) = cwd {
+                let first_report = self.panes_pending_initial_cwd.remove(terminal_id);
+                if first_report || self.terminal_cwds.get(terminal_id) != Some(&cwd) {
                     let pane_id = PaneId::Terminal(*terminal_id);
                     let focused_client_ids: Vec<ClientId> = self
                         .active_panes
@@ -2195,7 +2223,8 @@ impl Pty {
     pub fn notify_cwd_from_osc7(&mut self, terminal_id: u32, path: PathBuf) {
         use std::sync::atomic::Ordering;
 
-        if self.terminal_cwds.get(&terminal_id) != Some(&path) {
+        let first_report = self.panes_pending_initial_cwd.remove(&terminal_id);
+        if first_report || self.terminal_cwds.get(&terminal_id) != Some(&path) {
             let pane_id = PaneId::Terminal(terminal_id);
             let focused_client_ids: Vec<ClientId> = self
                 .active_panes
