@@ -344,9 +344,9 @@ pub trait ServerOsApi: Send + Sync {
     fn get_cwds(&self, _pids: Vec<u32>) -> (HashMap<u32, PathBuf>, HashMap<u32, Vec<String>>) {
         (HashMap::new(), HashMap::new())
     }
-    /// Get a list of all running commands by their parent process id
-    fn get_all_cmds_by_ppid(&self, _post_hook: &Option<String>) -> HashMap<String, Vec<String>> {
-        HashMap::new()
+    /// The latest shared process-table snapshot (see crate::process_snapshot)
+    fn process_snapshot(&self) -> Arc<crate::process_snapshot::ProcessSnapshot> {
+        Arc::new(crate::process_snapshot::ProcessSnapshot::default())
     }
     /// Writes the given buffer to a string
     fn write_to_file(&mut self, buf: String, file: Option<String>) -> Result<()>;
@@ -545,95 +545,8 @@ impl ServerOsApi for ServerOsInputOutput {
 
         (cwds, cmds)
     }
-    #[cfg(unix)]
-    fn get_all_cmds_by_ppid(&self, post_hook: &Option<String>) -> HashMap<String, Vec<String>> {
-        // the key is the stringified ppid
-        let mut cmds = HashMap::new();
-        if let Some(output) = Command::new("ps")
-            .args(vec!["-ao", "ppid,args"])
-            .output()
-            .ok()
-        {
-            let output = String::from_utf8(output.stdout.clone())
-                .unwrap_or_else(|_| String::from_utf8_lossy(&output.stdout).to_string());
-            for line in output.lines() {
-                let line_parts: Vec<String> = line
-                    .trim()
-                    .split_ascii_whitespace()
-                    .map(|p| p.to_owned())
-                    .collect();
-                let mut line_parts = line_parts.into_iter();
-                let ppid = line_parts.next();
-                if let Some(ppid) = ppid {
-                    match &post_hook {
-                        Some(post_hook) => {
-                            let command: Vec<String> = line_parts.clone().collect();
-                            let stringified = command.join(" ");
-                            let cmd = match run_command_hook(&stringified, post_hook) {
-                                Ok(command) => command,
-                                Err(e) => {
-                                    log::error!("Post command hook failed to run: {}", e);
-                                    stringified.to_owned()
-                                },
-                            };
-                            let line_parts: Vec<String> = cmd
-                                .trim()
-                                .split_ascii_whitespace()
-                                .map(|p| p.to_owned())
-                                .collect();
-                            cmds.insert(ppid.into(), line_parts);
-                        },
-                        None => {
-                            cmds.insert(ppid.into(), line_parts.collect());
-                        },
-                    }
-                }
-            }
-        }
-        cmds
-    }
-
-    #[cfg(not(unix))]
-    fn get_all_cmds_by_ppid(&self, post_hook: &Option<String>) -> HashMap<String, Vec<String>> {
-        let mut system_info = System::new();
-        let refresh_kind = ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always);
-        system_info.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh_kind);
-        let mut cmds = HashMap::new();
-        for (_pid, process) in system_info.processes() {
-            if let Some(parent_pid) = process.parent() {
-                let ppid_str = format!("{}", parent_pid);
-                let command: Vec<String> = process
-                    .cmd()
-                    .iter()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .collect();
-                if command.is_empty() {
-                    continue;
-                }
-                match post_hook {
-                    Some(post_hook) => {
-                        let stringified = command.join(" ");
-                        let cmd = match run_command_hook(&stringified, post_hook) {
-                            Ok(command) => command,
-                            Err(e) => {
-                                log::error!("Post command hook failed to run: {}", e);
-                                stringified.to_owned()
-                            },
-                        };
-                        let line_parts: Vec<String> = cmd
-                            .trim()
-                            .split_ascii_whitespace()
-                            .map(|p| p.to_owned())
-                            .collect();
-                        cmds.insert(ppid_str, line_parts);
-                    },
-                    None => {
-                        cmds.insert(ppid_str, command);
-                    },
-                }
-            }
-        }
-        cmds
+    fn process_snapshot(&self) -> Arc<crate::process_snapshot::ProcessSnapshot> {
+        crate::process_snapshot::latest()
     }
 
     fn write_to_file(&mut self, buf: String, name: Option<String>) -> Result<()> {
@@ -727,7 +640,7 @@ impl Drop for ResizeCache {
 }
 
 #[cfg(not(windows))]
-fn run_command_hook(
+pub(crate) fn run_command_hook(
     original_command: &str,
     hook_script: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
@@ -744,7 +657,7 @@ fn run_command_hook(
 }
 
 #[cfg(windows)]
-fn run_command_hook(
+pub(crate) fn run_command_hook(
     original_command: &str,
     hook_script: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {

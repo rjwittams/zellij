@@ -1948,34 +1948,27 @@ impl Pty {
         let mut terminal_ids_to_commands: HashMap<u32, Vec<String>> = HashMap::new();
         let mut terminal_ids_to_cwds: HashMap<u32, PathBuf> = HashMap::new();
 
-        let pids: Vec<_> = terminal_ids
-            .iter()
-            .filter_map(|id| self.id_to_child_pid.get(&id))
-            .copied()
-            .collect();
-        let (pids_to_cwds, pids_to_cmds) = self
+        let snapshot = self
             .bus
             .os_input
             .as_ref()
-            .map(|os_input| os_input.get_cwds(pids))
-            .unwrap_or_default();
-        let ppids_to_cmds = self
-            .bus
-            .os_input
-            .as_ref()
-            .map(|os_input| os_input.get_all_cmds_by_ppid(&self.post_command_discovery_hook))
+            .map(|os_input| os_input.process_snapshot())
             .unwrap_or_default();
 
         for terminal_id in terminal_ids {
-            let process_id = self.id_to_child_pid.get(&terminal_id);
-            let cwd = process_id.and_then(|pid| pids_to_cwds.get(pid));
-            let cmd_sysinfo = process_id.and_then(|pid| pids_to_cmds.get(pid));
-            let cmd_ps = process_id.and_then(|pid| ppids_to_cmds.get(&format!("{}", pid)));
-            if let Some(cmd) = cmd_ps {
-                terminal_ids_to_commands.insert(terminal_id, cmd.clone());
-            } else if let Some(cmd) = cmd_sysinfo {
-                terminal_ids_to_commands.insert(terminal_id, cmd.clone());
+            let Some(&pid) = self.id_to_child_pid.get(&terminal_id) else {
+                continue;
+            };
+            let cmd = snapshot
+                .newest_child_cmd(pid)
+                .map(|cmd| self.apply_post_command_discovery_hook(cmd))
+                .or_else(|| snapshot.cmd(pid).cloned());
+            if let Some(cmd) = cmd {
+                terminal_ids_to_commands.insert(terminal_id, cmd);
             }
+            let cwd = snapshot
+                .cwd(pid)
+                .or_else(|| self.terminal_cwds.get(&terminal_id));
             if let Some(cwd) = cwd {
                 terminal_ids_to_cwds.insert(terminal_id, cwd.clone());
             }
@@ -2063,6 +2056,28 @@ impl Pty {
         }
     }
 
+    // The post-command-discovery hook execs a user-configured script, so it is
+    // applied per looked-up pane command, never across the whole process table.
+    fn apply_post_command_discovery_hook(&self, cmd: &[String]) -> Vec<String> {
+        match &self.post_command_discovery_hook {
+            Some(hook) => {
+                let stringified = cmd.join(" ");
+                match crate::os_input_output::run_command_hook(&stringified, hook) {
+                    Ok(hooked) => hooked
+                        .trim()
+                        .split_ascii_whitespace()
+                        .map(|p| p.to_owned())
+                        .collect(),
+                    Err(e) => {
+                        log::error!("Post command hook failed to run: {}", e);
+                        cmd.to_vec()
+                    },
+                }
+            },
+            None => cmd.to_vec(),
+        }
+    }
+
     pub fn update_and_report_cwds(&mut self) {
         use std::sync::atomic::Ordering;
 
@@ -2082,25 +2097,21 @@ impl Pty {
             return;
         }
 
-        let pids: Vec<_> = active_terminal_ids
-            .iter()
-            .filter_map(|id| self.id_to_child_pid.get(id))
-            .copied()
-            .collect();
-
-        let (pids_to_cwds, pids_to_cmds) = self
+        let Some(snapshot) = self
             .bus
             .os_input
             .as_ref()
-            .map(|os_input| os_input.get_cwds(pids))
-            .unwrap_or_default();
+            .map(|os_input| os_input.process_snapshot())
+        else {
+            return;
+        };
 
         for terminal_id in &active_terminal_ids {
-            let process_id = self.id_to_child_pid.get(terminal_id);
-            let cwd = process_id.and_then(|pid| pids_to_cwds.get(pid));
-
-            if let Some(cwd) = cwd {
-                if self.terminal_cwds.get(terminal_id) != Some(cwd) {
+            let Some(&pid) = self.id_to_child_pid.get(terminal_id) else {
+                continue;
+            };
+            if let Some(cwd) = snapshot.cwd(pid).cloned() {
+                if self.terminal_cwds.get(terminal_id) != Some(&cwd) {
                     let pane_id = PaneId::Terminal(*terminal_id);
                     let focused_client_ids: Vec<ClientId> = self
                         .active_panes
@@ -2117,27 +2128,22 @@ impl Pty {
                             Event::CwdChanged(pane_id.into(), cwd.clone(), focused_client_ids),
                         )]));
                 }
-                self.terminal_cwds.insert(*terminal_id, cwd.clone());
+                self.terminal_cwds.insert(*terminal_id, cwd);
             }
 
-            let cmd = process_id.and_then(|pid| pids_to_cmds.get(pid));
-            if let Some(cmd) = cmd {
+            if let Some(cmd) = snapshot.cmd(pid) {
                 self.terminal_cmds.insert(*terminal_id, cmd.clone());
             }
-        }
 
-        let ppids_to_cmds = self
-            .bus
-            .os_input
-            .as_ref()
-            .map(|os_input| os_input.get_all_cmds_by_ppid(&self.post_command_discovery_hook))
-            .unwrap_or_default();
-
-        for terminal_id in &active_terminal_ids {
-            let process_id = self.id_to_child_pid.get(terminal_id);
-            let foreground_cmd: Vec<String> = process_id
-                .and_then(|pid| ppids_to_cmds.get(&pid.to_string()))
-                .cloned()
+            if !snapshot.knows(pid) {
+                // The snapshot has no data on this process at all (it predates
+                // the pane, or the process died); don't mistake that for "no
+                // foreground command running".
+                continue;
+            }
+            let foreground_cmd: Vec<String> = snapshot
+                .newest_child_cmd(pid)
+                .map(|cmd| self.apply_post_command_discovery_hook(cmd))
                 .unwrap_or_default();
 
             if self.terminal_foreground_cmds.get(terminal_id) != Some(&foreground_cmd) {
@@ -2279,26 +2285,26 @@ impl Pty {
         match pane_id {
             PaneId::Terminal(terminal_id) => {
                 if let Some(&child_pid) = self.id_to_child_pid.get(&terminal_id) {
-                    // Query OS for current running command
                     if let Some(os_input) = self.bus.os_input.as_ref() {
-                        // First, try to get child process command (e.g., nvim running in bash)
-                        let ppids_to_cmds =
-                            os_input.get_all_cmds_by_ppid(&self.post_command_discovery_hook);
-                        let cmd_ps = ppids_to_cmds.get(&format!("{}", child_pid));
-
-                        // If no child process, fall back to parent process (e.g., the shell itself)
-                        let (_cwds, cmds) = os_input.get_cwds(vec![child_pid]);
-                        let cmd_sysinfo = cmds.get(&child_pid);
-
-                        if let Some(command_args) = cmd_ps {
-                            GetPaneRunningCommandResponse::Ok(command_args.clone())
-                        } else if let Some(command_args) = cmd_sysinfo {
-                            GetPaneRunningCommandResponse::Ok(command_args.clone())
-                        } else {
-                            GetPaneRunningCommandResponse::Err(format!(
+                        let snapshot = os_input.process_snapshot();
+                        // Prefer the child process command (e.g. nvim running in
+                        // bash), falling back to the pane process (the shell)
+                        // itself; a pane younger than the snapshot gets a
+                        // targeted single-pid query.
+                        let cmd = snapshot
+                            .newest_child_cmd(child_pid)
+                            .map(|cmd| self.apply_post_command_discovery_hook(cmd))
+                            .or_else(|| snapshot.cmd(child_pid).cloned())
+                            .or_else(|| {
+                                let (_cwds, mut cmds) = os_input.get_cwds(vec![child_pid]);
+                                cmds.remove(&child_pid)
+                            });
+                        match cmd {
+                            Some(command_args) => GetPaneRunningCommandResponse::Ok(command_args),
+                            None => GetPaneRunningCommandResponse::Err(format!(
                                 "Could not retrieve running command for terminal pane {}",
                                 terminal_id
-                            ))
+                            )),
                         }
                     } else {
                         GetPaneRunningCommandResponse::Err("OS input not available".to_string())
@@ -2316,14 +2322,22 @@ impl Pty {
             )),
         }
     }
-    pub fn get_pane_cwd(&self, pane_id: PaneId) -> GetPaneCwdResponse {
+    pub fn get_pane_cwd(&mut self, pane_id: PaneId) -> GetPaneCwdResponse {
         match pane_id {
             PaneId::Terminal(terminal_id) => {
+                // The periodic cwd poller keeps terminal_cwds current for any
+                // pane with activity; answering from it avoids a fresh OS
+                // query on the pty thread, which can exceed the caller's
+                // response timeout when the thread is busy.
+                if let Some(cwd) = self.terminal_cwds.get(&terminal_id) {
+                    return GetPaneCwdResponse::Ok(cwd.clone());
+                }
                 if let Some(&child_pid) = self.id_to_child_pid.get(&terminal_id) {
                     // Query OS for current working directory
                     if let Some(os_input) = self.bus.os_input.as_ref() {
                         let (cwds, _cmds) = os_input.get_cwds(vec![child_pid]);
                         if let Some(cwd) = cwds.get(&child_pid) {
+                            self.terminal_cwds.insert(terminal_id, cwd.clone());
                             GetPaneCwdResponse::Ok(cwd.clone())
                         } else {
                             GetPaneCwdResponse::Err(format!(

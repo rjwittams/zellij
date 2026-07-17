@@ -1,6 +1,7 @@
 use super::*;
 use crate::os_input_output::ServerOsApi;
 use crate::plugins::PluginInstruction;
+use crate::process_snapshot::{ProcessInfo, ProcessSnapshot};
 use crate::thread_bus::Bus;
 use interprocess::local_socket::Stream as LocalSocketStream;
 use std::collections::HashMap;
@@ -17,7 +18,7 @@ use zellij_utils::ipc::{ClientToServerMsg, IpcReceiverWithContext, ServerToClien
 struct MockOsApi {
     cwds: Arc<Mutex<HashMap<u32, PathBuf>>>,
     cmds: Arc<Mutex<HashMap<u32, Vec<String>>>>,
-    cmds_by_ppid: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    foreground_cmds: Arc<Mutex<HashMap<u32, Vec<String>>>>, // ppid -> child cmd
 }
 
 impl MockOsApi {
@@ -25,7 +26,7 @@ impl MockOsApi {
         MockOsApi {
             cwds: Arc::new(Mutex::new(HashMap::new())),
             cmds: Arc::new(Mutex::new(HashMap::new())),
-            cmds_by_ppid: Arc::new(Mutex::new(HashMap::new())),
+            foreground_cmds: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     fn set_cwd(&self, pid: u32, path: PathBuf) {
@@ -35,13 +36,10 @@ impl MockOsApi {
         self.cmds.lock().unwrap().insert(pid, cmd);
     }
     fn set_foreground_cmd(&self, ppid: u32, cmd: Vec<String>) {
-        self.cmds_by_ppid
-            .lock()
-            .unwrap()
-            .insert(ppid.to_string(), cmd);
+        self.foreground_cmds.lock().unwrap().insert(ppid, cmd);
     }
     fn clear_foreground_cmd(&self, ppid: u32) {
-        self.cmds_by_ppid.lock().unwrap().remove(&ppid.to_string());
+        self.foreground_cmds.lock().unwrap().remove(&ppid);
     }
 }
 
@@ -122,8 +120,27 @@ impl ServerOsApi for MockOsApi {
             .collect();
         (cwds, cmds)
     }
-    fn get_all_cmds_by_ppid(&self, _: &Option<String>) -> HashMap<String, Vec<String>> {
-        self.cmds_by_ppid.lock().unwrap().clone()
+    fn process_snapshot(&self) -> Arc<ProcessSnapshot> {
+        let mut processes: HashMap<u32, ProcessInfo> = HashMap::new();
+        for (pid, cwd) in self.cwds.lock().unwrap().iter() {
+            processes.entry(*pid).or_default().cwd = Some(cwd.clone());
+        }
+        for (pid, cmd) in self.cmds.lock().unwrap().iter() {
+            processes.entry(*pid).or_default().cmd = cmd.clone();
+        }
+        for (ppid, cmd) in self.foreground_cmds.lock().unwrap().iter() {
+            let synthetic_child_pid = ppid + 1_000_000;
+            processes.insert(
+                synthetic_child_pid,
+                ProcessInfo {
+                    ppid: Some(*ppid),
+                    cmd: cmd.clone(),
+                    cwd: None,
+                    start_time: 0,
+                },
+            );
+        }
+        Arc::new(ProcessSnapshot::new(processes))
     }
     fn write_to_file(&mut self, _: String, _: Option<String>) -> anyhow::Result<()> {
         Ok(())
@@ -477,3 +494,4 @@ fn osc7_then_poll_skips_terminal() {
         "poll after osc7 should skip terminal since flag was cleared"
     );
 }
+
