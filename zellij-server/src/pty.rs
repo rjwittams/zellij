@@ -219,6 +219,11 @@ pub(crate) fn pty_thread_main(mut pty: Pty, layout: Box<Layout>) -> Result<()> {
     loop {
         let (event, mut err_ctx) = pty.bus.recv().expect("failed to receive event on channel");
         err_ctx.add_call(ContextType::Pty((&event).into()));
+        let _instruction_timer = crate::instruction_timer::InstructionTimer::new(
+            "pty",
+            PtyContext::from(&event),
+            pty.bus.queued_len(),
+        );
         match event {
             PtyInstruction::SpawnTerminal(
                 terminal_action,

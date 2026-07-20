@@ -213,6 +213,11 @@ impl<T> Bus<T> {
         }
     }
 
+    /// Number of instructions currently waiting across this bus's channels.
+    pub fn queued_len(&self) -> usize {
+        self.receivers.iter().map(|r| r.len()).sum()
+    }
+
     pub fn recv(&self) -> Result<(T, ErrorContext), channels::RecvError> {
         let mut selector = channels::Select::new();
         self.receivers.iter().for_each(|r| {

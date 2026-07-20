@@ -6613,6 +6613,11 @@ pub(crate) fn screen_thread_main(
             .recv()
             .context("failed to receive event on channel")?;
         err_ctx.add_call(ContextType::Screen((&event).into()));
+        let _instruction_timer = crate::instruction_timer::InstructionTimer::new(
+            "screen",
+            ScreenContext::from(&event),
+            screen.bus.queued_len(),
+        );
         // here we start caching resizes, so that we'll send them in bulk at the end of each event
         // when this cache is Dropped, for more information, see the comments in PtyWriter
         let _resize_cache = ResizeCache::new(thread_senders.clone());

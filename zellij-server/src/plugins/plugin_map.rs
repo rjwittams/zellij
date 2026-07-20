@@ -512,6 +512,34 @@ impl RunningPlugin {
         self.env().intercepting_key_presses
     }
 
+    /// Time one plugin entry-point call; WARN when it exceeds the threshold.
+    /// Covers both backends, so a stalling plugin is identifiable from logs
+    /// whether it runs as wasm or native.
+    fn time_entrypoint<R>(&mut self, entrypoint: &str, f: impl FnOnce(&mut Self) -> R) -> R {
+        const SLOW_PLUGIN_CALL_WARN_THRESHOLD: std::time::Duration =
+            std::time::Duration::from_millis(50);
+        let started = std::time::Instant::now();
+        let result = f(self);
+        let elapsed = started.elapsed();
+        if elapsed > SLOW_PLUGIN_CALL_WARN_THRESHOLD {
+            let backend = match &self.backend {
+                PluginBackend::Wasm { .. } => "wasm",
+                #[cfg(feature = "native-plugins")]
+                PluginBackend::Native { .. } => "native",
+            };
+            let env = self.env();
+            log::warn!(
+                "{} plugin {} ({}) {} took {:?}",
+                backend,
+                env.plugin_id,
+                env.plugin.location,
+                entrypoint,
+                elapsed,
+            );
+        }
+        result
+    }
+
     /// Mutable access to the wasmi Store/Instance pair when this plugin is wasm-backed.
     /// Returns None for native plugins. Used by the legacy dispatch sites in wasm_bridge.rs
     /// and pipes.rs until they're moved behind backend-agnostic call methods.
@@ -529,7 +557,7 @@ impl RunningPlugin {
     /// `ZellijPlugin::load` directly.
     pub fn call_load(&mut self, config: PluginUserConfiguration) -> Result<()> {
         use crate::plugins::zellij_exports::wasi_write_object;
-        match &mut self.backend {
+        self.time_entrypoint("load", |plugin| match &mut plugin.backend {
             PluginBackend::Wasm { store, instance } => {
                 use prost::Message;
                 use std::convert::TryInto;
@@ -551,7 +579,7 @@ impl RunningPlugin {
                 crate::plugins::native_runtime::with_native_call(env, || state.load(inner));
                 Ok(())
             },
-        }
+        })
     }
 
     /// Invoke the plugin's `update` entry point with a typed [`Event`]. Wasm
@@ -559,7 +587,7 @@ impl RunningPlugin {
     /// Returns true if the plugin requested a render.
     pub fn call_update(&mut self, event: Event) -> Result<bool> {
         use crate::plugins::zellij_exports::wasi_write_object;
-        match &mut self.backend {
+        self.time_entrypoint("update", |plugin| match &mut plugin.backend {
             PluginBackend::Wasm { store, instance } => {
                 use prost::Message;
                 use zellij_utils::plugin_api::event::ProtobufEvent;
@@ -581,14 +609,14 @@ impl RunningPlugin {
                     state.update(event)
                 }))
             },
-        }
+        })
     }
 
     /// Invoke the plugin's `render` entry point. Returns the rendered ANSI string
     /// the plugin wrote during the call.
     pub fn call_render(&mut self, rows: i32, cols: i32) -> Result<String> {
         use crate::plugins::zellij_exports::wasi_read_string;
-        match &mut self.backend {
+        self.time_entrypoint("render", |plugin| match &mut plugin.backend {
             PluginBackend::Wasm { store, instance } => {
                 let render = instance
                     .get_typed_func::<(i32, i32), ()>(&mut *store, "render")
@@ -608,7 +636,7 @@ impl RunningPlugin {
                 // Match the WASM path's CRLF normalization done by wasi_read_string.
                 Ok(buf.replace("\n", "\n\r"))
             },
-        }
+        })
     }
 
     /// Invoke the plugin's `pipe` entry point with a typed [`PipeMessage`].
@@ -618,7 +646,7 @@ impl RunningPlugin {
     /// default impl, so they always return Some.
     pub fn call_pipe(&mut self, pipe_message: PipeMessage) -> Result<Option<bool>> {
         use crate::plugins::zellij_exports::wasi_write_object;
-        match &mut self.backend {
+        self.time_entrypoint("pipe", |plugin| match &mut plugin.backend {
             PluginBackend::Wasm { store, instance } => {
                 let Ok(pipe) = instance.get_typed_func::<(), i32>(&mut *store, "pipe") else {
                     return Ok(None);
@@ -641,6 +669,6 @@ impl RunningPlugin {
                     || state.pipe(pipe_message),
                 )))
             },
-        }
+        })
     }
 }
