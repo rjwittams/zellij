@@ -462,6 +462,7 @@ impl MouseHandler {
                 .with_context(err_context)?
         };
 
+        log::debug!("mouse resize started on pane {:?} ({:?} edge)", pane_id, edge);
         tab.pane_being_resized_with_mouse = Some(PaneResizeState {
             pane_id,
             edge,
@@ -565,7 +566,9 @@ impl MouseHandler {
         };
 
         // Clear resize state
-        tab.pane_being_resized_with_mouse = None;
+        if let Some(state) = tab.pane_being_resized_with_mouse.take() {
+            log::debug!("mouse resize ended on pane {:?}", state.pane_id);
+        }
 
         Ok(never_resized)
     }
@@ -736,6 +739,7 @@ impl MouseHandler {
                     leave_clipboard_message = true;
                 }
                 if pane.supports_mouse_selection() {
+                    log::debug!("mouse selection started in pane {:?}", pane_id);
                     tab.selecting_with_mouse_in_pane = Some(pane_id);
                 }
                 if leave_clipboard_message {
@@ -917,6 +921,10 @@ impl MouseHandler {
                 let relative_position = pane.relative_position(&position);
                 pane.start_selection(&relative_position, client_id);
                 if pane.supports_mouse_selection() {
+                    log::debug!(
+                        "mouse selection started in pane {:?} (click-through)",
+                        active_pane_id
+                    );
                     tab.selecting_with_mouse_in_pane = Some(active_pane_id);
                 }
             }
@@ -934,9 +942,22 @@ impl MouseHandler {
         let mut leave_clipboard_message = false;
         let copy_on_release = tab.copy_on_select;
 
-        if let Some(pane_with_selection) = tab
-            .selecting_with_mouse_in_pane
-            .and_then(|p_id| tab.get_pane_with_id_mut(p_id))
+        // take() up front: whatever happens below, the selection drag is over
+        // once the button is up. Leaving the state set (e.g. because the
+        // holding pane is gone) swallows every subsequent click in the tab.
+        let selecting_pane_id = tab.selecting_with_mouse_in_pane.take();
+        let missing_holder =
+            selecting_pane_id.filter(|p_id| tab.get_pane_with_id(*p_id).is_none());
+        if let Some(p_id) = missing_holder {
+            log::warn!(
+                "ending mouse selection: holding pane {:?} no longer exists",
+                p_id
+            );
+        } else if let Some(p_id) = selecting_pane_id {
+            log::debug!("mouse selection ended in pane {:?}", p_id);
+        }
+        if let Some(pane_with_selection) =
+            selecting_pane_id.and_then(|p_id| tab.get_pane_with_id_mut(p_id))
         {
             let mut relative_position = pane_with_selection.relative_position(&position);
 
@@ -970,7 +991,6 @@ impl MouseHandler {
                         }
                     }
                 }
-                tab.selecting_with_mouse_in_pane = None;
             }
         }
 
@@ -1194,7 +1214,20 @@ impl MouseHandler {
     }
 
     fn determine_mouse_action(event: &MouseEvent, ctx: &MouseEventContext) -> Result<MouseAction> {
+        // In each of the three drag states below, a fresh left press is
+        // impossible while the drag's left button is still held: it means the
+        // matching release never reached us and the state is stuck, silently
+        // swallowing clicks. Treat the press as the missing release so one
+        // click recovers, instead of the state persisting until its pane dies.
+        let left_press = event.left && event.event_type == MouseEventType::Press;
+
         if ctx.pane_being_resized {
+            if left_press {
+                log::warn!(
+                    "left mouse press while a mouse resize is in progress — \
+                     the drag's release was lost; ending the resize"
+                );
+            }
             return Ok(match event.event_type {
                 MouseEventType::Motion => MouseAction::ContinueResize {
                     position: event.position,
@@ -1202,29 +1235,48 @@ impl MouseHandler {
                 MouseEventType::Release => MouseAction::StopResize {
                     position: event.position,
                 },
+                MouseEventType::Press if event.left => MouseAction::StopResize {
+                    position: event.position,
+                },
                 _ => MouseAction::NoAction,
             });
         }
 
         if ctx.selecting_with_mouse {
+            if left_press {
+                log::warn!(
+                    "left mouse press while a mouse selection is in progress — \
+                     the drag's release was lost; ending the selection"
+                );
+            }
             return Ok(match event.event_type {
                 MouseEventType::Motion if event.left => MouseAction::UpdateSelection {
                     position: event.position,
                 },
-                MouseEventType::Release if event.left => MouseAction::EndSelection {
-                    position: event.position,
+                MouseEventType::Release | MouseEventType::Press if event.left => {
+                    MouseAction::EndSelection {
+                        position: event.position,
+                    }
                 },
                 _ => MouseAction::NoAction,
             });
         }
 
         if ctx.pane_being_moved {
+            if left_press {
+                log::warn!(
+                    "left mouse press while a floating pane is being moved — \
+                     the drag's release was lost; ending the move"
+                );
+            }
             return Ok(match event.event_type {
                 MouseEventType::Motion if event.left => MouseAction::ContinueMovingFloatingPane {
                     position: event.position,
                 },
-                MouseEventType::Release if event.left => MouseAction::StopMovingFloatingPane {
-                    position: event.position,
+                MouseEventType::Release | MouseEventType::Press if event.left => {
+                    MouseAction::StopMovingFloatingPane {
+                        position: event.position,
+                    }
                 },
                 _ => MouseAction::NoAction,
             });

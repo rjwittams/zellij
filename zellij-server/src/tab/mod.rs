@@ -2320,6 +2320,37 @@ impl Tab {
         }
         Ok(())
     }
+    /// A mouse drag state (selection, resize, floating move) held by a dying
+    /// pane must not outlive it: while set, it swallows every click in the
+    /// tab, and nothing else clears it once the pane is gone.
+    fn clear_mouse_drag_states_held_by(&mut self, id: PaneId) {
+        if self.selecting_with_mouse_in_pane == Some(id) {
+            log::warn!(
+                "pane {:?} closed while holding a mouse selection; releasing it",
+                id
+            );
+            self.selecting_with_mouse_in_pane = None;
+        }
+        if self
+            .pane_being_resized_with_mouse
+            .as_ref()
+            .map(|state| state.pane_id)
+            == Some(id)
+        {
+            log::warn!(
+                "pane {:?} closed while being mouse-resized; releasing the drag",
+                id
+            );
+            self.pane_being_resized_with_mouse = None;
+        }
+        if self.floating_panes.clear_pane_being_moved_with_mouse_for(id) {
+            log::warn!(
+                "pane {:?} closed while being mouse-moved; releasing the drag",
+                id
+            );
+        }
+    }
+
     pub fn close_pane_and_replace_with_other_pane(
         &mut self,
         pane_id_to_replace: PaneId,
@@ -4019,6 +4050,7 @@ impl Tab {
         ignore_suppressed_panes: bool,
         exit_status: Option<i32>,
     ) {
+        self.clear_mouse_drag_states_held_by(id);
         // we need to ignore suppressed panes when we toggle a pane to be floating/embedded(tiled)
         // this is because in that case, while we do use this logic, we're not actually closing the
         // pane, we're moving it

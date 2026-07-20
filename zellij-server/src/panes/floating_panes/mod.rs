@@ -1089,6 +1089,17 @@ impl FloatingPanes {
     pub fn pane_is_being_moved_with_mouse(&self) -> bool {
         self.pane_being_moved_with_mouse.is_some()
     }
+    /// Clear the mouse-move drag state if `pane_id` is the pane being moved.
+    /// Returns true when state was cleared.
+    pub fn clear_pane_being_moved_with_mouse_for(&mut self, pane_id: PaneId) -> bool {
+        match self.pane_being_moved_with_mouse {
+            Some((moved_pane_id, ..)) if moved_pane_id == pane_id => {
+                self.pane_being_moved_with_mouse = None;
+                true
+            },
+            _ => false,
+        }
+    }
     pub fn move_pane_to_position(&mut self, click_position: &Position) -> bool {
         // true => changed position
         let display_area = *self.display_area.borrow();
