@@ -335,6 +335,13 @@ impl<T: Serialize> IpcSenderWithContext<T> {
     }
 }
 
+/// Why a receive failed: the peer hung up, or it sent bytes we cannot decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpcRecvError {
+    Disconnected,
+    Corrupt,
+}
+
 /// Receives messages on a stream socket, along with an [`ErrorContext`].
 pub struct IpcReceiverWithContext<T> {
     receiver: io::BufReader<Box<dyn IpcStream>>,
@@ -360,16 +367,27 @@ where
         }
     }
 
-    pub fn recv_client_msg(&mut self) -> Option<(ClientToServerMsg, ErrorContext)> {
+    pub fn recv_client_msg(
+        &mut self,
+    ) -> Result<(ClientToServerMsg, ErrorContext), IpcRecvError> {
         match read_protobuf_message::<ProtoClientToServerMsg>(&mut self.receiver) {
             Ok(proto_msg) => match proto_msg.try_into() {
-                Ok(rust_msg) => Some((rust_msg, ErrorContext::default())),
+                Ok(rust_msg) => Ok((rust_msg, ErrorContext::default())),
                 Err(e) => {
                     warn!("Error converting protobuf to ClientToServerMsg: {:?}", e);
-                    None
+                    Err(IpcRecvError::Corrupt)
                 },
             },
-            Err(_e) => None,
+            // Any read error means the stream is gone (EOF on client exit is
+            // the common case); only an intact frame that fails to decode is
+            // a corrupt message.
+            Err(e) => {
+                if e.downcast_ref::<io::Error>().is_some() {
+                    Err(IpcRecvError::Disconnected)
+                } else {
+                    Err(IpcRecvError::Corrupt)
+                }
+            },
         }
     }
 

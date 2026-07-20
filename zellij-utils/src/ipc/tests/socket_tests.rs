@@ -1,5 +1,5 @@
 use crate::ipc::{
-    ClientToServerMsg, IpcReceiverWithContext, IpcSenderWithContext, ServerToClientMsg,
+    ClientToServerMsg, IpcReceiverWithContext, IpcRecvError, IpcSenderWithContext, ServerToClientMsg,
 };
 use crate::pane_size::Size;
 use interprocess::local_socket::{prelude::*, ListenerOptions};
@@ -113,7 +113,7 @@ fn client_to_server_message_over_socket() {
         IpcReceiverWithContext::new(stream);
 
     let msg = receiver.recv_client_msg();
-    assert!(msg.is_some(), "should receive a message");
+    assert!(msg.is_ok(), "should receive a message");
     let (msg, _ctx) = msg.unwrap();
     assert!(
         matches!(msg, ClientToServerMsg::ConnStatus),
@@ -170,7 +170,7 @@ fn bidirectional_communication_via_fd_duplication() {
             .expect("send failed");
 
         let msg = receiver.recv_client_msg();
-        assert!(msg.is_some(), "server should receive client message");
+        assert!(msg.is_ok(), "server should receive client message");
         let (msg, _) = msg.unwrap();
         assert!(
             matches!(msg, ClientToServerMsg::ConnStatus),
@@ -251,7 +251,7 @@ fn multiple_messages_in_sequence() {
 }
 
 #[test]
-fn receiver_returns_none_on_closed_connection() {
+fn receiver_reports_disconnect_on_closed_connection() {
     let (_guard, name) = new_ipc();
     let listener = bind_listener(&name);
 
@@ -275,11 +275,17 @@ fn receiver_returns_none_on_closed_connection() {
     client.join().expect("client thread panicked");
 
     let msg = receiver.recv_client_msg();
-    assert!(msg.is_some(), "should receive the sent message");
+    assert!(msg.is_ok(), "should receive the sent message");
 
-    // After the sender is dropped, subsequent reads should return None
+    // After the sender is dropped, reads must report Disconnected (not
+    // Corrupt): the route thread logs a client out on the first Disconnected
+    // but tolerates a bounded number of Corrupt messages.
     let msg = receiver.recv_client_msg();
-    assert!(msg.is_none(), "should return None after connection closed");
+    assert!(
+        matches!(msg, Err(IpcRecvError::Disconnected)),
+        "expected Disconnected after connection closed, got: {:?}",
+        msg
+    );
 }
 
 // --- Session discovery tests ---
@@ -331,7 +337,7 @@ fn session_probe_accepts_responding_socket() {
         let mut sender: IpcSenderWithContext<ServerToClientMsg> = receiver.get_sender();
 
         let msg = receiver.recv_client_msg();
-        assert!(matches!(msg, Some((ClientToServerMsg::ConnStatus, _))));
+        assert!(matches!(msg, Ok((ClientToServerMsg::ConnStatus, _))));
 
         sender
             .send_server_msg(ServerToClientMsg::Connected)

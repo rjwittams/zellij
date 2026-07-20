@@ -28,7 +28,7 @@ use zellij_utils::{
         actions::{Action, SearchDirection, SearchOption},
         command::TerminalAction,
     },
-    ipc::{ClientToServerMsg, ExitReason, IpcReceiverWithContext, ServerToClientMsg},
+    ipc::{ClientToServerMsg, ExitReason, IpcReceiverWithContext, IpcRecvError, ServerToClientMsg},
 };
 
 use crate::ClientId;
@@ -54,8 +54,9 @@ pub fn wait_for_action_completion(
         runtime.block_on(async {
             match receiver.await {
                 Ok(result) => result,
-                Err(e) => {
-                    log::error!("Failed to wait for action {}: {}", action_name, e);
+                Err(_recv_error) => {
+                    // sender dropped without sending: completion tracking was
+                    // opted out for this action; nothing to wait for
                     ActionCompletionResult {
                         exit_status: None,
                         affected_pane_id: None,
@@ -71,7 +72,19 @@ pub fn wait_for_action_completion(
             .block_on(async { tokio::time::timeout(ACTION_COMPLETION_TIMEOUT, receiver).await })
         {
             Ok(Ok(result)) => result,
-            Err(_) | Ok(Err(_)) => {
+            Ok(Err(_recv_error)) => {
+                // The sender was dropped without sending: the action opted out
+                // of completion tracking (e.g. CliPipe, whose release is
+                // handled by plugins). Not a timeout - resolves immediately.
+                ActionCompletionResult {
+                    exit_status: None,
+                    affected_pane_id: None,
+                    affected_tab_id: None,
+                    error_message: None,
+                    stdout_message: None,
+                }
+            },
+            Err(_elapsed) => {
                 log::error!(
                     "Action {} did not complete within {:?} timeout",
                     action_name,
@@ -2155,7 +2168,7 @@ pub(crate) fn route_thread_main(
     let mut consecutive_unknown_messages_received = 0;
     'route_loop: loop {
         match receiver.recv_client_msg() {
-            Some((instruction, err_ctx)) => {
+            Ok((instruction, err_ctx)) => {
                 consecutive_unknown_messages_received = 0;
                 err_ctx.update_thread_ctx();
                 let mut handle_instruction = |instruction: ClientToServerMsg,
@@ -2668,7 +2681,12 @@ pub(crate) fn route_thread_main(
                     break 'route_loop;
                 }
             },
-            None => {
+            Err(IpcRecvError::Disconnected) => {
+                // client hung up (normal for one-shot CLI clients); cleanup
+                // after the loop sends RemoveClient
+                break 'route_loop;
+            },
+            Err(IpcRecvError::Corrupt) => {
                 consecutive_unknown_messages_received += 1;
                 if consecutive_unknown_messages_received == 1 {
                     log::error!("Received unknown message from client.");
