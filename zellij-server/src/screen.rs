@@ -1392,6 +1392,10 @@ pub(crate) struct Screen {
     max_panes: Option<usize>,
     /// A map between this [`Screen`]'s tabs and their ID/key.
     tabs: BTreeMap<usize, Tab>,
+    /// Monotonic allocator for tab IDs. Never decreases, so IDs are unique
+    /// for the life of the session even after the highest tab closes or two
+    /// creations race — plugins key metadata on these IDs (fork-issues/zellij#9).
+    next_tab_id: usize,
     /// The full size of this [`Screen`].
     size: Size,
     pixel_dimensions: PixelDimensions,
@@ -1740,6 +1744,7 @@ impl Screen {
             client_sizes: HashMap::new(),
             global_last_active_tab_id: 0,
             tabs: BTreeMap::new(),
+            next_tab_id: 0,
             terminal_emulator_colors: Rc::new(RefCell::new(Palette::default())),
             terminal_emulator_color_codes: Rc::new(RefCell::new(HashMap::new())),
             tab_history: BTreeMap::new(),
@@ -1804,12 +1809,13 @@ impl Screen {
         }
     }
 
-    fn get_new_tab_id(&self) -> usize {
-        if let Some(id) = self.tabs.keys().last() {
-            *id + 1
-        } else {
-            0
-        }
+    fn get_new_tab_id(&mut self) -> usize {
+        // Self-heals against tabs inserted without the allocator (e.g. session
+        // restore): never hand out an ID at or below an existing key.
+        let floor = self.tabs.keys().last().map(|id| *id + 1).unwrap_or(0);
+        let id = self.next_tab_id.max(floor);
+        self.next_tab_id = id + 1;
+        id
     }
 
     /// Gets a tab by its stable ID (BTreeMap key).
